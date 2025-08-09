@@ -1,0 +1,1130 @@
+[
+    {
+        "content": "<p>So, if we're gonna want to save module results in a cache, how should we lay it out, and where should it be? I expect we <em>might</em> have multiple cache stages per module, for example:</p>\n<ul>\n<li>canonicalization</li>\n<li>partial typechecking</li>\n<li>partial mono</li>\n<li>etc.</li>\n</ul>\n<p>Ideally we'd cache only the artifacts from the latest stage in the pipeline, but who knows? For now, let's assume there's only one build artifact per file, but this design is expandable if there are multiple files.</p>\n<p>The main thing I want to do is figure out a way to prevent out-of-control cache growth by limiting each \"file\" to only hold one cache entry at a time. \"File\" is in quotes because the compiler ideally doesn't have to remember the path to a file, only the hash of its contents. The best way I can think to do that is to scan the list of Roc files every compilation and hash their contents, and then:</p>\n<ul>\n<li>For those that are already in the cache, reuse their assets</li>\n<li>For those files that don't have their artifacts cached, compile and save their artifacts</li>\n<li>Every other artifact in the cache gets deleted</li>\n</ul>\n<p>That means that we don't need to remember a relationship between filenames and their cached artifacts for user code. Unfortunately,this couldn't work with a global cache representing multiple user projects only work for single project caches, since we'd otherwise be clobbering all other user cached code on every compilation run. I can think of two solutions:</p>\n<ol>\n<li>Every package gets its own Rust-like <code>target/</code> equivalent called <code>build/</code>. Build contains all cache data per directory, as well as a <code>build.lock</code> file that gets created per run of a Roc compiler, and stores project cache artifacts in there. Package artifacts get compiled/saved/loaded on-demand from the global cache.</li>\n<li>In the global cache, we take a hash of the main file for each package/app and create a folder for it. All files are stored in that folder. Each folder has a <code>build.lock</code> like the first option, and we only check that folder for reading/saving/deleting build artifacts.</li>\n</ol>\n<p>I'd love to hear opinions on this, but I think the second option seems better because then all Roc artifacts can be stored in a single folder in the $HOME directory for a single machine: packages, build artifacts, and compiler versions. We'd definitely want a supplementary <code>roc cache ...</code> set of subcommands, with something like <code>roc cache clean</code> to remove old files.</p>\n<p>For external packages, we'd definitely save everything in a global cache, both the source and the build artifacts. Since they'd be deterministically built given the same Roc version, we can just partition them per Roc version, and there's no need for a lock file since there's no deletion and compilation is idempotent. All in all, the second option would have this folder structure under <code>~/.roc/</code>:</p>\n<div class=\"codehilite\"><pre><span></span><code>compiler/\n  v0.1.0 (executable)\n  v0.2.0\n  &lt;git hash for nightlies&gt;\npackages/\n  github.com/\n    lukewilliamboswell/\n      roc-json/\n        0.11.0/\n          z45Wzc-J39TLNweQUoLw3IGZtkQiEN3lTBv3BXErRjQ.tar.br/\n            src/\n              &lt;source files&gt;\n            build/\n              &lt;roc version&gt;/\n                &lt;build artifacts by file hash&gt;\n    smores56/\n      weaver/\n        0.5.1/\n          nqyqbOkpECWgDUMbY-rG9ug883TVbOimHZFHek-bQeI.tar.br/\n            src/\n              &lt;source files&gt;\n            build/\n              &lt;roc version&gt;/\n                &lt;build artifacts by file hash&gt;\nbuild/\n  &lt;hash of main.roc absolute file path&gt;/\n    build.lock\n    &lt;build artifacts by file hash&gt;\n</code></pre></div>\n<p>Thoughts?</p>",
+        "id": 493709392,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736910132
+    },
+    {
+        "content": "<blockquote>\n<p>scan the list of Roc files every compilation and hash their contents</p>\n</blockquote>\n<p>How fast is this? would it be beneficial if you could just ask the OS for some metadata like \"last edited\" or something and use that to skip reading the file?</p>",
+        "id": 493711908,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736911989
+    },
+    {
+        "content": "<p>I think tools like edit time can be used to avoid some recomputations, but hashing is likely required to cut out a lot of work and skip a lot of invalidation.</p>",
+        "id": 493718482,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736916527
+    },
+    {
+        "content": "<p>The theory is that hashing the file and looking up the key in the cache is a lot faster the rerunning parsing and canonicalization.</p>",
+        "id": 493718516,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736916550
+    },
+    {
+        "content": "<p>and constraint gen!</p>",
+        "id": 493718527,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736916564
+    },
+    {
+        "content": "<p>constraint gen can also be done as a pure function of source bytes</p>",
+        "id": 493718536,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736916575
+    },
+    {
+        "content": "<p>I definitely think we should only ever cache things in the home dir</p>",
+        "id": 493718693,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736916692
+    },
+    {
+        "content": "<p>no project-local cache dir ever</p>",
+        "id": 493718702,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736916699
+    },
+    {
+        "content": "<p>one reason for this is switching branches</p>",
+        "id": 493718727,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736916717
+    },
+    {
+        "content": "<p>if I'm switching back and forth between a few different branches, my cache shouldn't be invalidated</p>",
+        "id": 493718781,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736916731
+    },
+    {
+        "content": "<p>also if I'm switching between different projects, we should be able to reuse cache from their shared dependencies</p>",
+        "id": 493718817,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736916770
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493718516\">said</a>:</p>\n<blockquote>\n<p>The theory is that hashing the file and looking up the key in the cache is a lot faster the rerunning parsing and canonicalization.</p>\n</blockquote>\n<p>Yes, but is reading the contents of the file to recompute the hash, faster then looking up the hash previously computed (and unchanged as the file hasn't been edited) and then using that to get the correct cached data</p>",
+        "id": 493718883,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736916834
+    },
+    {
+        "content": "<p>I think we can think about speeding up the cache key determination separately</p>",
+        "id": 493719090,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736916973
+    },
+    {
+        "content": "<p>at some level we need a cache key, and source bytes are the ultimate source of truth for what we're caching here</p>",
+        "id": 493719264,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736917090
+    },
+    {
+        "content": "<blockquote>\n<p>The main thing I want to do is figure out a way to prevent out-of-control cache growth by limiting each \"file\" to only hold one cache entry at a time.</p>\n</blockquote>\n<p>I guess this was the part I was thinking about... exploring ways to connect the hash and the files in a way that doesn't duplicate the cache artifacts each time the source changes (and it gets a new hash)</p>",
+        "id": 493719412,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736917217
+    },
+    {
+        "content": "<p>Though I admittedly haven't really explained any of the things I was thinking...</p>",
+        "id": 493719568,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736917263
+    },
+    {
+        "content": "<p>I think we can limit cache growth by having a \"background job\" that goes and deletes old cache files based on last access time</p>",
+        "id": 493719658,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736917288
+    },
+    {
+        "content": "<p>there are points where compilation gets bottlenecked and we can't productively use all the cores just because things are blocked, and during those times we can put all the idle cores on garbage-collecting old cache files until they're unblocked again</p>",
+        "id": 493719862,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736917348
+    },
+    {
+        "content": "<p>that shouldn't slow down builds anyway because the cores would have been idle anyway, and since all it has to do is to go through and look at access times (not even read any of the contents of the files) to decide if they should be deleted, it can probably get through a lot of them very quickly</p>",
+        "id": 493719931,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736917429
+    },
+    {
+        "content": "<p>going back to the original question, we can definitely cache typechecked modules too</p>",
+        "id": 493786003,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736918578
+    },
+    {
+        "content": "<p>basically just write down their exposed type annotations</p>",
+        "id": 493786018,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736918596
+    },
+    {
+        "content": "<p>their caches get invalidated more easily though, because if any of their dependencies' cached exposed types change, we have to recompute them</p>",
+        "id": 493786053,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736918628
+    },
+    {
+        "content": "<p>caching mono is potentially super valuable but also tricky because it's nonobvious where to cache the specializations</p>",
+        "id": 493786136,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736918674
+    },
+    {
+        "content": "<p>Ayaz and I have talked about this in the past</p>",
+        "id": 493786142,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736918682
+    },
+    {
+        "content": "<p>Unless we do two passes of type checking</p>",
+        "id": 493787181,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919485
+    },
+    {
+        "content": "<p>Partially typecheck solo modules, then finish after combining the modules</p>",
+        "id": 493787204,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919507
+    },
+    {
+        "content": "<p>The current plan for <code>roc_can_solo</code> and <code>roc_can_combine</code> to use the same AST should make that relatively easy</p>",
+        "id": 493787261,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919555
+    },
+    {
+        "content": "<p>could be!</p>",
+        "id": 493787288,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736919578
+    },
+    {
+        "content": "<p>Compared to two different constraints modules</p>",
+        "id": 493787292,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919583
+    },
+    {
+        "content": "<blockquote>\n<p>The main thing I want to do is figure out a way to prevent out-of-control cache growth by limiting each \"file\" to only hold one cache entry at a time.</p>\n</blockquote>\n<p>Mutiple copies in the cache likely is a good thing. It is common to work on multiple git branches that may have the same file in different states. So I don't think limiting to one entry per file is the right call</p>",
+        "id": 493787300,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736919596
+    },
+    {
+        "content": "<p>We'll have to try to know</p>",
+        "id": 493787301,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919601
+    },
+    {
+        "content": "<p>Ideally the thing we're caching is really easy to serialize and deserialize. Prefering flat data structures to pointer-chasing, etc.</p>",
+        "id": 493787654,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736919808
+    },
+    {
+        "content": "<p>We prefer that today, it's the plan as far as I know going forward</p>",
+        "id": 493787719,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919848
+    },
+    {
+        "content": "<p>The AST right now is very pointer-chase'y for sure.</p>",
+        "id": 493787746,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736919879
+    },
+    {
+        "content": "<p>I've also seen lots of things from deeper in the compiler that take ownership of things, etc</p>",
+        "id": 493787769,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736919900
+    },
+    {
+        "content": "<p>Oh yeah, I'm thinking about how constrain looks</p>",
+        "id": 493787788,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919912
+    },
+    {
+        "content": "<p>Which is roughly where caching would happen</p>",
+        "id": 493787800,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919926
+    },
+    {
+        "content": "<p>But you're right</p>",
+        "id": 493787801,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919931
+    },
+    {
+        "content": "<p>How to cache the AST is a different question</p>",
+        "id": 493787809,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919940
+    },
+    {
+        "content": "<p>I'm not actually sure we should, I was just using that as the example I'm most familiar with</p>",
+        "id": 493787829,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736919959
+    },
+    {
+        "content": "<p>Richard had a suggestion surrounding everything being in one big array</p>",
+        "id": 493787832,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736919960
+    },
+    {
+        "content": "<p>yeah if we're doing everything with indices into arenas (e.g. that's the idea in canonicalization) and we have 1 of those per arena, there is no deserialization step</p>",
+        "id": 493787902,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920009
+    },
+    {
+        "content": "<p>you just read the bytes from the file into memory and you're done</p>",
+        "id": 493787919,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920020
+    },
+    {
+        "content": "<p>it's essentially what Zig does</p>",
+        "id": 493787939,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920043
+    },
+    {
+        "content": "<p>the downside is that everything has to be done in that one arena and with indices into it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 493787955,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920060
+    },
+    {
+        "content": "<p>Ahh interesting, so not even doing an SOA with a few types of arrays for different things</p>",
+        "id": 493787959,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920067
+    },
+    {
+        "content": "<p>you can do that, but they all need to be SoA in the same arena</p>",
+        "id": 493787966,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920079
+    },
+    {
+        "content": "<p>and then also all the metadata needs to be in the arena too, at the beginning</p>",
+        "id": 493788019,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920095
+    },
+    {
+        "content": "<p>instead of e.g. on the stack</p>",
+        "id": 493788022,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920097
+    },
+    {
+        "content": "<p>so it goes to disk too</p>",
+        "id": 493788023,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920100
+    },
+    {
+        "content": "<p>ehe, reading 10 separate arrays is minimally different from reading 1 arena blob (or at least, that'd be my hypothesis)</p>",
+        "id": 493788043,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920115
+    },
+    {
+        "content": "<p>If data can be organized more cleanly in a small number of SOA-style arrays, that might be a win</p>",
+        "id": 493788074,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920143
+    },
+    {
+        "content": "<p>yeah but the hard part is making everything be all indices</p>",
+        "id": 493788077,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920145
+    },
+    {
+        "content": "<p>and no pointers</p>",
+        "id": 493788091,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920154
+    },
+    {
+        "content": "<p>means no recursive enums, for example</p>",
+        "id": 493788110,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920176
+    },
+    {
+        "content": "<p>Nah, you have one top-level array per enum type (not enum variant - enum type)</p>",
+        "id": 493788183,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920216
+    },
+    {
+        "content": "<p>You do end up doing indices then, but it's a more structured form of indices</p>",
+        "id": 493788223,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920265
+    },
+    {
+        "content": "<p>Also I'm interested in exploring what SIMD-ification could be done when you have data in that sort of form</p>",
+        "id": 493788248,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920301
+    },
+    {
+        "content": "<p>unfortunately the most expensive parts of the compilation are in the backend of the compiler, and they're also the most challenging to cache</p>",
+        "id": 493788325,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920349
+    },
+    {
+        "content": "<p>I imagine if you ignore inlining, it's a relatively simple problem</p>",
+        "id": 493788372,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920404
+    },
+    {
+        "content": "<p>(e.g. for a dev backend)</p>",
+        "id": 493788382,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920408
+    },
+    {
+        "content": "<p>\"relatively\" is doing a fair mount of work there ;)</p>",
+        "id": 493788400,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920430
+    },
+    {
+        "content": "<p>the specializations are the hard part</p>",
+        "id": 493788478,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920481
+    },
+    {
+        "content": "<p>Ahhh</p>",
+        "id": 493788493,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920499
+    },
+    {
+        "content": "<p>I was thinking of:<br>\n(1) make caching work for cases where specialization is not required<br>\n(2) where strategically possible, reduce the need for specialization by masking types - e.g. a data structure that only ever deals in pointers of a generic data type, that code doesn't actually need to be specialized on the generic type; just have a GenericPointer that you compile for</p>",
+        "id": 493788620,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920590
+    },
+    {
+        "content": "<p>But yes, that does remove the ability to effectively cache a lot of interesting code</p>",
+        "id": 493788645,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920616
+    },
+    {
+        "content": "<p>The sort of thing Swift does when compiling generic code into a binary</p>",
+        "id": 493788794,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920732
+    },
+    {
+        "content": "<p>IIRC .NET will also do some even fancier things like pre-compiling a version of some machine code that's agnostic to things like field offsets, and then do \"late patching\" in the real offsets after those are resolved</p>",
+        "id": 493788852,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736920789
+    },
+    {
+        "content": "<p>yeah the thing I've heard about what Swift does (which I don't know the details of) is that it's good for caching and ABI stability but very technically thorny</p>",
+        "id": 493789028,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736920855
+    },
+    {
+        "content": "<p>It also doesn't allow inlining across module boundaries, which isn't ideal</p>",
+        "id": 493789849,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736921371
+    },
+    {
+        "content": "<p>Any problems with the cache structure I laid out above? This seems orthogonal enough that someone else could work on this in parallel if they wanted to.</p>",
+        "id": 493790360,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736921726
+    },
+    {
+        "content": "<p>I can say in the issue that whoever picks it up should expect discussion when they make a PR</p>",
+        "id": 493790492,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736921826
+    },
+    {
+        "content": "<p>I'm a little wary of the build.lock (I feel like I pretty regularly ran into issues with cargo's version of that for a _long_ time before they polished it up)</p>",
+        "id": 493790686,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736921964
+    },
+    {
+        "content": "<p>One thing you may have to be careful of is windows compat issues with path length</p>",
+        "id": 493790797,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736922020
+    },
+    {
+        "content": "<p>It looks like those paths can get pretty long</p>",
+        "id": 493790813,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736922041
+    },
+    {
+        "content": "<p>One thing that crossed my mind is instead of caching on the filesystem, you could use something like sqlite</p>",
+        "id": 493790859,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736922086
+    },
+    {
+        "content": "<p>If you do that on the right scope, you could make <code>roc build --clear-cache</code> or whatever be really fast (just deleting a handful of db files), rather than thousands of build artifacts</p>",
+        "id": 493790960,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736922144
+    },
+    {
+        "content": "<p>yeah I don't think we should need a build.lock-type thing</p>",
+        "id": 493791066,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736922239
+    },
+    {
+        "content": "<p>Should be deterministic for file output, just have to make sure that two processes don't write to the same file at the same time. Is that a problem? Seems like writing to a random file in <code>/tmp/</code> would mean that we only have to move a file to the cache dir</p>",
+        "id": 493791923,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736922824
+    },
+    {
+        "content": "<p>But that's extra work that we might not have to do</p>",
+        "id": 493791942,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736922836
+    },
+    {
+        "content": "<blockquote>\n<p>Mutiple copies in the cache likely is a good thing. It is common to work on multiple git branches that may have the same file in different states. So I don't think limiting to one entry per file is the right call</p>\n</blockquote>\n<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> this is tricky, since it'd be nice to have a deterministic and \"close to pure\" (meaning using few parameters) means for caching. So making something that doesn't need a coordinated strategy where we read from a file that lists the last N files would be great</p>",
+        "id": 493800403,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736927381
+    },
+    {
+        "content": "<p>I agree that I am suggesting that we trade off performance for cache size here, but I think the performance improvement isn't that important here since the cached artifacts are for the fast part of the compiler anyway</p>",
+        "id": 493800547,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736927443
+    },
+    {
+        "content": "<p>So we should start with something that is easy to implement correctly (which I believe the above strategy would be), and then we can try to make this cache more files in the future</p>",
+        "id": 493800622,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736927481
+    },
+    {
+        "content": "<p>Do we want to trust that packages on the host system have not been modified? For example, if I download the code for the latest version of Weaver to a folder named <code>~/.roc/packages/github.com/smores56/weaver/0.5.1/nqyqbOkpECWgDUMbY-rG9ug883TVbOimHZFHek-bQeI.tar.br/src/...</code>, I'd ideally want to keep it unarchived in our system to avoid the need to decompress the archive every time. But what if someone edited the hash in their Roc app for the package and also the hash in the global Roc cache?</p>",
+        "id": 493805995,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736929625
+    },
+    {
+        "content": "<p>This seems most likely to be self-inflicted</p>",
+        "id": 493806039,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736929644
+    },
+    {
+        "content": "<p>But the safe bet is to just save the full archive and decompress it for now, and then try to avoid the decompression cost down the road</p>",
+        "id": 493806236,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736929720
+    },
+    {
+        "content": "<p>Unless we don't care about this security concern, which would likely be because we don't think it's a real concern</p>",
+        "id": 493806293,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736929742
+    },
+    {
+        "content": "<p>Created a detailed issue for this, would appreciate a review if someone gets a chance: <a href=\"https://github.com/roc-lang/roc/issues/7517\">https://github.com/roc-lang/roc/issues/7517</a></p>",
+        "id": 493810127,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736931112
+    },
+    {
+        "content": "<p>I wrote it based on my current understanding of the plan, but I am happy to change the details based on the results of this discussion</p>",
+        "id": 493810272,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736931157
+    },
+    {
+        "content": "<p>I just thought it'd be good to get everything written down while it was fresh in my mind.</p>",
+        "id": 493810319,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736931174
+    },
+    {
+        "content": "<p>hm, why would we have the project directory structure in the cache dir instead of just a flat, un-namsespaced collection of hashes?</p>",
+        "id": 493917810,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736945107
+    },
+    {
+        "content": "<p>in other words, instead of:</p>\n<p><code>build/&lt;project hash&gt;/&lt;roc version&gt;/&lt;file content hash&gt;</code></p>\n<p>why not</p>\n<p><code>build/&lt;roc version&gt;/&lt;file content hash&gt;</code></p>",
+        "id": 493918058,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736945167
+    },
+    {
+        "content": "<p>also I do think we should do the \"write to tmpdir and then move afterwards\" thing - otherwise if multiple roc compiler processes are running at the same time, there can be race conditions around partially-written files in the cache <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 493918467,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736945293
+    },
+    {
+        "content": "<blockquote>\n<p>~/.roc/packages/&lt;repository website&gt;/&lt;username&gt;/&lt;project name&gt;/&lt;version&gt;/&lt;archive hash&gt;/...</p>\n</blockquote>\n<p>we already have a format for these, which I think should stay as-is!</p>",
+        "id": 493918689,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736945364
+    },
+    {
+        "content": "<p>regarding decompression, I don't think there's a real security benefit to leaving the files compressed. If an attacker has gotten write access to that directory, they can just write fake cache files directly which do whatever malicious thing they want. I think it's better to leave them decompressed so we don't have to keep redoing that work!</p>",
+        "id": 493919860,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736945643
+    },
+    {
+        "content": "<p>(also regarding the comment on the issue about XDG - we already do that for our cached package downloads! There's a whole algorithm we use to determine where the roc cache dir should go.)</p>",
+        "id": 493920225,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736945753
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"461444\">Sam Mohr</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493800622\">said</a>:</p>\n<blockquote>\n<p>So we should start with something that is easy to implement correctly (which I believe the above strategy would be), and then we can try to make this cache more files in the future</p>\n</blockquote>\n<p>Yes, but we need to make sure we design in ways that enable more flexibility in the future. Avoid simplify so much that we design ourselves into a corner and need a large rewrite to enable more functionality.</p>",
+        "id": 493970918,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736959537
+    },
+    {
+        "content": "<p>Also, we probably should talk to the zig folks about this. I think they just went through tons of incremental build work. I would guess they can tell us a good bit about pitfalls</p>",
+        "id": 493971243,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736959577
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493718693\">said</a>:</p>\n<blockquote>\n<p>I definitely think we should only ever cache things in the home dir</p>\n</blockquote>\n<p>I really dislike this. It makes it very unclear which projects are eating up diskspace. I much prefer all artifacts from a single project in a single location. That is much easier to cleanup and understand</p>",
+        "id": 493972482,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736959767
+    },
+    {
+        "content": "<p>that's interesting</p>",
+        "id": 493981457,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736962522
+    },
+    {
+        "content": "<p>I  hadn't thought of that</p>",
+        "id": 493981469,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736962526
+    },
+    {
+        "content": "<blockquote>\n<p>hm, why would we have the project directory structure in the cache dir instead of just a flat, un-namespaced collection of hashes?</p>\n</blockquote>\n<p>The goal with this is to know which build artifacts belong to which project on the user's system. If we have them in one big folder, then we can't just cull any build artifacts that don't correspond to current project files, because we'd delete build artifacts for all other projects.</p>\n<p>I preferred a hash of the <code>main.roc</code> file because that shouldn't move much, and it keeps our build cache flatter.</p>\n<p>We should probably offer a <code>roc cache project-path</code> command that would return the path to the current project's <code>~/.roc/build/&lt;hash&gt;/</code> path so you can do \"$(roc cache project-path)\" for when you want to check the cache dir in scripts.</p>",
+        "id": 493987654,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736964474
+    },
+    {
+        "content": "<p>This could be accompanied by a <code>roc cache project-clean</code> command, pretty easy to clean the project with that</p>",
+        "id": 493988628,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736964810
+    },
+    {
+        "content": "<p>Updated the description in the issue:</p>\n<ul>\n<li>Used the current XDG-compliant cache directory discovery mechanism</li>\n<li>Used the current package folder format, which is less deeply nested than the prior suggestion</li>\n<li>Store downloaded package source files uncompressed instead of in an archive</li>\n<li>Write cache artifacts to a temp file first to avoid write conflicts and remove the need for lock files</li>\n</ul>",
+        "id": 493997808,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736968128
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493972482\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493718693\">said</a>:</p>\n<blockquote>\n<p>I definitely think we should only ever cache things in the home dir</p>\n</blockquote>\n<p>I really dislike this. It makes it very unclear which projects are eating up diskspace. I much prefer all artifacts from a single project in a single location. That is much easier to cleanup and understand</p>\n</blockquote>\n<p>the flip side of this is that it's undesirable for Roc scripts to clutter the local directory with a cache dir, but still desirable for them to have caching for repeat run perf.</p>\n<p>I also like the idea of Roc not needing a .gitignore because by default it just doesn't create any local stuff you're supposed to ignore</p>",
+        "id": 494013986,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736974276
+    },
+    {
+        "content": "<p>what about having commands like <code>roc cache clean</code> and <code>roc cache size</code> to give you insight into that?</p>",
+        "id": 494013993,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736974279
+    },
+    {
+        "content": "<p>if you want to get that info across a bunch of projects on disk, it's probably about as much work to ask Claude to write you a shell one-liner to go run that command on all the projects as it would be to get all the sizes of one of their subdirectories (if cache dirs were local to the project)</p>",
+        "id": 494014377,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736974416
+    },
+    {
+        "content": "<p>Yeah, I think the biggest issue comes when you don't realize some old project (potentially otherwise deleted) is wasting a ton of cache space. Cause you don't actually want to just delete the whole cache. And you also don't want to have to manually remember some random old project. It's easy to see a projects directory is wasting space (see this all he time rust). Would be much harder to dig into the same with central caching. Obviously tooling can make it work, but I prefer the file system to just be that tool instead of needing to learn new tooling.</p>",
+        "id": 494024156,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736978208
+    },
+    {
+        "content": "<p>Want to quickly add a +1 to the idea of Roc not putting cache files in the project directory. I think in particular for Roc to be as nice for scripting as a dedicated scripting language, a small part of that is that it doesn't create a bunch of helper files in the project directory.</p>",
+        "id": 494024849,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1736978491
+    },
+    {
+        "content": "<p>For cache management, I wonder if there's some nice automated heuristics that would mean that Roc is respectful of disk space without needing active management. Something like:</p>\n<ul>\n<li>Roc will automatically remove caches that are unused for a certain number of days.</li>\n<li>Roc wil evict longest-unused-caches if the total amount of cache space Roc uses exceeds a certain percentage of disk space.</li>\n<li>Same as previous point, but roc will evict the worst effort-to-size-ratio cache objects instead of longest-unused.</li>\n</ul>\n<p>Such heuristics might be easier to implement if the entire cache lives in a single place. If there's bits of Roc cache strewn about the file system, then Roc won't know where all the cache is, and so won't be able to manage the whole either. At that point manually managing the cache will be the user's only option.</p>",
+        "id": 494025865,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1736978901
+    },
+    {
+        "content": "<p>If we add strategies like this, we should make them opt in.</p>",
+        "id": 494025955,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736978950
+    },
+    {
+        "content": "<p>Or at a minimum opt out</p>",
+        "id": 494025976,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736978960
+    },
+    {
+        "content": "<p>You think?</p>",
+        "id": 494026016,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1736978981
+    },
+    {
+        "content": "<p>Disk space is practically free and I have seen plenty of cases where it is preferable to just eat a ton of it.</p>",
+        "id": 494026029,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736978989
+    },
+    {
+        "content": "<p>Also, doing small deletions on every cache use will be bad for performance.</p>",
+        "id": 494026137,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736979019
+    },
+    {
+        "content": "<p>Obviously some solutions can still be grouped, but I think this is why tools like nix just do a large GC call to cleanup caching. Gives the user control.</p>",
+        "id": 494026256,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736979066
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/494025976\">said</a>:</p>\n<blockquote>\n<p>Or at a minimum opt out</p>\n</blockquote>\n<p>I'd vote for this. We can have sensible defaults for the common path and experience.</p>",
+        "id": 494026310,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736979088
+    },
+    {
+        "content": "<p>I imagine that I wouldn't even think about my roc cache size until it is at least 10GB. Depending on the machine, probably closer to 100GB</p>",
+        "id": 494026354,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736979110
+    },
+    {
+        "content": "<p>I think those are important aspects, but wonder if they can be folded into a \"sufficiently smart\" cache management strategy <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span>.</p>\n<p>For instance, maybe the amount of disk Roc is okay using is not relative to total disk space, but to free disk space. And deletions can happen in a background job, I think Richard mentioned a daemon before.</p>\n<p>Nix is an interesting case. I used to manually run a nix garbage-collect job periodically when it occurred to me or, more likely, when I ran into some disk-full-related errors.</p>\n<p>At some point I enabled a \"automatically garbage collect old stuff on every nixos-rebuild\" and I've not actively needed to worry about Nix disk space usage since. It's been much nicer!</p>",
+        "id": 494026611,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1736979209
+    },
+    {
+        "content": "<p>One idea might be to do the build, and then follow up with the review/cleanup</p>",
+        "id": 494026798,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736979284
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"477725\">Jasper Woudenberg</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/494026611\">said</a>:</p>\n<blockquote>\n<p>I think those are important aspects, but wonder if they can be folded into a \"sufficiently smart\" cache management strategy <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span>.</p>\n</blockquote>\n<p>Yeah, I totally think this is doable. There can be sane defaults and a config in the cache folder to give more control.</p>",
+        "id": 494026802,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736979285
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493719658\">said</a>:</p>\n<blockquote>\n<p>I think we can limit cache growth by having a \"background job\" that goes and deletes old cache files based on last access time</p>\n<p>there are points where compilation gets bottlenecked and we can't productively use all the cores just because things are blocked, and during those times we can put all the idle cores on garbage-collecting old cache files until they're unblocked again</p>\n</blockquote>\n<p>yeah I think this would be the nicest way to do it if it can work - no daemon, just make use of idle cores during every build to quietly go around deleting expired cache entries until either it runs out or the build needs the core again</p>",
+        "id": 494027756,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736979706
+    },
+    {
+        "content": "<p>In that case, we could get away with not needing to stick to a <code>build/&lt;project main.roc hash&gt;/&lt;roc version&gt;/&lt;file hash&gt;</code> strategy and just go for <code>build/&lt;roc version&gt;/&lt;file hash&gt;</code></p>",
+        "id": 494028968,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736980277
+    },
+    {
+        "content": "<p>I still think the former is a very simple strategy that will work until we figure out our cleaning strategy</p>",
+        "id": 494029112,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736980338
+    },
+    {
+        "content": "<p>But this isn't gonna be implemented for a while, so I don't think it matters yet</p>",
+        "id": 494029144,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736980360
+    },
+    {
+        "content": "<p>I would also much prefer to have all of the caching in a single directory and avoid a per-project build dir. I think heuristics about cleaning up the cache can probably solve the problem nicely, but even if they can't, deleting the whole cache once in a blue moon if it got too large would not be that big of a deal.</p>",
+        "id": 494252590,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1737070461
+    },
+    {
+        "content": "<p>The only thing that deleting the entire <code>~/.cache/roc/</code> folder would break would be the compiler being missing</p>",
+        "id": 494252655,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737070517
+    },
+    {
+        "content": "<p>Everything else would survive</p>",
+        "id": 494252668,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737070528
+    },
+    {
+        "content": "<p>Even then, if we default to storing the current Roc bin in <code>/usr/local/bin/</code> or something, then it wouldn't even break</p>",
+        "id": 494252775,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737070579
+    },
+    {
+        "content": "<p>I think the compiler install should go into <code>~/.local/roc</code> rather than <code>/usr/local/bin/</code> or <code>~/.cache/roc/</code></p>",
+        "id": 494943988,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737421631
+    },
+    {
+        "content": "<p>The semantics of the .cache dir are supposed to be that dropping it won't cause anything to break - but clearly if the roc compiler is stored in there and you drop it, you'll clearly have broken your workflow.</p>",
+        "id": 494944116,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737421684
+    },
+    {
+        "content": "<p>I remember there was some pushback, but this is one of the reasons I think we should not do symlinks for version switching of the <code>roc</code> executable itself, and instead it should update itself in-place</p>",
+        "id": 494948651,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737423907
+    },
+    {
+        "content": "<p>if it does that, then the downloads are actually just cache in case you want to switch back to that version, and there's no problem with deleting the cache dir</p>",
+        "id": 494948683,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737423925
+    },
+    {
+        "content": "<p>I think ~/.local/bin/roc. At least that where I’d move it if it defaults to someplace else</p>",
+        "id": 494948837,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737424005
+    },
+    {
+        "content": "<p>I have my path setup to make anything put there to work right away , or after a hash -r</p>",
+        "id": 494948952,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737424067
+    },
+    {
+        "content": "<p>I think XDG_STATE_DIR is where a <code>rocup</code> like tool would store compiler versions</p>",
+        "id": 494950123,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737424656
+    },
+    {
+        "content": "<p>And symlink from there</p>",
+        "id": 494950128,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737424662
+    },
+    {
+        "content": "<p>yeah <span aria-label=\"point up\" class=\"emoji emoji-1f446\" role=\"img\" title=\"point up\">:point_up:</span> is what I think we shouldn't do <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 494954541,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737427093
+    },
+    {
+        "content": "<p>It's unusual to have the compiler also be the install tool, but the idea of having a single binary for literally everything is just MAGICAL</p>",
+        "id": 494960443,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737430298
+    },
+    {
+        "content": "<p>So yeah, symlinks are only needed if we can't get that working</p>",
+        "id": 494960478,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737430319
+    },
+    {
+        "content": "<p>Otherwise, Richard's plan is just objectively better in my eyes</p>",
+        "id": 494960547,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737430335
+    },
+    {
+        "content": "<p>Would we ever want to allow different projects to pin different versions of roc?</p>",
+        "id": 494963370,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737431773
+    },
+    {
+        "content": "<p>The plan is to allow configuring the version at the top of your main.roc</p>",
+        "id": 494963419,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737431807
+    },
+    {
+        "content": "<p>I think that’s something that has happened and literally every other program language community. It’s not obvious to be why roc would not also want to support that.</p>",
+        "id": 494963421,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737431807
+    },
+    {
+        "content": "<p>The language version and compiler version are two different things though</p>",
+        "id": 494963447,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737431823
+    },
+    {
+        "content": "<p>Hmmm</p>",
+        "id": 494963462,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737431830
+    },
+    {
+        "content": "<p>It may be important to pin compiler version.</p>",
+        "id": 494963469,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737431835
+    },
+    {
+        "content": "<p>(Not sure)</p>",
+        "id": 494963488,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737431847
+    },
+    {
+        "content": "<p>Could you give an example where a properly semvered language version couldn't do that?</p>",
+        "id": 494963539,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737431878
+    },
+    {
+        "content": "<p>I'm not sure what the difference is between a compiler and a lang version</p>",
+        "id": 494963597,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737431893
+    },
+    {
+        "content": "<p>If I were developing a big app I deploy to production, I'd sure as hell want to pin the exact compiler version</p>",
+        "id": 494963778,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737431993
+    },
+    {
+        "content": "<p>Too much risk of uncontrolled compiler bugs causing havoc</p>",
+        "id": 494963867,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737432008
+    },
+    {
+        "content": "<p>Better to have compiler upgrades be like any other commit that you can revert</p>",
+        "id": 494963905,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737432024
+    },
+    {
+        "content": "<p>Rust only does a semver, seems to work okay for AWS</p>",
+        "id": 494964406,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737432331
+    },
+    {
+        "content": "<p>Because that pins a single compiler version for their release schedule</p>",
+        "id": 494964436,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737432355
+    },
+    {
+        "content": "<p>At my company we pin an exact nightly version</p>",
+        "id": 494964479,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737432366
+    },
+    {
+        "content": "<p>I suppose that may be an artifact of being stuck on nightly</p>",
+        "id": 494964494,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737432379
+    },
+    {
+        "content": "<p>That pins a more specific set of features than would be available with the \"every six weeks\" release</p>",
+        "id": 494964520,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737432398
+    },
+    {
+        "content": "<p>And also a more specific set of bugs. There have definitely been times when we had to choose a different version to pin because our release pipeline picked up things that turned out to be compiler bugs</p>",
+        "id": 494964603,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737432438
+    },
+    {
+        "content": "<p>But it's not like you could get a different compiler with the same semver</p>",
+        "id": 494964608,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737432441
+    },
+    {
+        "content": "<p>Yeah, that's fair</p>",
+        "id": 494964624,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737432458
+    },
+    {
+        "content": "<p>Even roc pins rust to an exact version despite semver suggesting we could use a newer version</p>",
+        "id": 494967406,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737434133
+    },
+    {
+        "content": "<p>I think it is an exceptionally common use case</p>",
+        "id": 494967413,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737434142
+    },
+    {
+        "content": "<p>Then we can just allow setting a commit hash at the top of the file or something</p>",
+        "id": 494967701,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737434315
+    },
+    {
+        "content": "<p>The version at the top should be pointable at any release we have in GitHub releases</p>",
+        "id": 494967740,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737434339
+    },
+    {
+        "content": "<p>I was assuming that we'd make all of those different semvers (including nighties, somehow)</p>",
+        "id": 494967793,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737434377
+    },
+    {
+        "content": "<p>If that's not the case, then semver doesn't cut it, sure</p>",
+        "id": 494967804,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1737434387
+    },
+    {
+        "content": "<p>one of the things in the design doc in <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/channel/304641-ideas/topic/compiler.20version.20management\">#ideas &gt; compiler version management</a> is that you can pass a CLI flag to have <code>roc</code> run a different version of <code>roc</code> from your cached downloads (after downloading it first if necessary)</p>",
+        "id": 494969132,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737435233
+    },
+    {
+        "content": "<p>and also the same thing can be done in a <code>.roc</code> file</p>",
+        "id": 494969144,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737435242
+    },
+    {
+        "content": "<p>so no symlinking needed for that use case either! <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 494969206,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737435255
+    },
+    {
+        "content": "<p>Interesting. So roc still auto updates to the lastest version, but it can run old version from the cache.</p>",
+        "id": 494970444,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737435983
+    },
+    {
+        "content": "<p>well I'd want the update to be manual/opt-in, but yeah</p>",
+        "id": 494972197,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737437307
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/494954541\">said</a>:</p>\n<blockquote>\n<p>yeah <span aria-label=\"point up\" class=\"emoji emoji-1f446\" role=\"img\" title=\"point up\">:point_up:</span> is what I think we shouldn't do <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>\n</blockquote>\n<p>This is a pretty common pattern for tooling.  And I've seen (in my own company) the \"we'll defer to a different global version from a local version\" fall on it's face pretty terribly.  Now maybe I need to re-read this entire thread top to bottom to see what the fears are with symlinking for this use case (I'm sure if you are making the argument, it's well reasoned)</p>",
+        "id": 495058074,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737468427
+    },
+    {
+        "content": "<p><a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/channel/304641-ideas/topic/compiler.20version.20management\">#ideas &gt; compiler version management</a> is the most relevant thread on this topic! <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 495061048,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737469010
+    },
+    {
+        "content": "<p>So the argument is \"we want Roc to only require a single executable download (directly by the user) for it to run Roc apps targeting any version\"?</p>",
+        "id": 495078067,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737472151
+    },
+    {
+        "content": "<p>If so, then I agree that this makes sense.  I've just never seen this work out as well as imagined here.  But maybe because those tools were written in Javascript - and most of the issue have more to do with issues with node module resolution than the concept itself.  As long as args, pipes, and errors are linked up correctly and the user has final discretion over changes to the filesystem, I guess it should be fine.</p>",
+        "id": 495078674,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737472308
+    },
+    {
+        "content": "<p>Do you know of another language toolchain that works like this?  This is like <code>rustup</code>, <code>cargo</code>, and <code>rustc</code> in a single executable.</p>",
+        "id": 495079093,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737472406
+    },
+    {
+        "content": "<p>I don't know of any toolchain that works like this</p>",
+        "id": 495089022,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737474968
+    },
+    {
+        "content": "<p>but I don't think there are any technical barrier to it, just one of those \"nobody has done it until someone is the first to do it\" things <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 495089137,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737474996
+    },
+    {
+        "content": "<p>Awesome. That’s Roc innovation !</p>",
+        "id": 495095022,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737476498
+    },
+    {
+        "content": "<p>Now all we need to have a “version” of Roc <span aria-label=\"wink\" class=\"emoji emoji-1f609\" role=\"img\" title=\"wink\">:wink:</span></p>",
+        "id": 495095194,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737476532
+    },
+    {
+        "content": "<p>yeah, as noted in the doc, I'd like to get this in place before 0.1.0 because that way in the future you can use it to switch your current <code>roc</code> all the way back to 0.1.0 without getting stuck and being able to go forward again</p>",
+        "id": 495098616,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737477470
+    },
+    {
+        "content": "<p>Are we going to have a strategy for compiler commit SHAs/tags as well?  And local dev?  I guess I can just try to read through all of this and the other thread when I’m done with work</p>",
+        "id": 495113749,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737482021
+    },
+    {
+        "content": "<p>I see the former in there, but not the latter.  Obviously that is an edge case for compiler devs mostly</p>",
+        "id": 495114763,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737482393
+    },
+    {
+        "content": "<p>I mentioned nightlies in the doc</p>",
+        "id": 495122693,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1737485177
+    },
+    {
+        "content": "<p>A few comments on caching:</p>\n<ol>\n<li>Why do we default to <code> /Users/bren077s/Library/Caches/roc</code> instead of <code>~/.cache</code>? I don't think I have ever seen cli tools do that. Super weird to me.</li>\n<li>I don't have time to fix this now, but the cache does not clean up resource properly. If we load a file from the cache, we will then still try to deinit like normal This leads to calling free on a pointer that was not allocate. We need to properly cleanup mmaps and what not.</li>\n<li>Even if we fail to compiler a file and it has tons of errors we still cache it. This is maybe fine, but at a minimum, we also need to cache all the errors. Currently the first call to <code>roc check</code> prints all the errors and caches. The second just loads from cache and prints no errors.</li>\n</ol>",
+        "id": 528578646,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752463352
+    },
+    {
+        "content": "<p>All good points. The current design needs some love - but it's a good start <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 528582985,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1752467685
+    },
+    {
+        "content": "<p>Oh yeah, of course....just want to make sure to make sure to share the issues before I forget about them</p>",
+        "id": 528668677,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752501362
+    }
+]
