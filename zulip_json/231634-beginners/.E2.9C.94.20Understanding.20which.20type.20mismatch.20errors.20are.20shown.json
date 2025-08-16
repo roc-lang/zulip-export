@@ -1,0 +1,116 @@
+[
+    {
+        "content": "<p>I wrote this tiny program which doesn't typecheck:</p>\n<div class=\"codehilite\"><pre><span></span><code>main : Program\nmain = Program.noArgs (Task.attempt mainTask \\result -&gt;\n    when result is\n        Ok task -&gt; task\n        Err _ -&gt; Task.succeed {} |&gt; Program.exit 1\n    )\n\nmainTask =\n    Task.await\n        (File.readUtf8 (Path.fromStr &quot;../../1&quot;))\n        \\contents -&gt;\n            x = if contents == &quot;asdf&quot; then 1 else 2\n\n            Num.toStr x\n            |&gt; Stdout.line\n            |&gt; Program.exit 0\n</code></pre></div>\n<p>The issue here was that <code>Program.exit</code> only accepts a <code>Task {} [] fx</code>, but here clearly unhandled errors are present. Instead of this mismatch, I got two huge reports about <code>await</code> and <code>attempt</code> callbacks, which were hard to read (at least for me as a beginner).</p>\n<p>Is passing a Task with unhandled errors to <code>Program.exit</code> not a type mismatch? Or are there other reasons this is missing from compiler output?</p>",
+        "id": 304310138,
+        "sender_full_name": "Michał Łępicki",
+        "timestamp": 1665927571
+    },
+    {
+        "content": "<div class=\"spoiler-block\"><div class=\"spoiler-header\">\n<p>This is what the compiler prints</p>\n</div><div class=\"spoiler-content\" aria-hidden=\"true\">\n<div class=\"codehilite\"><pre><span></span><code>$ roc check 1/1a.roc\n\n── TYPE MISMATCH ──────────────────────────────────────────────────── 1/1a.roc ─\n\nThis 2nd argument to await has an unexpected type:\n\n16│&gt;          \\contents -&gt;\n17│&gt;              x = if contents == &quot;asdf&quot; then 1 else 2\n18│&gt;\n19│&gt;              Num.toStr x\n20│&gt;              |&gt; Stdout.line\n21│&gt;              |&gt; Program.exit 0\n\nThe argument is an anonymous function of type:\n\n    Str -&gt; Task ExitCode [] [Read [File]*, Write [Stdout]*]a ?\n\nBut await needs its 2nd argument to be:\n\n    Str -&gt; Task ExitCode [FileReadErr Path.Path File.ReadErr,\n    FileReadUtf8Err Path.Path [BadUtf8 Utf8ByteProblem Nat]*]* [Read [File]*,\n    Write [Stdout]*]a ?\n\n\n\n\n── TYPE MISMATCH ──────────────────────────────────────────────────── 1/1a.roc ─\n\nThis 2nd argument to attempt has an unexpected type:\n\n 7│&gt;  main = Program.noArgs (Task.attempt mainTask \\result -&gt;\n 8│&gt;      when result is\n 9│&gt;          Ok task -&gt; task\n10│&gt;          Err _ -&gt; Task.succeed {} |&gt; Program.exit 1\n\nThe argument is an anonymous function of type:\n\n    [Err [FileReadErr Path.Path File.ReadErr,\n    FileReadUtf8Err Path.Path [BadUtf8 Utf8ByteProblem Nat]*]*,\n    Ok (Task.Task Program.ExitCode [] [Read [File]*,\n    Write [Stdout]*]a ?)] -&gt; Task ExitCode [] [Read [File]*,\n    Write [Stdout]*]a ?\n\nBut attempt needs its 2nd argument to be:\n\n    Result Program.ExitCode [FileReadErr Path.Path File.ReadErr,\n    FileReadUtf8Err Path.Path [BadUtf8 Utf8ByteProblem Nat]*]* -&gt;\n    Task ExitCode [] [Read [File]*, Write [Stdout]*]a ?\n\n────────────────────────────────────────────────────────────────────────────────\n\n2 errors and 0 warnings found in 21 ms.\n</code></pre></div>\n</div></div>",
+        "id": 304311359,
+        "sender_full_name": "Michał Łępicki",
+        "timestamp": 1665928185
+    },
+    {
+        "content": "<p>if i understand correctly, in this case <code>Program.exit</code> is not a type mismatch because it is only handling the good case. It will never get passed a <code>Task</code> with unhandled errors. So then the issue becomes that the lambda has a type incompatible with the type of <code>File.readUtf8</code></p>",
+        "id": 304316045,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665931054
+    },
+    {
+        "content": "<p>As for the second error. The Ok cases for matching on a result from <code>Task.attempt</code> is not correct. The <code>Ok</code> case does not contain a <code>Task</code>, it just contains an <code>ExitCode</code>. As such, it still needs to be passed to <code>Task.succeed</code></p>",
+        "id": 304316827,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665931608
+    },
+    {
+        "content": "<p>To expand on the first error,  <code>Program.exit</code> has a type of <code>Task {} [] fx, U8 -&gt; Task ExitCode [] fx</code>. Which specifically says that it takes a <code>Task</code> with no errors and returns a <code>Task</code> that can never have errors. It is a closed tag union for the error (<code>[]</code> vs <code>[]*</code>). This means that it is not allowed to expand/merge with another task to contain errors later.</p>\n<p>The lambda if fine by itself because its input is a Str, <code>Num.toStr</code> doesn't return any error types, <code>Stdout.line</code> doesn't return any error types, and <code>Program.exit</code> gets input a <code>Task</code> with no possible errors.</p>\n<p><code>Task.await</code> on the other hand takes the error case of the first argument and merges it with the ok case of the second argument. Since the error type of <code>File.readUtf8</code> is <code>[FileReadErr Path ReadErr, FileReadUtf8Err Path [BadUtf8 Utf8ByteProblem Nat]*]*</code>, it is trying to merge that with the error type of <code>[]</code> which is return from <code>Program.exit</code>. This is impossible. A closed union <code>[]</code> can not be merged with anything. I guess <code>Program.exit</code> was kinda written in a way that it expects to be terminal.</p>\n<p>If you change the type signiture of <code>Program.exit</code> to <code>exit : Task {} []* fx, U8 -&gt; Task ExitCode []* fx</code>, this should work.</p>",
+        "id": 304317914,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665932419
+    },
+    {
+        "content": "<p>I guess also to expand on the second error, the type of:<br>\n<code>Task.attempt</code> is <code>Task a b fx, (Result a b -&gt; Task c d fx) -&gt; Task c d fx</code></p>\n<p>The function you wrote, took the Ok case to contain a <code>Task</code>. That would mean you want <code>a</code> to be <code>Task ExitCode [] fx</code>. If you do substitution with that knowledge, you get:<br>\n<code>Task (Task ExitCode [] fx) b fx, (Result (Task ExitCode [] fx) b -&gt; Task c d fx) -&gt; Task c d fx</code><br>\nBut <code>mainTask</code> is not return a nested <code>Task (Task ExitCode ...)</code>. It is just returning a <code>Task ExitCode ...</code></p>",
+        "id": 304318259,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665932673
+    },
+    {
+        "content": "<p>Hopefully this helps some.</p>",
+        "id": 304318322,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665932733
+    },
+    {
+        "content": "<p>That said, I guess it would be nice if we can make these error messages nicer somehow so this becomes clearer.</p>",
+        "id": 304318332,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665932753
+    },
+    {
+        "content": "<p>It should help, but I think it's too much to handle for me for now. I'll have to re-read this, the error messages and all the function signatures a few more times.<br>\nThank you very much though!</p>",
+        "id": 304318662,
+        "sender_full_name": "Michał Łępicki",
+        "timestamp": 1665932969
+    },
+    {
+        "content": "<p>Haha, no worries. I guess the summary is I am pretty sure this is working as expected, but the error messages aren't great because they are too large and not focused in on what really caused the bug.</p>",
+        "id": 304318980,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665933152
+    },
+    {
+        "content": "<p>With this program that doesn't have the nested task problem:</p>\n<div class=\"codehilite\"><pre><span></span><code>main : Program\nmain = Program.noArgs (Task.attempt mainTask \\result -&gt;\n    when result is\n        Ok exitCode -&gt; Task.succeed exitCode\n        Err _ -&gt; Task.succeed {} |&gt; Program.exit 1\n    )\n\nmainTask =\n    Task.await\n        (File.readUtf8 (Path.fromStr &quot;../../1&quot;))\n        \\contents -&gt;\n            x = if contents == &quot;asdf&quot; then 1 else 2\n\n            Num.toStr x\n            |&gt; Stdout.line\n            |&gt; Program.exit 0\n</code></pre></div>\n<p>I get:</p>\n<div class=\"codehilite\"><pre><span></span><code>── TYPE MISMATCH ──────────────────────────────────────────────────── 1/1a.roc ─\n\nThis 2nd argument to await has an unexpected type:\n\n16│&gt;          \\contents -&gt;\n17│&gt;              x = if contents == &quot;asdf&quot; then 1 else 2\n18│&gt;\n19│&gt;              Num.toStr x\n20│&gt;              |&gt; Stdout.line\n21│&gt;              |&gt; Program.exit 0\n\nThe argument is an anonymous function of type:\n\n    Str -&gt; Task ExitCode [] [Read [File]*, Write [Stdout]*]a ?\n\nBut await needs its 2nd argument to be:\n\n    Str -&gt; Task ExitCode [FileReadErr Path.Path File.ReadErr,\n    FileReadUtf8Err Path.Path [BadUtf8 Utf8ByteProblem Nat]*]* [Read [File]*,\n    Write [Stdout]*]a ?\n\n\n\n────────────────────────────────────────────────────────────────────────────────\n\n1 error and 0 warnings found in 19 ms.\n</code></pre></div>\n<p>which I understand as: if errors are present in type of first <code>Task.await</code> argument, they can't be thrown away in the callback</p>",
+        "id": 304319206,
+        "sender_full_name": "Michał Łępicki",
+        "timestamp": 1665933346
+    },
+    {
+        "content": "<p>I still don't understand why the compiler doesn't complain when passing a task with errors to <code>Program.exit</code> <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 304319383,
+        "sender_full_name": "Michał Łępicki",
+        "timestamp": 1665933463
+    },
+    {
+        "content": "<p>Oh, I'm passing the result of <code>Stdout.line</code>, so it doesn't have errors anyway! So I don't know how errors get aligned in the callback if I don't use <code>Program.exit</code> there</p>",
+        "id": 304319648,
+        "sender_full_name": "Michał Łępicki",
+        "timestamp": 1665933675
+    },
+    {
+        "content": "<p>Probably because <code>Stdout.line</code> has <code>*</code> in place of errors?</p>",
+        "id": 304319982,
+        "sender_full_name": "Michał Łępicki",
+        "timestamp": 1665933897
+    },
+    {
+        "content": "<p>I think the important part is to look at the core of <code>Task.await</code>:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"k\">when</span><span class=\"w\"> </span><span class=\"nx\">result</span><span class=\"w\"> </span><span class=\"o\">is</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"nx\">Ok</span><span class=\"w\"> </span><span class=\"nx\">a</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">transform</span><span class=\"w\"> </span><span class=\"nx\">a</span><span class=\"w\"></span>\n<span class=\"w\">    </span><span class=\"nx\">Err</span><span class=\"w\"> </span><span class=\"nx\">err</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">fail</span><span class=\"w\"> </span><span class=\"nx\">err</span><span class=\"w\"></span>\n</code></pre></div>\n<p>It takes a <code>Task</code> as the first argument. If that <code>Task</code> succeded, it passes its data through the lambda to get a new <code>Task</code>. In this case, the lambda is named <code>transform</code>. If the Task failed, it just returns the failed task. What is really important here is that the two cases are different branches of a <code>when</code> expression. This means that they must have the exact same type.</p>\n<p>The type of the <code>Ok</code> case is <code>Task ExitCode [] [Read [File]*, Write [Stdout]*]a</code><br>\nThe type of the <code>Err</code> case is <code>Task * [FileReadErr Path.Path File.ReadErr, FileReadUtf8Err Path.Path [BadUtf8 Utf8ByteProblem Nat]*]* [Read [File]*, Write [Stdout]*]a</code></p>\n<p>These two types are not compatible. Yes the difference is the <code>*</code>. The <code>Ok</code> case says it can never have any errors or merge with any <code>Task</code> with errors by having an error type of <code>[]</code>. If the error type was <code>[]*</code> or just <code>*</code>, it would work.</p>",
+        "id": 304320282,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665934060
+    },
+    {
+        "content": "<blockquote>\n<p>Task.await on the other hand takes the error case of the first argument and merges it with the ok case of the second argument</p>\n</blockquote>\n<p>Reading the type signature it looks to me as if the error type needs to be the same:</p>\n<blockquote>\n<p>await : Task a err fx, a -&gt; Task b err fx -&gt; Task b err fx</p>\n</blockquote>\n<p>So I don't understand what you mean by \"merging\" but I think I get it now, thank you again!</p>",
+        "id": 304320385,
+        "sender_full_name": "Michał Łępicki",
+        "timestamp": 1665934137
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"543952\">Michał Łępicki</span> has marked this topic as resolved.</p>",
+        "id": 304320415,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1665934155
+    },
+    {
+        "content": "<p>Right, so by \"merging\" you probably meant that they need to be compatible, and if they are open tag unions, both sets of tags will be combined. All clear now I think!</p>",
+        "id": 304320688,
+        "sender_full_name": "Michał Łępicki",
+        "timestamp": 1665934333
+    },
+    {
+        "content": "<p>Yeah, merging probably wasn't the best word. You got it.</p>",
+        "id": 304321273,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665934719
+    }
+]
