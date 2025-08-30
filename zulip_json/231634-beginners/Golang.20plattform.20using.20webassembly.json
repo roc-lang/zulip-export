@@ -1,0 +1,50 @@
+[
+    {
+        "content": "<p>I would like to use roc with a go platform.</p>\n<p>I read this comment, that it is probably not possible to use go as a platform directly: <a href=\"#narrow/stream/231634-beginners/topic/webserver.20platform/near/296018502\">https://roc.zulipchat.com/#narrow/stream/231634-beginners/topic/webserver.20platform/near/296018502</a></p>\n<p>But there is a webassembly runtime written in go: <a href=\"https://wazero.io/\">https://wazero.io/</a></p>\n<p>It was easy to create a wasm-file from the plattform-switching example. To make it a bit more interesting, I used this roc program: <a href=\"https://github.com/lukewilliamboswell/roc-things/blob/main/aoc-2022/12/main.roc\">https://github.com/lukewilliamboswell/roc-things/blob/main/aoc-2022/12/main.roc</a></p>\n<p>I just changed it, so main returns a string instead of a task, so it was compatible with the web-assembly-platform.</p>\n<p>Then I run the wasm-file with this go program: <a href=\"https://gist.github.com/ostcar/17c7cc0257734128a4b29c060d09887f\">https://gist.github.com/ostcar/17c7cc0257734128a4b29c060d09887f</a></p>\n<p>This works, but it is much slower then a native build. When I run the code with the c-platform, i takes around one minute. With the go-wasm platform, it takes around three minutes.</p>\n<p>But I don't now how to go further.</p>\n<p>I would like to change the web-assembly-platform, so the main function has the signature \"Str -&gt; Str\". I have no idea how to do this.</p>\n<p>I am also very excited about this idea about wasm without a host: <a href=\"#narrow/stream/304902-show-and-tell/topic/wasm.20without.20a.20host\">https://roc.zulipchat.com/#narrow/stream/304902-show-and-tell/topic/wasm.20without.20a.20host</a></p>\n<p>Is it currently even possible to build a wasm file without zig?</p>",
+        "id": 367414240,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1687103427
+    },
+    {
+        "content": "<p>I think our wasm is currently tied to zig. Something we definitely need to change in the future.</p>",
+        "id": 367430748,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1687108816
+    },
+    {
+        "content": "<p>When I build roc from source, it works. But If a use a nightly build, I get an error, that wasi-libc.a can not be found</p>\n<div class=\"codehilite\"><pre><span></span><code>🔨 Rebuilding platform...\nAn internal compiler expectation was broken.\nThis is definitely a compiler bug.\nPlease file an issue here: https://github.com/roc-lang/roc/issues/new/choose\nthread &#39;main&#39; panicked at &#39;cannot find `wasi-libc.a`&#39;, crates/compiler/build/src/link.rs:126:5\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>\n<p>Do I have to copy the wasi-libc.a file somewhere? Or is the nightly build different from the source build?</p>",
+        "id": 367443820,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1687113978
+    },
+    {
+        "content": "<p>Thanks, I think you've found a bug in the nightly build!<br>\nWhen we build the compiler from source, <code>wasi-libc.a</code> is created somewhere inside Cargo's <code>target</code> directory, and we set an environment variable equal to that path. The path is then compiled into some of the other crates in the compiler. (There's also a second file called <code>compiler-rt.o</code>.)<br>\nLater when we run the compiler with <code>--target=wasm32</code>, it will try to find those files to link them with the user's Roc code.<br>\nMy guess is that our nightly build does not copy <code>wasi-libc.a</code> and <code>compiler-rt.o</code> into the bundle.<br>\nSo basically right now Wasm targets won't work with nightly builds... unless you happen to have these files at the exact same directory paths as the machine where the nightly build was run!</p>",
+        "id": 367532161,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1687159314
+    },
+    {
+        "content": "<p>However this is solvable and we have solved it in other places. For example we have object files for builtin functions that we also link with user code. So maybe there's a similar approach we can take in this case.</p>",
+        "id": 367532608,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1687159400
+    },
+    {
+        "content": "<p>I've made issue <a href=\"https://github.com/roc-lang/roc/issues/5573\">#5573</a> for this</p>",
+        "id": 367567466,
+        "sender_full_name": "Anton",
+        "timestamp": 1687166812
+    },
+    {
+        "content": "<p>Thank you. This will make it easier.</p>\n<p>After a lot of try and error I succeeded to build a wasm file with the main signature <code>main : Str -&gt; Str</code></p>\n<p>The zig function signature is:</p>\n<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"kr\">extern</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"n\">roc__mainForHost_1_exposed</span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"n\">RocStr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">RocStr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"kt\">void</span><span class=\"p\">;</span>\n</code></pre></div>\n<p>But the first *RocStr is the return value and the second is the first argument. I had guest it the other way around.</p>\n<p>The zig function to call it can look like this:</p>\n<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"kr\">export</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"n\">run_roc</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"kt\">void</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kr\">var</span><span class=\"w\"> </span><span class=\"n\">callresult</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">RocStr</span><span class=\"p\">.</span><span class=\"n\">empty</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"n\">roc__mainForHost_1_exposed</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">callresult</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">RocStr</span><span class=\"p\">.</span><span class=\"n\">init</span><span class=\"p\">(</span><span class=\"s\">\"foobar</span><span class=\"se\">\\n</span><span class=\"s\">\"</span><span class=\"p\">,</span><span class=\"mi\">7</span><span class=\"p\">));</span>\n<span class=\"w\">    </span><span class=\"n\">print_roc_string</span><span class=\"p\">(</span><span class=\"n\">callresult</span><span class=\"p\">.</span><span class=\"n\">asU8ptrMut</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">callresult</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">());</span>\n<span class=\"w\">    </span><span class=\"n\">callresult</span><span class=\"p\">.</span><span class=\"n\">decref</span><span class=\"p\">();</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>A strange thing was, that the roc mainForHost function had to be</p>\n<div class=\"codehilite\"><pre><span></span><code>mainForHost = \\s -&gt; main s\n</code></pre></div>\n<p>I would have guest, that </p>\n<div class=\"codehilite\"><pre><span></span><code>mainForHost = main\n</code></pre></div>\n<p>should also work, but it gets defined in wasm as <code>() -&gt; void</code></p>\n<p>Another thing is, that the <code>zig-cache</code> folder has to be removed before building. In other case, the wasm file does not contain the zig-function.</p>",
+        "id": 367660882,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1687184905
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"496321\">Oskar Hahn</span> <a href=\"#narrow/stream/231634-beginners/topic/Golang.20plattform.20using.20webassembly/near/367660882\">said</a>:</p>\n<blockquote>\n<p>Another thing is, that the <code>zig-cache</code> folder has to be removed before building. In other case, the wasm file does not contain the zig-function.</p>\n</blockquote>\n<p>Ahh, this is a bug in zig 0.9.1 that was fixed in zig 0.10: <a href=\"https://github.com/ziglang/zig/issues/12864\">https://github.com/ziglang/zig/issues/12864</a></p>",
+        "id": 367987569,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1687278401
+    }
+]
