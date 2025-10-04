@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>How should I report a panic? The following code panicked after I added a couple of tests</p>\n<div class=\"codehilite\"><pre><span></span><code>module [match_all]\n\nimport Template exposing [parse_template]\nimport Match\n\nmatch_all :\n    Str,\n    Str\n    -&gt; Result\n        (Dict Str Str)\n        [\n            DoesNotMatch,\n            TemplateError [\n                MissingClosingBracket,\n                InvalidTokenLength Str,\n                InvalidTokenType Str,\n                TooManyTokenParts Str\n            ]\n        ]\nmatch_all = |template_str, input_str|\n    specs =\n        template_str\n        |&gt; parse_template\n        |&gt; Result.map_err(TemplateError)?\n\n    input_str\n    |&gt; Str.to_utf8\n    |&gt; Match.all_specs(specs)\n\nexpect\n    # that `match_all` returns `Ok` with an empty dict\n    # when a template is a literal fully matching the input string\n    template_str = &quot;text&quot;\n    input_str = &quot;text&quot;\n    fields = match_all(template_str, input_str)\n    fields == Ok(Dict.empty({}))\n\nexpect\n    # that `match_all` returns `Ok` with a proper field and value\n    # when a template with named token matches the input string\n    template_str = &quot;Three symbols: {result:s:6}.&quot;\n    input_str = &quot;Three symbols: 123Abc.&quot;\n    fields = match_all(template_str, input_str)\n    fields == Ok(Dict.from_list([(&quot;result&quot;, &quot;123Abc&quot;)]))\n</code></pre></div>\n<p>Output:</p>\n<div class=\"codehilite\"><pre><span></span><code>➜ just test\nroc test src/main.roc\nthread &#39;main&#39; panicked at crates/compiler/mono/src/borrow.rs:361:34:\ninternal error: entered unreachable code:\n        No borrow signature for LambdaName { name: `Match.65`, niche: Niche(Captures([])) } layout.\n\n        Tip 1: This can happen when you call a function with fewer arguments than it expects.\n        Like `Arg.list!` instead of `Arg.list! {}`.\n        Tip 2: `roc check yourfile.roc` can sometimes give you a helpful error.\n\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nerror: Recipe `test` failed on line 8 with exit code 101\n</code></pre></div>",
+        "id": 512579616,
+        "sender_full_name": "Ilya Shmygol",
+        "timestamp": 1744816657
+    },
+    {
+        "content": "<p>And it diffidently has something to do with <code>expect</code>. If I just drop this string top-level in a file everything is fine (apart from a warning regarding unused <code>v</code>):</p>\n<div class=\"codehilite\"><pre><span></span><code> v = match_all(&quot;text&quot;, &quot;text&quot;)\n</code></pre></div>\n<p>But in <code>expect</code> the same code panics:</p>\n<div class=\"codehilite\"><pre><span></span><code>expect\n    v = match_all(&quot;text&quot;, &quot;text&quot;)\n    Bool.true\n</code></pre></div>",
+        "id": 512580616,
+        "sender_full_name": "Ilya Shmygol",
+        "timestamp": 1744816930
+    },
+    {
+        "content": "<p>If you can make an issue with a single file repro, that would be the most useful.</p>",
+        "id": 512614936,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1744824194
+    },
+    {
+        "content": "<p>Also, occasionally adding types or running <code>roc check</code> can resolve these kinds of issues or point to the root cause</p>",
+        "id": 512615118,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1744824222
+    },
+    {
+        "content": "<p>I tried to put everything in one file and remove some code, which doesn't influence the panic, but now I face a Type Mismatch error. I would appreciate some help. Here is the code:</p>\n<div class=\"codehilite\"><pre><span></span><code>module [Spec, Matcher, all_specs, anything, literal]\n\nMatcher a : List U8 -&gt; Result (List U8) [DoesNotMatch]a\n\nSpec a : {\n    field_name : [Anonymous, Named Str],\n    length : U64,\n    matcher : Matcher a,\n}\n\nanything : Matcher a\nanything = |input|\n    Ok(input)\n\nliteral : List U8 -&gt; Matcher a\nliteral = |value|\n    |input|\n        if input == value then\n            Ok(input)\n        else\n            Err(DoesNotMatch)\n\nsplit_input_segment :\n    List U8,\n    { length : U64 }*\n    -&gt; Result { input_segment : List U8, rest_input : List U8 } [DoesNotMatch]\nsplit_input_segment = |input, { length }|\n    { before: input_segment, others: rest_input } = List.split_at(input, length)\n    if List.len(input_segment) &lt; length then\n        Err(DoesNotMatch)\n    else\n        Ok({ input_segment, rest_input })\n\n## See `all_specs` for the public API.\nall_specs_recursive : List U8, List (Spec _), Dict Str Str -&gt; Result (Dict Str Str) [DoesNotMatch]\nall_specs_recursive = |input, specs, acc|\n    when specs is\n        [] -&gt;\n            if input == [] then\n                Ok(acc)\n            else\n                Err(DoesNotMatch)\n\n        [spec, .. as rest_specs] -&gt;\n            { input_segment, rest_input } = split_input_segment(input, spec)?\n\n            # Even thought `field_value` is not always used,\n            # it&#39;s important to call `spec.matcher?` here\n            field_value =\n                input_segment\n                |&gt; spec.matcher?\n                |&gt; Str.from_utf8_lossy\n\n            all_specs_recursive(\n                rest_input,\n                rest_specs,\n                when spec.field_name is\n                    Named(name) -&gt; Dict.insert(acc, name, field_value)\n                    Anonymous -&gt; acc,\n            )\n\nall_specs : List U8, List (Spec _) -&gt; Result (Dict Str Str) [DoesNotMatch]\nall_specs = |input, specs|\n    all_specs_recursive(input, specs, Dict.empty({}))\n\nexpect\n    actual = all_specs(\n        [&#39;B&#39;, &#39;u&#39;, &#39;z&#39;, &#39;z&#39;, &#39;F&#39;, &#39;u&#39;, &#39;z&#39;, &#39;z&#39;],\n        [\n            {\n                field_name: Named(&quot;field1&quot;),\n                length: 4,\n                matcher: literal([&#39;B&#39;, &#39;u&#39;, &#39;z&#39;, &#39;z&#39;]),\n            },\n        ],\n    )\n    actual == Ok(Dict.from_list([(&quot;field1&quot;, &quot;Buzz&quot;), (&quot;field2&quot;, &quot;Fuzz&quot;)]))\n\nmatch_all :\n    Str,\n    Str\n    -&gt; Result\n        (Dict Str Str)\n        [\n            DoesNotMatch,\n            TemplateError [\n                    MissingClosingBracket,\n                    InvalidTokenLength Str,\n                    InvalidTokenType Str,\n                    TooManyTokenParts Str,\n                ],\n        ]\nmatch_all = |template_str, input_str|\n    # specs =\n    #     template_str\n    #     |&gt; parse_template\n    #     |&gt; Result.map_err(TemplateError)?\n    specs = [\n        {\n            field_name: Named(&quot;field1&quot;),\n            length: 10,\n            matcher: anything,\n        },\n    ]\n\n    input_str\n    |&gt; Str.to_utf8\n    |&gt; all_specs(specs)\n\nexpect\n    # that `match_all` returns `Ok` with an empty dict\n    # when a template is a literal fully matching the input string\n    template_str = &quot;text&quot;\n    input_str = &quot;text&quot;\n    fields = match_all(template_str, input_str)\n    fields == Ok(Dict.empty({}))\n</code></pre></div>\n<p>The error is</p>\n<div class=\"codehilite\"><pre><span></span><code>── TYPE MISMATCH in ./Match.roc ────────────────────────────────────────────────\n\nSomething is off with the body of the match_all definition:\n\n 80│       Str,\n 81│       Str\n 82│       -&gt; Result\n 83│           (Dict Str Str)\n 84│           [\n 85│               DoesNotMatch,\n 86│               TemplateError [\n 87│                       MissingClosingBracket,\n 88│                       InvalidTokenLength Str,\n 89│                       InvalidTokenType Str,\n 90│                       TooManyTokenParts Str,\n 91│                   ],\n 92│           ]\n 93│   match_all = |template_str, input_str|\n 94│       # specs =\n 95│       #     template_str\n 96│       #     |&gt; parse_template\n 97│       #     |&gt; Result.map_err(TemplateError)?\n 98│       specs = [{\n 99│           field_name: Named(&quot;field1&quot;),\n100│           length: 10,\n101│           matcher: anything,\n102│       }]\n103│\n104│&gt;      input_str\n105│&gt;      |&gt; Str.to_utf8\n106│&gt;      |&gt; all_specs(specs)\n\nThis all_specs call produces:\n\n    Result (Dict Str Str) […]a\n\nBut the type annotation on match_all says it should be:\n\n    Result (Dict Str Str) [TemplateError [\n        InvalidTokenLength Str,\n        InvalidTokenType Str,\n        MissingClosingBracket,\n        TooManyTokenParts Str,\n    ], …]\n</code></pre></div>\n<p>Interesting enough if the <code>match_all</code> function definition is in its own module, no type mismatch is raised.</p>",
+        "id": 513107370,
+        "sender_full_name": "Ilya Shmygol",
+        "timestamp": 1745016626
+    },
+    {
+        "content": "<p>If it is a different file, maybe it panics before getting to the type mismatch? Anyway, will take a look later today or tomorrow morning when I have more time.</p>",
+        "id": 513117622,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1745025458
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/231634-beginners/topic/My.20very.20first.20compiler.20panic/near/513117622\">said</a>:</p>\n<blockquote>\n<p>If it is a different file, maybe it panics before getting to the type mismatch?</p>\n</blockquote>\n<p>I don’t think so. The compiler panics only if I call <code>match_all</code> in an expect block. As a top-level call it works. Plus My editor (and <code>roc check</code>) doesn’t complain when <code>match_all</code> in a different file, but it does otherwise. I think it’s two different problems.</p>",
+        "id": 513144568,
+        "sender_full_name": "Ilya Shmygol",
+        "timestamp": 1745047627
+    },
+    {
+        "content": "<p>I think it's the fact that your type annotation says it returns TemplateError OR DoNotMatch, but the code that returns TemplateError is commented out.  So it will only return DoNotMatch</p>",
+        "id": 513156895,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1745058260
+    },
+    {
+        "content": "<p>Maybe <span class=\"user-mention\" data-user-id=\"781658\">@Anthony Bullard</span> is right. The type mismatch doesn't happen if I remove <code>TemplateError</code>. I'm still confused, by the fact it happens only if <code>match_all</code> in the same file. Anyway it has not much to do with the panic itself. I created a ticket for the compiler panic with some details in link to this thread: <a href=\"https://github.com/roc-lang/roc/issues/7754\">https://github.com/roc-lang/roc/issues/7754</a>.</p>",
+        "id": 513216408,
+        "sender_full_name": "Ilya Shmygol",
+        "timestamp": 1745107014
+    },
+    {
+        "content": "<p>At the end of the day the Rust version of the compiler just had too many panics</p>",
+        "id": 513220930,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1745110697
+    },
+    {
+        "content": "<p>And not enough of them were At the Disco <span aria-label=\"drum\" class=\"emoji emoji-1f941\" role=\"img\" title=\"drum\">:drum:</span><br>\n(I'll see myself out <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span>)</p>",
+        "id": 513540075,
+        "sender_full_name": "Fábio Beirão",
+        "timestamp": 1745308065
+    }
+]
