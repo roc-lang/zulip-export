@@ -1,0 +1,103 @@
+<html>
+<head><meta charset="utf-8"><title>Glue platform [] bugs · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html">Glue platform [] bugs</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="472228385"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/472228385" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sven van Caem <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#472228385">(Sep 23 2024 at 13:13)</a>:</h4>
+<p>Hi! I've been poking around the glue platform, seeing what shapes it outputs for given types required in platform.roc. I've noticed some cases where it incorrectly handles <code>[]</code> type variables. I thought I remembered some discussion on this already, but I haven't been able to find it again in Zulip, nor in GitHub issues, so I thought I'd post my findings here.</p>
+<p>The type <code>[Always U32, Never []]</code> gets turned into the following shape by the glue platform: <code>(TagUnion (Enumeration {name: "U1", size: 4, tags: ["Always", "Never"]}))</code>. It seems something about the prescence of the <code>[]</code> type is causing it to discard all the tag unions payloads, when it should discard just the <code>Never</code> tag. The same happens if a tag has a unbound type variable payload, which should have outright crashed.</p>
+<p>Just a <code>[]</code> on its own turns into the shape <code>(TagUnion (NonRecursive {discriminantOffset: 0, discriminantSize: 1, name: "U1", tags: []}))</code>, even though <code>EmptyTagUnion</code> is available.</p>
+<p>Lastly, since the Result type seems to be special-cased, I tried <code>Result U32 []</code>, which surprisingly resulted in the shape <code>(Num U32)</code>. Layout-wise, this is correct, though I would have expected <code>TagUnion (SingleTagStruct _)</code>instead.</p>
+<p>At least for the first two, all signs point to tag unions being reported as <code>Enumeration</code> tag unions by the glue platform where they shouldn't. Poking around in the platform code, it seems to only turn <code>LayoutRepr::Builtin(Builtin::Int(_))</code> and <code>LayoutRepr::Builtin(Builtin::Bool)</code> into <code>Enumeration</code>s. If the problem were in the platform, I would expect to see it erroneously turn a <code>LayoutRepr::Union(_)</code> into an <code>Enumeration</code>. This means there's either something else going wrong in the platform I haven't spotted yet, or the problem was already present in mono. If it's the latter, I'd be way out of my depth at the moment.</p>
+<p>Any thoughts on what to do with this from here?</p>
+
+
+
+<a name="472286047"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/472286047" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#472286047">(Sep 23 2024 at 17:10)</a>:</h4>
+<p>I think <span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span> looked into a similar issue before</p>
+
+
+
+<a name="472337286"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/472337286" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#472337286">(Sep 23 2024 at 21:47)</a>:</h4>
+<p>Really cool that you're finding these issues.</p>
+
+
+
+<a name="472391350"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/472391350" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#472391350">(Sep 24 2024 at 03:57)</a>:</h4>
+<p>I have guesses, but mostly hope it is just a rust side roc glue issue and not a true compiler issue.</p>
+
+
+
+<a name="472391366"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/472391366" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#472391366">(Sep 24 2024 at 03:57)</a>:</h4>
+<p>I would start by digging into the rust side of the glue crate</p>
+
+
+
+<a name="472475717"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/472475717" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sven van Caem <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#472475717">(Sep 24 2024 at 11:58)</a>:</h4>
+<p>Fair, I'll see if I can verify which side the problem is coming from</p>
+
+
+
+<a name="473645916"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/473645916" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sven van Caem <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#473645916">(Sep 30 2024 at 08:35)</a>:</h4>
+<p>I believe I've found the problem!</p>
+<p>It has to do with enumerations and single tag unions with an integer payload having the same mono representation. When deciding on what shape to report a tag union as, the glue platform first checks the amount of tags it has. If it's exactly one, it figures it's dealing with a single tag struct, and reports it accordingly. If there's more than one, it takes the mono representation of the tag union and works backwards from there. Specifically, if it then sees mono representing what it knows is a tag union with more than one variant as an integer, it figures it must be dealing with an Enumeration.</p>
+<p>This hits an edge case with the <code>[Always U32, Never []]</code> type. The glue platform sees it has two tags in it, so it already decides this can't be a single tag union. When mono correctly eliminates the <code>Never</code> tag, it sees the tag union only has one tag left with an integer payload, and correctly represents it as just the integer payload. The platform then sees a multi-tag union represented as an integer, and decides it must be the Enumeration <code>[Always, Never]</code>.</p>
+<p>Happily, this means this is isn't a mono bug after all!</p>
+
+
+
+<a name="473685723"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/473685723" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sven van Caem <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#473685723">(Sep 30 2024 at 10:52)</a>:</h4>
+<p>Looking into it some more, I believe it'd be possible to fix this inside the glue platform. Every time it tries to report the shape of a tag union, it could recursively check each payload for if it is unconstructable if:<br>
+1) it is an empty tag union<br>
+2) it is a tag union that only contains tags with unconstructable payloads,<br>
+3) it is a record with an empty tag union value.</p>
+<p>I can't say this feels like the most elegant possible solution, as mono must be already doing some of this checking itself but discards it by the time it reaches the glue platform, but I think I've got a shot at making it work. Should I give it a go or make an issue for someone else to find a more elegant solution?</p>
+
+
+
+<a name="473701228"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/473701228" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#473701228">(Sep 30 2024 at 11:49)</a>:</h4>
+<p>I'd say go for it, but if it starts feeling like too big of a tangent, put it back for some other time <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="474304606"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/474304606" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sven van Caem <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#474304606">(Oct 02 2024 at 13:58)</a>:</h4>
+<p>There seem to be two methods (on the <code>UnionLabels</code> type) for retrieving the types of tag union payloads: <code>variables()</code> and <code>iter_from_subs()</code>. I wonder what the difference is between these two, and what the <code>Subs</code> type is?</p>
+
+
+
+<a name="474304718"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/474304718" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#474304718">(Oct 02 2024 at 13:58)</a>:</h4>
+<p><span class="user-mention" data-user-id="281543">@Folkert de Vries</span> might know?</p>
+
+
+
+<a name="474516317"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/474516317" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#474516317">(Oct 03 2024 at 08:05)</a>:</h4>
+<p>well, <code>Subs</code> is short for (type) substitutions. It is whatis known as a union-find data structure, that we use to resolve the sort of "well a is equal to, but b is equal to c, so a should be equal to c" kind of question</p>
+
+
+
+<a name="474519047"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Glue%20platform%20%5B%5D%20bugs/near/474519047" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sven van Caem <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Glue.20platform.20.5B.5D.20bugs.html#474519047">(Oct 03 2024 at 08:18)</a>:</h4>
+<p>Gotcha. I think I've found the answer to my other question just now. It seems <code>.variables()</code> just retuns slices of indices into the <code>Subs</code> data structure which you can then retrieve the <code>Variable</code>s from yourself, while <code>.iter_from_subs()</code> indexes into <code>Subs</code> for you. Kind of obvious looking at it now, guess I just needed fresh eyes!</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

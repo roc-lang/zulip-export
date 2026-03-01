@@ -1,0 +1,260 @@
+<html>
+<head><meta charset="utf-8"><title>Nea benchmarks in go (go help wanted) · contributing · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/index.html">contributing</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html">Nea benchmarks in go (go help wanted)</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="415995161"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/415995161" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#415995161">(Jan 17 2024 at 10:22)</a>:</h4>
+<p>this may seem off-topic but it's relevant: I'm trying to write benchmarks in go to compare performance to nea (our roc webserver). I don't know any go, so I have no idea what I'm doing, and could use some help here</p>
+<p>the server below should just serve the string "hello world!". But curl does not actually find that </p>
+<div class="codehilite"><pre><span></span><code>&gt; curl -i 127.0.0.1:8080
+HTTP/1.1 200 OK
+Date: Wed, 17 Jan 2024 10:20:01 GMT
+Content-Length: 0
+</code></pre></div>
+<p>Ultimately I want to convert these benchmarks to use go. It is important that there is just one thread doing the listening on a socket, and then work gets distributed to N worker threads that process the request and send a response.</p>
+<p><a href="https://github.com/tweedegolf/nea/tree/main/benchmarks/roc-nea">https://github.com/tweedegolf/nea/tree/main/benchmarks/roc-nea</a></p>
+<p>Help would be most welcome!</p>
+<div class="codehilite" data-code-language="Go"><pre><span></span><code><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="s">"fmt"</span>
+<span class="w">    </span><span class="s">"net/http"</span>
+<span class="p">)</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="s">"embed"</span>
+
+<span class="kd">var</span><span class="w"> </span><span class="nx">workerCount</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mi">2</span>
+<span class="kd">var</span><span class="w"> </span><span class="nx">workerPool</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Create a buffered channel to limit the number of concurrent worker threads</span>
+<span class="w">    </span><span class="nx">workerPool</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">make</span><span class="p">(</span><span class="kd">chan</span><span class="w"> </span><span class="kd">struct</span><span class="p">{},</span><span class="w"> </span><span class="nx">workerCount</span><span class="p">)</span>
+
+<span class="w">    </span><span class="c1">// Handle requests using a single IO thread</span>
+<span class="w">    </span><span class="nx">http</span><span class="p">.</span><span class="nx">HandleFunc</span><span class="p">(</span><span class="s">"/"</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">w</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Acquire a worker thread from the pool</span>
+<span class="w">        </span><span class="nx">workerPool</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}{}</span>
+
+<span class="w">        </span><span class="c1">// Handle the request in a goroutine</span>
+<span class="w">        </span><span class="k">go</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// Ensure the worker is released back to the pool when done</span>
+<span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="o">&lt;-</span><span class="nx">workerPool</span>
+<span class="w">            </span><span class="p">}()</span>
+
+<span class="w">            </span><span class="c1">// Handle the actual request (in this case, just returning "Hello, World!")</span>
+<span class="w">            </span><span class="nx">handleRequest</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">)</span>
+<span class="w">        </span><span class="p">}()</span>
+<span class="w">    </span><span class="p">})</span>
+
+<span class="w">    </span><span class="c1">// Start the web server on port 8080</span>
+<span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="s">"Server listening on :8080"</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">":8080"</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
+<span class="p">}</span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">handleRequest</span><span class="p">(</span><span class="nx">w</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Simulate some work being done by the worker</span>
+<span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="s">"Processing request..."</span><span class="p">)</span>
+
+<span class="w">    </span><span class="c1">// Set the Content-Type header to plain text</span>
+<span class="w">    </span><span class="nx">w</span><span class="p">.</span><span class="nx">Header</span><span class="p">().</span><span class="nx">Set</span><span class="p">(</span><span class="s">"Content-Type"</span><span class="p">,</span><span class="w"> </span><span class="s">"text/plain"</span><span class="p">)</span>
+
+<span class="w">    </span><span class="c1">// Get the response string</span>
+<span class="w">    </span><span class="nx">response</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">"Hello, World!"</span>
+
+<span class="w">    </span><span class="c1">// Set the Content-Length header</span>
+<span class="w">    </span><span class="nx">w</span><span class="p">.</span><span class="nx">Header</span><span class="p">().</span><span class="nx">Set</span><span class="p">(</span><span class="s">"Content-Length"</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprint</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="nx">response</span><span class="p">)))</span>
+
+<span class="w">    </span><span class="c1">// Write the response body</span>
+<span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Fprint</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="416057714"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416057714" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416057714">(Jan 17 2024 at 15:41)</a>:</h4>
+<p>Not a solution, will need to play with the code later cause that looks like it should work. Anyway, general questions:<br>
+Do you want to limit go workers in that way? Goroutines are meant to be exceptionally cheap and should essentially be treated like async contexts. So they generally shouldn't be limited like regular threads.</p>
+
+
+
+<a name="416057780"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416057780" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416057780">(Jan 17 2024 at 15:41)</a>:</h4>
+<p>Go will automatically limit the number of actual threads</p>
+
+
+
+<a name="416076062"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416076062" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416076062">(Jan 17 2024 at 16:49)</a>:</h4>
+<p>There is a bug in the code. The go call in the callback function does not sync. So the callback returns before the inner go function runs. This means that the function handleRequest gets called after the request handler is finished. In this case, the variables r and w are not valid anymore. You cannot write "hello world" to the client, after the connection is closed.</p>
+<p>Go starts a separate gorotine for any request anyway. So there is no need to start another one. To fix your code, you can just remove the line "go func()"</p>
+<p>I also would not use a Worker Pool.</p>
+
+
+
+<a name="416080391"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416080391" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416080391">(Jan 17 2024 at 17:10)</a>:</h4>
+<p>Cool, I guessed something along those lines but haven't used go in a long while so didn't remember for sure.</p>
+
+
+
+<a name="416080571"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416080571" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416080571">(Jan 17 2024 at 17:11)</a>:</h4>
+<p>I assume for this work, probably just want to limit the number of system threads go uses with GOMAXPROCS</p>
+
+
+
+<a name="416080845"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416080845" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416080845">(Jan 17 2024 at 17:13)</a>:</h4>
+<p>I need a fair comparison. So in rust/tokio we have one "thread" that listens for requests on the socket, and N others that process requests. I just need to replicate that</p>
+
+
+
+<a name="416080922"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416080922" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416080922">(Jan 17 2024 at 17:13)</a>:</h4>
+<p>you can have many concurrent OS threads all listening to the same socket, and that would be faster but also not a fair comparison</p>
+
+
+
+<a name="416080944"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416080944" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416080944">(Jan 17 2024 at 17:13)</a>:</h4>
+<p>That said it just limits live threads running go code. It doesn't limit the number of threads waiting on system calls</p>
+
+
+
+<a name="416081519"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416081519" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416081519">(Jan 17 2024 at 17:16)</a>:</h4>
+<p>Is that a system thread limit or an async process limit?</p>
+
+
+
+<a name="416081842"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416081842" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416081842">(Jan 17 2024 at 17:18)</a>:</h4>
+<p>Looking at the go source. The server is single threaded dispatch that spawns a goroutine after accepting a request.</p>
+
+
+
+<a name="416082267"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416082267" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416082267">(Jan 17 2024 at 17:20)</a>:</h4>
+<p>If you want to restrict the number of goroutines, I guess you can just use the worker pool without a second go func call.</p>
+
+
+
+<a name="416082368"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/416082368" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#416082368">(Jan 17 2024 at 17:21)</a>:</h4>
+<p>Though go will end up generating a metric crap ton of waiting go routines and that will probably have really bad characteristics. Cause it will still accept every connection and spawn a go thread for it.</p>
+
+
+
+<a name="424684048"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/424684048" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#424684048">(Mar 04 2024 at 15:37)</a>:</h4>
+<p>finally coming back to this, thanks for the help earlier! </p>
+<p>a quick thing I want to check, does this actually allocate the memory?</p>
+<div class="codehilite"><pre><span></span><code>    // Allocate an array of N bytes using make
+    byteArray := make([]byte, capacity)
+</code></pre></div>
+
+<p>Even if so I'd guess it doesn't initialize it? I want something like <code>let v = vec![0xAA; capacity];</code> but in go</p>
+
+
+
+<a name="424685416"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/424685416" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#424685416">(Mar 04 2024 at 15:44)</a>:</h4>
+<p>fingers crossed this is turned into a memset?</p>
+<div class="codehilite" data-code-language="Go"><pre><span></span><code><span class="w">        </span><span class="c1">// Allocate an array of N bytes using make</span>
+<span class="w">        </span><span class="nx">byteArray</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">make</span><span class="p">([]</span><span class="kt">byte</span><span class="p">,</span><span class="w"> </span><span class="nx">capacity</span><span class="p">)</span>
+
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">byteArray</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nx">byteArray</span><span class="p">[</span><span class="nx">i</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mh">0xAA</span>
+<span class="w">        </span><span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="424701153"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/424701153" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Hristo <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#424701153">(Mar 04 2024 at 16:50)</a>:</h4>
+<p>As far as I understand, <code>byteArray := make([]byte, capacity)</code> on its own does initialise the values of the underlying array (in addition to allocating memory) as well, as per <a href="https://go.dev/play/p/m56SY2GjVh5">this</a> Go playground session.</p>
+<p>Further background reading:</p>
+<ul>
+<li><a href="https://go.dev/doc/effective_go#allocation_make">https://go.dev/doc/effective_go#allocation_make</a></li>
+<li><a href="https://go.dev/blog/slices-intro">https://go.dev/blog/slices-intro</a></li>
+</ul>
+<p><strong>Update:</strong> I see now what your intention was in your code. Yes, as far as I'm aware, the only way to initialise to non-default values is the way you specified <a href="#narrow/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29/near/424685416">here</a> with the <code>for</code> loop.</p>
+
+
+
+<a name="424703170"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/424703170" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#424703170">(Mar 04 2024 at 17:00)</a>:</h4>
+<p>cool! there is special hardware support for initializing to zero so that's why I want a different value. But it turns out to not matter too much anyway</p>
+
+
+
+<a name="424703220"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/424703220" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#424703220">(Mar 04 2024 at 17:01)</a>:</h4>
+<p>in that zero vs <code>0xAA</code> does not make a big performance difference</p>
+
+
+
+<a name="424705437"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Nea%20benchmarks%20in%20go%20%28go%20help%20wanted%29/near/424705437" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Nea.20benchmarks.20in.20go.20.28go.20help.20wanted.29.html#424705437">(Mar 04 2024 at 17:11)</a>:</h4>
+<p>probably the final question: does this look reasonable</p>
+<div class="codehilite" data-code-language="Go"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">handleRequest</span><span class="p">(</span><span class="nx">w</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">body</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">io</span><span class="p">.</span><span class="nx">ReadAll</span><span class="p">(</span><span class="nx">r</span><span class="p">.</span><span class="nx">Body</span><span class="p">)</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">http</span><span class="p">.</span><span class="nx">Error</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="s">"Error reading request body"</span><span class="p">,</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">StatusInternalServerError</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nx">pathString</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">generateSVGPath</span><span class="p">(</span><span class="nb">string</span><span class="p">(</span><span class="nx">body</span><span class="p">))</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">http</span><span class="p">.</span><span class="nx">Error</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="s">"Error processing request body"</span><span class="p">,</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">StatusBadRequest</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nx">response</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">`&lt;svg width="100" height="100" xmlns="http://www.w3.org/2000/svg"&gt;</span>
+<span class="s">    &lt;path d="%s" stroke="black" fill="transparent"/&gt;</span>
+<span class="s">&lt;/svg&gt;</span>
+<span class="s">`</span><span class="p">,</span><span class="w"> </span><span class="nx">pathString</span><span class="p">)</span>
+
+<span class="w">    </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">w</span><span class="p">.</span><span class="nx">Write</span><span class="p">([]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">response</span><span class="p">))</span>
+<span class="p">}</span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">generateSVGPath</span><span class="p">(</span><span class="nx">requestBody</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">lines</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Split</span><span class="p">(</span><span class="nx">requestBody</span><span class="p">,</span><span class="w"> </span><span class="s">"\n"</span><span class="p">)</span>
+
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">pathString</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Builder</span>
+<span class="w">    </span><span class="nx">pathString</span><span class="p">.</span><span class="nx">WriteString</span><span class="p">(</span><span class="s">"M 0 0 L"</span><span class="p">)</span>
+
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">line</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">lines</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">parts</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">SplitN</span><span class="p">(</span><span class="nx">line</span><span class="p">,</span><span class="w"> </span><span class="s">", "</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">parts</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">continue</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="nx">x</span><span class="p">,</span><span class="w"> </span><span class="nx">errX</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">strconv</span><span class="p">.</span><span class="nx">Atoi</span><span class="p">(</span><span class="nx">parts</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<span class="w">        </span><span class="nx">y</span><span class="p">,</span><span class="w"> </span><span class="nx">errY</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">strconv</span><span class="p">.</span><span class="nx">Atoi</span><span class="p">(</span><span class="nx">parts</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">errX</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">errY</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="s">""</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">"invalid input format"</span><span class="p">)</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Fprintf</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">pathString</span><span class="p">,</span><span class="w"> </span><span class="s">" %d %d"</span><span class="p">,</span><span class="w"> </span><span class="nx">x</span><span class="p">,</span><span class="w"> </span><span class="nx">y</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">pathString</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="kc">nil</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>in particular from a performance perspective?</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

@@ -1,0 +1,209 @@
+<html>
+<head><meta charset="utf-8"><title>roc build · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html">roc build</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="547144901"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547144901" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547144901">(Oct 26 2025 at 17:00)</a>:</h4>
+<p>Question on <code>roc build</code> with the interpreter. It basically should be the same as <code>roc run</code> except that it will</p>
+<ol>
+<li>build the roc module env and serialize it via llvm to a global constant in an object file</li>
+<li>use a different version of the interpreter shim that loads from this global instead of from shared memory</li>
+<li>link all of those together into a standalone binary</li>
+</ol>
+<p>Does this sound correct?</p>
+
+
+
+<a name="547145774"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547145774" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547145774">(Oct 26 2025 at 17:14)</a>:</h4>
+<p>yeah that sounds right to me!</p>
+
+
+
+<a name="547151824"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547151824" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547151824">(Oct 26 2025 at 18:48)</a>:</h4>
+<p>For our ipc, I see <code>parent_base_address</code>. Trying to makes sure I understand this correctly. Instead of serializing in a pointer free format, we serialize with pointers, but then shift them between the two different address spaces. Is that what is happening here?</p>
+<p>Trying to understand the ramifications of serializing to a slice of bytes instead of to a shared mem allocator.</p>
+
+
+
+<a name="547151830"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547151830" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547151830">(Oct 26 2025 at 18:48)</a>:</h4>
+<p>Something just feels a bit off to me</p>
+
+
+
+<a name="547152079"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547152079" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547152079">(Oct 26 2025 at 18:52)</a>:</h4>
+<p>4 messages were moved here from <a class="stream-topic" data-stream-id="316715" href="/#narrow/channel/316715-contributing/topic/Worklog.20.28Draft.20PRs.20and.20coordination.29/with/547144712">#contributing &gt; Worklog (Draft PRs and coordination)</a> by <span class="user-mention silent" data-user-id="281383">Richard Feldman</span>.</p>
+
+
+
+<a name="547152240"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547152240" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547152240">(Oct 26 2025 at 18:55)</a>:</h4>
+<p>so the basic procedure is:</p>
+<ul>
+<li>we have a fixed number of pointers in the <code>ModuleEnv</code> data structure (some of which live in nested data structures like <code>SafeList</code> and <code>SafeMultiList</code>) - e.g. maybe it's like 20, I'm not sure what the exact number is, but it doesn't vary by what's in the module, it's always the same exact number no matter what</li>
+<li>to serialize, we go through each of those pointers and subtract the module env's base address. Once that's done, they are no longer memory <strong>addresses</strong>, but rather memory <strong>offsets</strong></li>
+<li>to deserialize on the other side, we start with our freshly-created (but not yet initialized) ModuleEnv's base address, and go through each of those memory <strong>offsets</strong> and add that base address - thereby converting them back into valid pointers (except in the deserialized address space instead)</li>
+</ul>
+
+
+
+<a name="547152279"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547152279" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547152279">(Oct 26 2025 at 18:55)</a>:</h4>
+<p>does that clarify? Happy to answer any follow-up questions about it!</p>
+
+
+
+<a name="547152831"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547152831" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547152831">(Oct 26 2025 at 19:04)</a>:</h4>
+<p>That overall makes sense. I still don't quite understand why we serialize: <code>parent_base_addr: u64,</code> over the IPC. What is the parent in this case? the entire module+header?</p>
+
+
+
+<a name="547153067"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547153067" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547153067">(Oct 26 2025 at 19:08)</a>:</h4>
+<p>I forget offhand, but I think it's the base address of the <code>ModuleEnv</code></p>
+
+
+
+<a name="547155287"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547155287" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547155287">(Oct 26 2025 at 19:45)</a>:</h4>
+<p>Oh cool, got it working!</p>
+
+
+
+<a name="547155297"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547155297" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547155297">(Oct 26 2025 at 19:45)</a>:</h4>
+<p>That was surprisingly easy</p>
+
+
+
+<a name="547155313"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547155313" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547155313">(Oct 26 2025 at 19:45)</a>:</h4>
+<p>That said, right now I have a hacked <code>rocRun</code> that builds an exe</p>
+
+
+
+<a name="547155324"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547155324" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547155324">(Oct 26 2025 at 19:45)</a>:</h4>
+<p>Need to make it a separated updated <code>rocBuild</code> path.</p>
+
+
+
+<a name="547155381"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547155381" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547155381">(Oct 26 2025 at 19:46)</a>:</h4>
+<div class="spoiler-block"><div class="spoiler-header">
+<p>standalone roc binary</p>
+</div><div class="spoiler-content" aria-hidden="true">
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>❯<span class="w"> </span>/Users/bren077s/Library/Caches/roc/f0bdb35f6bc3514a3a4574c23848dd0b/temp/roc-tmp-1FrVoAORWsZgVE1nyj6dkXtYhYHVDVuB/roc_run_2271902749
+Generated<span class="w"> </span>numbers:<span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">60</span>,<span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nv">99</span>
+
+<span class="o">===</span><span class="w"> </span>Testing<span class="w"> </span>addInts<span class="w"> </span><span class="o">(</span><span class="nv">entry_idx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">0</span><span class="o">)</span><span class="w"> </span><span class="o">===</span>
+roc<span class="w"> </span>build<span class="w"> </span>with<span class="w"> </span>serialized
+module_env<span class="w"> </span>offset:<span class="w"> </span><span class="m">536</span>
+parent_base_addr:<span class="w"> </span><span class="m">4575952896</span>
+child_base_addr:<span class="w"> </span><span class="m">4334715136</span>
+offset:<span class="w"> </span>-241237760
+Expected<span class="w"> </span>add<span class="w"> </span>result:<span class="w"> </span><span class="m">159</span>
+Roc<span class="w"> </span>computed<span class="w"> </span>add:<span class="w"> </span><span class="m">159</span>
+SUCCESS:<span class="w"> </span>addInts<span class="w"> </span>results<span class="w"> </span>match!
+
+<span class="o">===</span><span class="w"> </span>Testing<span class="w"> </span>multiplyInts<span class="w"> </span><span class="o">(</span><span class="nv">entry_idx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="o">)</span><span class="w"> </span><span class="o">===</span>
+Expected<span class="w"> </span>multiply<span class="w"> </span>result:<span class="w"> </span><span class="m">5940</span>
+Roc<span class="w"> </span>computed<span class="w"> </span>multiply:<span class="w"> </span><span class="m">5940</span>
+SUCCESS:<span class="w"> </span>multiplyInts<span class="w"> </span>results<span class="w"> </span>match!
+
+<span class="o">===</span><span class="w"> </span>FINAL<span class="w"> </span><span class="nv">RESULT</span><span class="w"> </span><span class="o">===</span>
+ALL<span class="w"> </span>TESTS<span class="w"> </span>PASSED:<span class="w"> </span>Both<span class="w"> </span>entrypoints<span class="w"> </span>work<span class="w"> </span>correctly!
+</code></pre></div>
+</div></div>
+
+
+
+<a name="547161922"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547161922" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547161922">(Oct 26 2025 at 21:43)</a>:</h4>
+<p>Niiice <span aria-label="grinning face with smiling eyes" class="emoji emoji-1f601" role="img" title="grinning face with smiling eyes">:grinning_face_with_smiling_eyes:</span></p>
+
+
+
+<a name="547169340"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547169340" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547169340">(Oct 27 2025 at 00:08)</a>:</h4>
+<p>For roc build, instead of ever touching shared memory, I should be able to:</p>
+<ol>
+<li>create the module env in standard gpa/arena.</li>
+<li>create a new arena (or block of bytes) for what will be serialized.</li>
+<li>write the header at the start of the area</li>
+<li>serialize the module env into the bytes</li>
+</ol>
+<p>Right?</p>
+<hr>
+<p>So it will be a little bit of rearchitecting to do that, but nothing too bad. Probably the biggest hassle is that I want to factor it well instead of duplicating the code as a slight variant.</p>
+
+
+
+<a name="547169350"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547169350" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547169350">(Oct 27 2025 at 00:08)</a>:</h4>
+<p>Nothing hard, just cleanup/organization.</p>
+
+
+
+<a name="547170039"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547170039" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547170039">(Oct 27 2025 at 00:21)</a>:</h4>
+<p>sounds right, yeah!</p>
+
+
+
+<a name="547171573"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547171573" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547171573">(Oct 27 2025 at 00:49)</a>:</h4>
+<p>Also, I am a little confused that our current module even shared memory thing. It doesn't actually call moduleenv.serialize. I guess it kinda just adhoc deals with everything instead to avoid an extra copy to serialize.</p>
+
+
+
+<a name="547174497"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547174497" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547174497">(Oct 27 2025 at 01:35)</a>:</h4>
+<p>Also, hmm. I guess an arena is not guaranteed to be contiguous given it is a linked list of blocks. So either I need to still used the shm allocator.</p>
+<p>I guess using the shm allocator is actually the minimal amount of copying (though not sure if it would include some extra unneeded data being serialized).</p>
+<p>Cause shm allocator is:</p>
+<ol>
+<li>writing to the allocator</li>
+<li>write to disk via llvm.</li>
+</ol>
+<p>Vs gpa/arena would be:</p>
+<ol>
+<li>write to allocator</li>
+<li>serialize to flat array of bytes</li>
+<li>write to disk via llvm.</li>
+</ol>
+
+
+
+<a name="547174552"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/547174552" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#547174552">(Oct 27 2025 at 01:36)</a>:</h4>
+<p>So assuming the shm allocator isn't accidentally including extra bytes or otherwise significantly costly to create. It likely is the nicest way to handle all of this.</p>
+
+
+
+<a name="553468932"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/553468932" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#553468932">(Nov 03 2025 at 19:53)</a>:</h4>
+<p>Just an update: I still just have the prototype working on a branch. It is a hacked roc run that builds and runs. Hoping to get back to his later this week or early next.</p>
+<p>Since I am planning to anchor to shared mem, I think it will make the refactoring to land pretty small. Mostly need to enable running the roc app compilation step at two different potential locations. For build it has to run before all the linking. For run. It should run after (or eventually in parallel)</p>
+
+
+
+<a name="553506907"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/roc%20build/near/553506907" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/roc.20build.html#553506907">(Nov 04 2025 at 00:58)</a>:</h4>
+<p>So hyped for this. Will be really nice to unlock wasm based platforms.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

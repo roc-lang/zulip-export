@@ -1,0 +1,112 @@
+<html>
+<head><meta charset="utf-8"><title>Task/error handling &amp; platform use · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Task.2Ferror.20handling.20.26.20platform.20use.html">Task/error handling &amp; platform use</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="314385634"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Task/error%20handling%20%26%20platform%20use/near/314385634" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kevin Gillette <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Task.2Ferror.20handling.20.26.20platform.20use.html#314385634">(Dec 07 2022 at 06:33)</a>:</h4>
+<p>Hi! Working through the Advent of Code is my first experience with Roc tasks (everything else I've done has been repl stuff). I do have experience working with commands/tasks in Elm, though that does not have tag unions, and so that knowledge doesn't seem to transfer much.</p>
+<p>Much of what I'm running into appears to be the same as in <a href="#narrow/stream/231634-beginners/topic/Compiler.20panic.20encoding.20list.20of.20lists.3F/near/313698998">this thread</a>, though I'm running into some conceptual difficulty on a number of points, particularly regarding basic-cli:</p>
+<h3>Arg.list returns a Task</h3>
+<p>I do not know if different OS platforms require syscalls to retrieve program arguments, or if those syscalls could be expected to fail. On Linux, at least, afaik, program arguments (and environment variables) are loaded into the main thread's stack prior to handing off control to the program, and thus argument reading (nor env var reading) are not expected to fail.</p>
+<p>Needing to deal with a Task to read what is essentially an in-memory array of strings is an annoyance. Is there a way for a Roc platform to provide constant data to the Roc application? Granted, the Str and List formats are likely not compatible (null terminated instead of length-encoded), but it seems like there could be value in Roc providing platforms with a way to intern a whole-of-program-lifecycle (List Str) that stores Roc-formatted lengths, but otherwise points at the underlying string data.</p>
+<h3>Stdin.line has no error type</h3>
+<p>Given the following program:</p>
+<div class="codehilite"><pre><span></span><code>main = await Stdin.line Stdout.line
+</code></pre></div>
+<p>When running it, if Ctrl-D is used (on a Unix-like system at least), the following panic occurs:</p>
+<blockquote>
+<p>thread 'main' panicked at 'called <code>Option::unwrap()</code> on a <code>None</code> value', src/lib.rs:310:45<br>
+note: run with <code>RUST_BACKTRACE=1</code> environment variable to display a backtrace<br>
+fatal runtime error: failed to initiate panic, error 5</p>
+</blockquote>
+<p>In particular, this means I can't pipe unmodified Advent of Code inputs to stdin, which would have been rather convenient, due to the lack of the ability to detect EOF. In general, the inability to detect EOF is particularly limiting for a Stdin implementation. Perhaps a variant function <code>Stdlin.lineChecked</code> could be exposed to cover this case, leaving <code>Stdin.line</code> for cases where the caller assumes input will be available? fwiw, detecting file-closed or broken-pipe conditions is also important for writing efficient, graceful stream processors: imagine a Roc program producing millions of lines of output, but being passed to the <code>head</code> utility: ideally, the Roc program should be able to detect the inability to write and save work by exiting early.</p>
+<h3>Error tag/type declarations</h3>
+<div class="codehilite"><pre><span></span><code>This Task.await call produces:
+
+    Task (List Str) [FileReadErr Path.Path InternalFile.ReadErr,
+    FileReadUtf8Err Path.Path [BadUtf8 Utf8ByteProblem Nat]]
+
+But the type annotation on readLines says it should be:
+
+    Task (List Str) *
+</code></pre></div>
+<p>I have a few questions:</p>
+<p>Are there effective techniques for ensuring that all errors can be handled _within_ a function that uses <code>Task.await</code>? It seems that <code>await</code> makes it so that the remainder of the function is unable to handle the initial error, and that <code>Task.attempt</code> may be needed to handle errors within the _same_ function.</p>
+<p><code>FileReadErr</code> exposes mention of an <code>InternalFile.ReadErr</code>. Is this intentional? Is this something we can reference and inspect in the calling application? Use of <code>Internal</code> in exposed error messages and APIs, at least for me, decreases confidence in the maturity of the system (though I realize it's a work-in-progress).</p>
+<p>Does <code>FileReadUtf8Err</code> need to bundle <code>BadUtf8</code>, and in turn, does <code>BadUtf8</code> need to bundle <code>Utf8ByteProblem</code>? Could <code>FileReadErr</code> just directly bundle <code>BadUtf8</code> as one of its tag arguments instead of introducing a separate top-level error?</p>
+<h3>Error handling</h3>
+<p>With basic-cli, something I've run into regularly is a compiler error to the effect of:</p>
+<blockquote>
+<p>Something is off with the body of the main definition</p>
+</blockquote>
+<div class="codehilite"><pre><span></span><code>This Task.await call produces:
+
+    Task {} [SomeFailure]
+
+But the type annotation on main says it should be:
+
+    Task {} *
+</code></pre></div>
+<p>(This is a fake example synthesized using <code>Task.fail</code>, though I have seen real cases of this).</p>
+<p>It's clear that I need to handle every error, either individually, or all at once, though as mentioned before, this either means splitting error handling out of the function generating the tasks (perhaps this is best practice?), or switching <code>await</code> to <code>attempt</code>, which is a bit of a pain.</p>
+<p>I'm hoping to hear about techniques for handling errors cleanly.</p>
+<h3>Indentation all the way down</h3>
+<p>Although iterating on code can mitigate this somewhat, it can be frustrating to end up in cases where <code>if</code>/<code>else</code>/<code>when</code> cases nest 4+ levels deep. The mitigation I referred to often involves using <code>Result.map</code>, <code>Task.onFail</code>, etc, which makes the code more succinct, but at the expense of making it less readable to inexperienced Roc/functional programmers (further made worse by the naming similarities between the conceptual similarities between <code>onFail</code>, <code>mapErr</code>, etc, and the frequent need, at least for me, to consult type declarations in documentation).</p>
+<p>Are there in-language ways (using the core syntax rather than functions) to minimize this nesting? I'm sure this will be contentious, but do we really need <code>else</code>? In imperative languages, such as Python, minimizing indentation is frequently considered a readability boon (i.e. instead of an <code>else</code> (assuming the <code>else</code> would've spanned the remainder of the function), just use a <code>return</code> within the <code>if</code>. The cognitive load is decreased because that technique essentially signals "we're done with these variables or this case, and we don't need to worry about this condition going forward" (the cognitive load aspect doesn't strictly apply to Roc because there can't be anything _after_ an <code>else</code>). Also, this reduces the likelihood of horizontal scrolling when viewing source code, which certainly does apply to Roc.</p>
+<p>Following the same trend of reducing indentation by allowing implicit assignment without a <code>let</code>, since Roc does not allow any code within a function to exist _after_ an <code>else</code>, can we permit an unpaired <code>if</code>, where the unindented code that follows forms an _implicit_ <code>else</code>? For example, could these be equivalent? What would be the downsides?</p>
+<div class="codehilite"><pre><span></span><code>if x then
+    x
+else
+    y = someExpensiveExpr
+    if y then
+        y
+    else
+        someOtherExpensiveExpr
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>if x then
+    x
+y = someExpensiveExpr
+if y then
+    y
+someOtherExpensiveExpr
+</code></pre></div>
+<p>(Any de-indentation would imply an early return, or alternately, the grammar could rewrite a de-indentation to be semantically the same as a re-indentation under an <code>else</code>)</p>
+<p>Similarly, could a de-indentation following a <code>when</code> be equivalent to a <code>_</code> case?</p>
+<p>Alternatively, if the Roc language could guarantee that expressions will only be computed at the point of their first use, I might be willing to write:</p>
+<div class="codehilite"><pre><span></span><code>y = someExpensiveExpr
+z = someOtherExpensiveExpr
+if x then
+    x
+else if y then
+    y
+else
+    z
+</code></pre></div>
+<h3>Tag to Str</h3>
+<p>In cases where we just don't care to handle errors explicitly (such as in a time-sensitive Advent of Code competition), but also In the interest of being able to report errors cheaply, is there, or could there be some way for the language to intern the primary/top-level tag name in the binary, and then provide a function which can convert any tag to its name? There could be a lot of utility in being able to print out the difference between a FileNotFound style error vs an Encoding error, even if we can't see the tag argument information.</p>
+<p>Alternatively, could there be an ability that error tags implement which allow them to render themselves as a Str?</p>
+<p>Handling errors explicitly is fine and to be encouraged for productionized systems, but the error handling trade-offs I was able to infer at least in Roc today limit its utility for developing throwaway scripts.</p>
+
+
+
+<a name="314433136"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Task/error%20handling%20%26%20platform%20use/near/314433136" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Task.2Ferror.20handling.20.26.20platform.20use.html#314433136">(Dec 07 2022 at 11:25)</a>:</h4>
+<p>Hi <span class="user-mention" data-user-id="483789">@Kevin Gillette</span>, I appreciate  the detailed feedback! It would be great if you could split the sections up over multiple topics, that will make discussion easier.</p>
+
+
+
+<a name="314506123"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Task/error%20handling%20%26%20platform%20use/near/314506123" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kevin Gillette <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Task.2Ferror.20handling.20.26.20platform.20use.html#314506123">(Dec 07 2022 at 16:50)</a>:</h4>
+<p>I'll do that, thanks</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

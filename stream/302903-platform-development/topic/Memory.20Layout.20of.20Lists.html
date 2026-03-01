@@ -1,0 +1,93 @@
+<html>
+<head><meta charset="utf-8"><title>Memory Layout of Lists · platform development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/index.html">platform development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Memory.20Layout.20of.20Lists.html">Memory Layout of Lists</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="468431943"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Memory%20Layout%20of%20Lists/near/468431943" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Memory.20Layout.20of.20Lists.html#468431943">(Sep 07 2024 at 16:04)</a>:</h4>
+<p>Hi, this is a followup question from <a href="#narrow/stream/397893-announcements/topic/List.20Refcounting.20Performance.20Fixes/near/451326271">here</a> I watched the Video from the April Meetup, but there are still open questions. The background is, that I have to create a RocList implementation for Go.</p>
+<ol>
+<li>
+<p>My first question is, where is the refcount (RC) and where is the <code>original len counter</code>(OL). When I understand the zig code correctly, then it is easy, when the alignment of the list elements is lower or equal then usize. In this case, the RC is always the usize bytes before the data and OL (if it exists) is always the usize bytes before the RC. But if the alignment of the list elements is bigger, then you have to go "one alignment" before the data. If an OL exists, then you find the OL there and the RC usize-bytes afterwards. If no OL exists, then you find the RL "one alignment" before the data. Is this correct?</p>
+</li>
+<li>
+<p>My second question is, how to know, if an OL exists. Is it correct, that an OL exist, when the elements of the list are refcounted? How do I know, if this is the case? I think, this depends on there type. Is there a trick to know, which types are refcounted? For example for an <code>List Str</code>, I would guess, that the elements are refcounted and therefore an OL exists? But for a <code>List U64</code>, I would guess the elements are not refcounted, so the RC is 8 bytes before the data, even on a wasm build, where RC is only 4 bytes long. Is this correct as well?</p>
+</li>
+<li>
+<p>I can not find the place in the zig code, where the OL is set. I followed the code from <a href="https://github.com/roc-lang/roc/blob/9a4d55672551fb4ffb54983272bb02d119c19f85/crates/compiler/builtins/bitcode/src/list.zig#L90">RocList.fromSlice()</a>. The space for OL gets allocated <a href="https://github.com/roc-lang/roc/blob/9a4d55672551fb4ffb54983272bb02d119c19f85/crates/compiler/builtins/bitcode/src/utils.zig#L469">here</a>. And the RC get set <a href="https://github.com/roc-lang/roc/blob/9a4d55672551fb4ffb54983272bb02d119c19f85/crates/compiler/builtins/bitcode/src/utils.zig#L481">here</a>. But where is the code, that sets the OL? I think it happens in <a href="https://github.com/roc-lang/roc/blob/9a4d55672551fb4ffb54983272bb02d119c19f85/crates/compiler/builtins/bitcode/src/list.zig#L146">RocList.incref()</a>, But this function is never called in <code>RocList.fromSlice()</code></p>
+</li>
+<li>
+<p>When roc returns a List to my host, I have to reduce the refcounter. What does this mean? <br>
+a) I have to check, if the list elements are refcounted to find out, if there is an OL<br>
+b) Then I have to find the place of the RC in memory. I have to consider, if the List is a seamless slice, to do this<br>
+c) If RC is greater then 1, I just reduce it by one and everything is done.<br>
+d) If RC is 1, I have to deallocate the list and reduce the RC of each elements (if they are refcounted) and deallocate them as well, if they have a RC of 1. To know, how many elements there are, I have to look into OL. To dealocate the List data, I also have to deallocate the RC and the OL.</p>
+</li>
+</ol>
+<p>Is all of this correct?</p>
+
+
+
+<a name="468438351"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Memory%20Layout%20of%20Lists/near/468438351" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Memory.20Layout.20of.20Lists.html#468438351">(Sep 07 2024 at 16:45)</a>:</h4>
+<p>This is off the top of my head and some of it could be wrong</p>
+<ol>
+<li>Rc should always be at data pointer minus usize width. Original Len should always be directly before that if it exists. Totally possible we have code handling this wrong cause larger than usize alignment is very rare and probably not thoroughly tested.</li>
+<li>has an original length if refcounted. Is refcounted if it contains anything refcounted. Refcounted things are lists, strs, box, and recursive tags. On wasm, I think rc should be 4 bytes before the data.</li>
+<li>It is only set when incrementing the refcount from unique to shared. It is not set any other time. Unique lists don't need to have it set. This enables unique lists to mutate length without worrying about the len on the heap..it is only required once shared and a seamless slice might need it.</li>
+<li>Yeah, that's correct.</li>
+</ol>
+<p>Also, man, I really wonder if we can wrap the zig code in a reasonable generic way such that implementing in various languages is easier and less bug probe. Like at least the core of the zig library would be great to share via cffi.</p>
+
+
+
+<a name="468457638"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Memory%20Layout%20of%20Lists/near/468457638" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Memory.20Layout.20of.20Lists.html#468457638">(Sep 07 2024 at 18:34)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/302903-platform-development/topic/Memory.20Layout.20of.20Lists/near/468438351">said</a>:</p>
+<blockquote>
+<ol>
+<li>Rc should always be at data pointer minus usize width. Original Len should always be directly before that if it exists. Totally possible we have code handling this wrong cause larger than usize alignment is very rare and probably not thoroughly tested.</li>
+</ol>
+</blockquote>
+<p>You are right. After carefully reading the <a href="https://github.com/roc-lang/roc/blob/9a4d55672551fb4ffb54983272bb02d119c19f85/crates/compiler/builtins/bitcode/src/utils.zig#L460-L483">zig-code again, that does the allocation</a>, I can see now, that RC is always the usize-bytes before data. But when the alignment is greater then usize (for Example <code>List U64</code>on a wasi build), then alignment-bytes get allocated before the data. This has to be considered, when dealocating the List. You can not just dealocate from RC. You have to dealocate from data - (alignment of elements), even when there is no OL.</p>
+<blockquote>
+<ol start="3">
+<li>It is only set when incrementing the refcount from unique to shared. It is not set any other time. Unique lists don't need to have it set. This enables unique lists to mutate length without worrying about the len on the heap..it is only required once shared and a seamless slice might need it.</li>
+</ol>
+</blockquote>
+<p>How do I now, if a list is unique or shared? Is the following statement correct? If it is a seamless slice, then it is always shared. If is not a seamless slice then it does not matter. I just look at the len-attribute.</p>
+<p>So in conclusion, when dealocating a seamless slice of refcounted elements with a RC of 1, you have to read the OL. When RC is higher or the elements are not refcounted or it is not a seamless slice, then ignore it. But when dealocating the data of the slice, you have to know if the OL exists, to deallocate it.</p>
+<blockquote>
+<p>Also, man, I really wonder if we can wrap the zig code in a reasonable generic way such that implementing in various languages is easier and less bug probe. Like at least the core of the zig library would be great to share via cffi.</p>
+</blockquote>
+<p>That would be so helpful. I was already thinking about compiling the builtin and link it to my go code. I have to use cgo anyway. But the builtins have so many code, that I don't need, that I don't want to include it.</p>
+
+
+
+<a name="468485594"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Memory%20Layout%20of%20Lists/near/468485594" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Memory.20Layout.20of.20Lists.html#468485594">(Sep 07 2024 at 23:28)</a>:</h4>
+<p>Yeah, that sounds correct. Basically freeing a seamless slices uses that original length stored on the heap to free the underlying elements of the original list. A regular list will always point to a full list. So it can safely use the length on the stack for deallocating.</p>
+
+
+
+<a name="468485906"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Memory%20Layout%20of%20Lists/near/468485906" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Memory.20Layout.20of.20Lists.html#468485906">(Sep 07 2024 at 23:33)</a>:</h4>
+<p>Puh. After hours of doing stupid mistakes, I think I finally have a working version of RocList in Go that does not crash when sending lists to roc or dealocating lists returned from roc.</p>
+<p>Thank you for the help. I think, I understand the memory layout. (Lets see how long this statement holds <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span> )</p>
+
+
+
+<a name="468487245"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Memory%20Layout%20of%20Lists/near/468487245" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Memory.20Layout.20of.20Lists.html#468487245">(Sep 07 2024 at 23:55)</a>:</h4>
+<p><span aria-label="party ball" class="emoji emoji-1f38a" role="img" title="party ball">:party_ball:</span> Awesome</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

@@ -1,0 +1,209 @@
+<html>
+<head><meta charset="utf-8"><title>SortWith Compare Capture Refcounting · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html">SortWith Compare Capture Refcounting</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="453073615"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453073615" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453073615">(Jul 22 2024 at 04:10)</a>:</h4>
+<p>With <code>List.sortWith</code>, we pass a compare function to zig. </p>
+<p>The compare function could be capturing closure data. Which I think will actually be quite problematic.<br>
+We theoretically need to increment the captures to that function for every time the sort function calls compare.<br>
+Currently we just increment it for every element in the list.</p>
+<p>To instead increment it for every call to the function, the only way would be to put the increment into the hot loop for sorting. I think that is a terrible idea.</p>
+<p>I think we should either figure out a way to ban captures for the compare function or find a way to save and then reload the refcounts. Essentially, save the refcount, set the refcount to constant, run sort, set the refcount back to what it was originally.</p>
+<p>Thoughts?</p>
+
+
+
+<a name="453073730"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453073730" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453073730">(Jul 22 2024 at 04:10)</a>:</h4>
+<p>I'm assuming this doesn't cause problems today cause in practice compare functions for lists never capture anything.</p>
+
+
+
+<a name="453074540"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453074540" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453074540">(Jul 22 2024 at 04:13)</a>:</h4>
+<p>For example worst case of quicksort is <code>n^2</code> comparisons. Adding <code>n^2</code> refcount increments to sorting would be brutal.</p>
+
+
+
+<a name="453080470"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453080470" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453080470">(Jul 22 2024 at 04:51)</a>:</h4>
+<blockquote>
+<p>ban captures for the compare function</p>
+</blockquote>
+<p>Would this prevent us from using curried functions? </p>
+<p>Maybe this is a silly example...</p>
+<div class="codehilite"><pre><span></span><code>module []
+
+Color : [Red, Green, Blue]
+
+priority : Color -&gt; U64
+priority = \c -&gt;
+    when c is
+        Red -&gt; 1
+        Green -&gt; 2
+        Blue -&gt; 3
+
+sortFn = \priorityFn -&gt; \left,right -&gt;
+    pl = priorityFn left
+    pr = priorityFn right
+    if pl &lt; pr then
+        LT
+    else if pl &gt; pr then
+        GT
+    else
+        EQ
+
+expect
+    input = [Red, Blue, Green]
+    actual = input |&gt; List.sortWith (sortFn priority)
+    expected = [Red, Green, Blue]
+    actual == expected # true
+</code></pre></div>
+
+
+
+<a name="453081229"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453081229" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453081229">(Jul 22 2024 at 05:00)</a>:</h4>
+<p>Yeah, it probably too restrictive. So probably need to do the constant thing.</p>
+
+
+
+<a name="453081379"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453081379" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453081379">(Jul 22 2024 at 05:01)</a>:</h4>
+<p>If you made <code>priorityFn</code> instead be something refcounted, like a list, it should break in current roc due to a double free.</p>
+
+
+
+<a name="453156790"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453156790" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453156790">(Jul 22 2024 at 11:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting/near/453073615">said</a>:</p>
+<blockquote>
+<p>I think we should either figure out a way to ban captures for the compare function or find a way to save and then reload the refcounts. Essentially, save the refcount, set the refcount to constant, run sort, set the refcount back to what it was originally.</p>
+</blockquote>
+<p>I don't think introducing the concept of banning captures is something we should do from a language complexity perspective, but the save/restore wouldn't be thread safe, right?</p>
+
+
+
+<a name="453157780"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453157780" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453157780">(Jul 22 2024 at 11:51)</a>:</h4>
+<p>as in, if the host had that roc value shared across multiple threads, potentially having its refcount (try to be) incremented and/or decremented on the other threads, then the save/restore would break those because it would be set to constant</p>
+
+
+
+<a name="453159129"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453159129" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453159129">(Jul 22 2024 at 12:00)</a>:</h4>
+<blockquote>
+<p>We theoretically need to increment the captures to that function for every time the sort function calls compare.</p>
+</blockquote>
+<p>since we know the length of the list before we start sorting, couldn't we increment it once by N up front, where N is the length of the list?</p>
+
+
+
+<a name="453159159"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453159159" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453159159">(Jul 22 2024 at 12:00)</a>:</h4>
+<p>(and then decrement by N at the end)</p>
+
+
+
+<a name="453203455"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453203455" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453203455">(Jul 22 2024 at 15:14)</a>:</h4>
+<p>This is for sorting and is the compare function. It isn't N increments. It is one increment per compare.</p>
+
+
+
+<a name="453203794"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453203794" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453203794">(Jul 22 2024 at 15:15)</a>:</h4>
+<p>So n log n on average, but an unknown amount in general.</p>
+
+
+
+<a name="453207509"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453207509" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453207509">(Jul 22 2024 at 15:26)</a>:</h4>
+<p>ah right <span aria-label="thumbs up" class="emoji emoji-1f44d" role="img" title="thumbs up">:thumbs_up:</span></p>
+
+
+
+<a name="453209012"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453209012" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453209012">(Jul 22 2024 at 15:31)</a>:</h4>
+<p>so far it seems like doing the refcount increment/decrement each time is the best option to me, although it is definitely unfortunate for performance</p>
+
+
+
+<a name="453209050"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453209050" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453209050">(Jul 22 2024 at 15:31)</a>:</h4>
+<p>at least in the case where you actually capture something</p>
+
+
+
+<a name="453211872"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453211872" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453211872">(Jul 22 2024 at 15:40)</a>:</h4>
+<p>Yeah, I guess this is a case where I should have zig generate two version of the code to also get the conditional out of the hot loop. Though the conditional would be 100% predictable, so maybe not a big deal.</p>
+
+
+
+<a name="453215020"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453215020" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453215020">(Jul 22 2024 at 15:56)</a>:</h4>
+<p>One other related topic (that maybe we need to collect more data on before we decide), but we could technically have zig generate <code>n</code> different functions at comptime to dispatch across things like element width.</p>
+<p>So code bloat that will be garbage collected by llvm for perf gains.</p>
+<p>I think this makes solid sense for sorting cause after a certain element width it will become more economical to create a list of pointers and sort that instead of sorting the original list. So we just need to support element width up to that size.</p>
+<p>I'm not sure the perf cost of an indirection to call the copy function (I'm also not sure if llvm may also be smart enough to realize the function is constant, propagate it down the call stack, and inline it), but from looking at the implementation for <code>fluxsort</code>, they mention that using indirection to call the compare function when sorting primitives like integers costs about 2x in terms of perf. Given copy is called more often than cmp, I would assume it has an even higher perf cost. Will definitely depend on whether or not llvm is smart enough to optimize it.</p>
+
+
+
+<a name="453221671"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453221671" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453221671">(Jul 22 2024 at 16:23)</a>:</h4>
+<p>Also, I am thinking of porting <a href="https://github.com/scandum/blitsort/tree/main">blitsort</a> to zig as our new base sorting algorithm. It is very similar to glidesort overall (not quite inplace, quicksort mixed with other sorting algorithm to deal with bad cases), but simpler and written is very clean <code>c</code>. Also glidesort makes a number of rust specific tradeoffs to make it easier to support panic safety. I don't think panic safety is worth it (nor does the glidesort author really, costs 15 to 20% of perf). If a compare function in roc passed to a sorting algorithm panics, I think it is fine to just accept the list may be in a broken state.</p>
+<p>Otherwise, <code>blitsort</code> and <code>glidesort</code> are both based off of <code>fluxsort</code> and seem to have very similar perf and default memory characteristics. <code>glidesort</code> theoretically can reach a higher speed on super new hardware with more execution and memory channels due to some interleaving, but that doesn't seem worth the complexity.</p>
+
+
+
+<a name="453222383"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453222383" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453222383">(Jul 22 2024 at 16:25)</a>:</h4>
+<p>Also debated porting good old <code>timsort</code>, but it is significantly slower than <code>glidesort</code> and <code>blitsort</code> in many cases. For example, <code>glidesort</code> can be 2-4x faster than the standard rust sort (which is <code>timsort</code>).</p>
+
+
+
+<a name="453224403"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453224403" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453224403">(Jul 22 2024 at 16:32)</a>:</h4>
+<p>I like both of those ideas!</p>
+
+
+
+<a name="453224507"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453224507" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453224507">(Jul 22 2024 at 16:33)</a>:</h4>
+<p>I also agree that a totally predictable condition is fine to leave in <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span></p>
+
+
+
+<a name="453225095"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453225095" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453225095">(Jul 22 2024 at 16:37)</a>:</h4>
+<p>Also, did a quick check of llvm ir, at least for the simple case of a short app that only sorts, it looks to be inlining the compare and copy functions.</p>
+<p>Of course we are at the mercy of llvm inlining and constant propagation heuristics, but a good base note.</p>
+
+
+
+<a name="453307191"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453307191" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453307191">(Jul 23 2024 at 02:00)</a>:</h4>
+<p>I just realized that <code>blitsort</code> uses <code>goto</code>. That might make it hard to translate into zig (given zig doesn't support <code>goto</code>).</p>
+<p>That said, most of it looks like it should translate ok, just not sure the perf impacts.</p>
+
+
+
+<a name="453308217"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/SortWith%20Compare%20Capture%20Refcounting/near/453308217" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting.html#453308217">(Jul 23 2024 at 02:11)</a>:</h4>
+<p>A handful of it looks like it can be replaced with loops and labelled breaks.</p>
+<p>Some of it looks like it will require move some code into a function.<br>
+The function would be inlined in multiple places in the same wrapper function. So may lead to duplicate code if llvm doesn't realize it can merge the duplicate code blocks and insert jumps. Otherwise, if the functions don't inline, it is the cost of an extra function call in the middle of some code. So worst case, I think I would force inlining and llvm may duplicate some code, but that is probably fine.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

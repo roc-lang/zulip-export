@@ -1,0 +1,185 @@
+<html>
+<head><meta charset="utf-8"><title>gen llvm NumF32ToParts · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html">gen llvm NumF32ToParts</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="429104409"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429104409" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429104409">(Mar 23 2024 at 18:40)</a>:</h4>
+<p>I've cobbled something together for the llvm codegen of <code>NumF32ToParts</code>, this currently panics with <code>LLVM errors when defining function "Num_f32ToParts_ec2bd03bf86b935fa34d71ad7ebb49f1f10f87d343e521511d8f9e6625620cd"</code>.</p>
+<p>I think the returning sign field needs to be changed so it matches the Roc Bool representation and the field order needs to be changed. Can someone tell me in broad strokes what those should be?</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="n">NumF32ToParts</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// Splits a [F32] into its components according to IEEE 754 standard.</span>
+<span class="w">            </span><span class="c1">// F32 -&gt; { sign : Bool, exponent : U8, fraction : U32 }</span>
+
+<span class="w">            </span><span class="c1">// temp from zig code for inspiration</span>
+<span class="w">            </span><span class="cm">/*pub fn f32ToParts(self: f32) callconv(.C) F32Parts {</span>
+<span class="cm">                const u32Value = @as(u32, @bitCast(self));</span>
+<span class="cm">                return F32Parts{</span>
+<span class="cm">                    .fraction = u32Value &amp; 0x7fffff,</span>
+<span class="cm">                    .exponent = @truncate(u32Value &gt;&gt; 23 &amp; 0xff),</span>
+<span class="cm">                    .sign = u32Value &gt;&gt; 31 &amp; 1 == 1,</span>
+<span class="cm">                };</span>
+<span class="cm">            } */</span>
+<span class="w">            </span><span class="n">arguments</span><span class="o">!</span><span class="p">(</span><span class="n">arg</span><span class="p">);</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">float_val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">arg</span><span class="p">.</span><span class="n">into_float_value</span><span class="p">();</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">float_bits</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">env</span><span class="p">.</span><span class="n">builder</span><span class="p">.</span><span class="n">new_build_bitcast</span><span class="p">(</span>
+<span class="w">                </span><span class="n">float_val</span><span class="p">,</span>
+<span class="w">                </span><span class="n">env</span><span class="p">.</span><span class="n">context</span><span class="p">.</span><span class="n">i32_type</span><span class="p">(),</span>
+<span class="w">                </span><span class="s">"float_as_int"</span>
+<span class="w">            </span><span class="p">).</span><span class="n">into_int_value</span><span class="p">();</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">sign_bit</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">env</span><span class="p">.</span><span class="n">builder</span><span class="p">.</span><span class="n">new_build_right_shift</span><span class="p">(</span>
+<span class="w">                </span><span class="n">float_bits</span><span class="p">,</span>
+<span class="w">                </span><span class="n">env</span><span class="p">.</span><span class="n">context</span><span class="p">.</span><span class="n">i32_type</span><span class="p">().</span><span class="n">const_int</span><span class="p">(</span><span class="mi">31</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
+<span class="w">                </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">                </span><span class="s">"sign_bit"</span>
+<span class="w">            </span><span class="p">);</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">exponent_mask</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">env</span><span class="p">.</span><span class="n">context</span><span class="p">.</span><span class="n">i32_type</span><span class="p">().</span><span class="n">const_int</span><span class="p">(</span><span class="mh">0x7F80_0000</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">);</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">exponent_bits</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">env</span><span class="p">.</span><span class="n">builder</span><span class="p">.</span><span class="n">new_build_and</span><span class="p">(</span>
+<span class="w">                </span><span class="n">float_bits</span><span class="p">,</span>
+<span class="w">                </span><span class="n">exponent_mask</span><span class="p">,</span>
+<span class="w">                </span><span class="s">"exponent_bits"</span>
+<span class="w">            </span><span class="p">);</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">exponent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">env</span><span class="p">.</span><span class="n">builder</span><span class="p">.</span><span class="n">new_build_right_shift</span><span class="p">(</span>
+<span class="w">                </span><span class="n">exponent_bits</span><span class="p">,</span>
+<span class="w">                </span><span class="n">env</span><span class="p">.</span><span class="n">context</span><span class="p">.</span><span class="n">i32_type</span><span class="p">().</span><span class="n">const_int</span><span class="p">(</span><span class="mi">23</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
+<span class="w">                </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">                </span><span class="s">"exponent"</span>
+<span class="w">            </span><span class="p">);</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">fraction_mask</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">env</span><span class="p">.</span><span class="n">context</span><span class="p">.</span><span class="n">i32_type</span><span class="p">().</span><span class="n">const_int</span><span class="p">(</span><span class="mh">0x007F_FFFF</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">);</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">fraction</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">env</span><span class="p">.</span><span class="n">builder</span><span class="p">.</span><span class="n">new_build_and</span><span class="p">(</span>
+<span class="w">                </span><span class="n">float_bits</span><span class="p">,</span>
+<span class="w">                </span><span class="n">fraction_mask</span><span class="p">,</span>
+<span class="w">                </span><span class="s">"fraction"</span>
+<span class="w">            </span><span class="p">);</span>
+
+<span class="w">            </span><span class="c1">// Not sure if order is correct</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">fields</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="n">Layout</span>::<span class="n">BOOL</span><span class="p">,</span><span class="w"> </span><span class="n">Layout</span>::<span class="n">U16</span><span class="p">,</span><span class="w"> </span><span class="n">Layout</span>::<span class="n">U64</span><span class="p">];</span>
+<span class="w">            </span><span class="c1">// Not sure if order is correct</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="p">(</span><span class="n">sign_index</span><span class="p">,</span><span class="w"> </span><span class="n">exponent_index</span><span class="p">,</span><span class="w"> </span><span class="n">fraction_index</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">result_layout</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LayoutRepr</span>::<span class="n">Struct</span><span class="p">(</span><span class="n">env</span><span class="p">.</span><span class="n">arena</span><span class="p">.</span><span class="n">alloc</span><span class="p">(</span><span class="n">fields</span><span class="p">));</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">result_struct_type</span><span class="w"> </span><span class="o">=</span>
+<span class="w">                </span><span class="n">basic_type_from_layout</span><span class="p">(</span><span class="n">env</span><span class="p">,</span><span class="w"> </span><span class="n">layout_interner</span><span class="p">,</span><span class="w"> </span><span class="n">result_layout</span><span class="p">).</span><span class="n">into_struct_type</span><span class="p">();</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">result_struct_type</span><span class="p">.</span><span class="n">const_zero</span><span class="p">();</span>
+
+<span class="w">            </span><span class="c1">// We have sign_bit, not sure how to convert it to Roc Bool representation</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">sign</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sign_bit</span><span class="p">;</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">env</span>
+<span class="w">                </span><span class="p">.</span><span class="n">builder</span>
+<span class="w">                </span><span class="p">.</span><span class="n">build_insert_value</span><span class="p">(</span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">sign</span><span class="p">,</span><span class="w"> </span><span class="n">sign_index</span><span class="p">,</span><span class="w"> </span><span class="s">"insert_sign"</span><span class="p">)</span>
+<span class="w">                </span><span class="p">.</span><span class="n">unwrap</span><span class="p">();</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">env</span>
+<span class="w">                </span><span class="p">.</span><span class="n">builder</span>
+<span class="w">                </span><span class="p">.</span><span class="n">build_insert_value</span><span class="p">(</span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">exponent</span><span class="p">,</span><span class="w"> </span><span class="n">exponent_index</span><span class="p">,</span><span class="w"> </span><span class="s">"insert_exponent"</span><span class="p">)</span>
+<span class="w">                </span><span class="p">.</span><span class="n">unwrap</span><span class="p">();</span>
+
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">env</span>
+<span class="w">                </span><span class="p">.</span><span class="n">builder</span>
+<span class="w">                </span><span class="p">.</span><span class="n">build_insert_value</span><span class="p">(</span><span class="n">result</span><span class="p">,</span><span class="w"> </span><span class="n">fraction</span><span class="p">,</span><span class="w"> </span><span class="n">fraction_index</span><span class="p">,</span><span class="w"> </span><span class="s">"insert_fraction"</span><span class="p">)</span>
+<span class="w">                </span><span class="p">.</span><span class="n">unwrap</span><span class="p">();</span>
+
+<span class="w">            </span><span class="n">use_roc_value</span><span class="p">(</span>
+<span class="w">                </span><span class="n">env</span><span class="p">,</span>
+<span class="w">                </span><span class="n">layout_interner</span><span class="p">,</span>
+<span class="w">                </span><span class="n">result_layout</span><span class="p">,</span>
+<span class="w">                </span><span class="n">result</span><span class="p">.</span><span class="n">into_struct_value</span><span class="p">().</span><span class="n">into</span><span class="p">(),</span>
+<span class="w">                </span><span class="s">"use_f32_to_parts_result_record"</span><span class="p">,</span>
+<span class="w">            </span><span class="p">)</span>
+<span class="w">        </span><span class="p">}</span>
+</code></pre></div>
+<p><a href="https://github.com/FabHof/roc/tree/dec-float-decoding-builtins">branch for the rest</a></p>
+
+
+
+<a name="429323149"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429323149" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429323149">(Mar 25 2024 at 09:08)</a>:</h4>
+<p>it would be fine to just call zig to get these values</p>
+
+
+
+<a name="429323260"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429323260" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429323260">(Mar 25 2024 at 09:09)</a>:</h4>
+<p>manual llvm is just extra work, for such a niche function it's not really worth it I think</p>
+
+
+
+<a name="429323433"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429323433" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429323433">(Mar 25 2024 at 09:10)</a>:</h4>
+<p>you can order the fields on the zig side first by size (big to small) and then use the name (alphabetic) as a tie-breaker</p>
+
+
+
+<a name="429323544"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429323544" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429323544">(Mar 25 2024 at 09:10)</a>:</h4>
+<p>and then the zig struct should be structurally the same as the roc record</p>
+
+
+
+<a name="429327050"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429327050" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429327050">(Mar 25 2024 at 09:24)</a>:</h4>
+<p>Cool, thanks Folkert <span aria-label="heart" class="emoji emoji-2764" role="img" title="heart">:heart:</span></p>
+
+
+
+<a name="429619905"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429619905" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fabian Schmalzried <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429619905">(Mar 26 2024 at 10:02)</a>:</h4>
+<p>Thanks for all the help!<br>
+I tried to call the zig code, but the return types do not match:</p>
+<div class="codehilite" data-code-language="LLVM"><pre><span></span><code><span class="k">define</span><span class="w"> </span><span class="k">internal</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="kt">i24</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="vg">@roc_builtins.num.f64_to_parts</span><span class="p">(</span><span class="kt">double</span><span class="w"> </span><span class="nv nv-Anonymous">%0</span><span class="p">)</span><span class="w"> </span><span class="k">local_unnamed_addr</span><span class="w"> </span><span class="vg">#9</span><span class="w"> </span><span class="p">{</span>
+<span class="p">...</span>
+<span class="p">}</span>
+<span class="k">define</span><span class="w"> </span><span class="k">internal</span><span class="w"> </span><span class="k">fastcc</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="kt">i16</span><span class="p">,</span><span class="w"> </span><span class="kt">i1</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="vg">@Num_f64ToParts_ec2bd03bf86b935fa34d71ad7ebb49f1f10f87d343e521511d8f9e6625620cd</span><span class="p">(</span><span class="kt">double</span><span class="w"> </span><span class="nv">%"#arg1"</span><span class="p">)</span><span class="w"> </span><span class="nv">!dbg</span><span class="w"> </span><span class="nv nv-Anonymous">!1037</span><span class="w"> </span><span class="p">{</span>
+<span class="p">...</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>I tried to bitcast this, but llvm will not allow me to do this.</p>
+
+
+
+<a name="429620164"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429620164" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fabian Schmalzried <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429620164">(Mar 26 2024 at 10:04)</a>:</h4>
+<p>When I have to extract the values again aniway, I think it might be worth to actually wirte the llvm by hand?</p>
+
+
+
+<a name="429622447"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429622447" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429622447">(Mar 26 2024 at 10:16)</a>:</h4>
+<p>bitcast only works for integer types. The trick here is to crate a new <code>alloca</code>, write the zig value into it, then read it back as the type you want</p>
+
+
+
+<a name="429656536"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429656536" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fabian Schmalzried <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429656536">(Mar 26 2024 at 13:37)</a>:</h4>
+<p>I think I managed to do it.</p>
+
+
+
+<a name="429656928"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429656928" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Fabian Schmalzried <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429656928">(Mar 26 2024 at 13:38)</a>:</h4>
+<p>Thanks for all the help, let me know what I can clean up!</p>
+
+
+
+<a name="429718685"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/gen%20llvm%20NumF32ToParts/near/429718685" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/gen.20llvm.20NumF32ToParts.html#429718685">(Mar 26 2024 at 18:47)</a>:</h4>
+<p>Can someone check the zig code and crates/compiler/gen_llvm/src/llvm/lowlevel.rs?<br>
+All the rest looks good!</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

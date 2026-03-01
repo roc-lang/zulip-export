@@ -1,0 +1,216 @@
+<html>
+<head><meta charset="utf-8"><title>small string hashing · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html">small string hashing</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="477970906"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/477970906" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#477970906">(Oct 21 2024 at 06:33)</a>:</h4>
+<blockquote>
+<p>it looks like small string hashing today leads to an allocation, a copy, hashing, a free</p>
+</blockquote>
+<p>I'm not actually sure the best way to solve this. Obviously there are many, but the fact that anyone can implement the hashing ability actually makes this a bit complicated.</p>
+<p>I think that I would like to add a general: <code>Str.withUtf8BytesUnsafe: Str, (List U8 -&gt; out) -&gt; out</code>. This function would allow any roc users to access the bytes of a Str without an allocation. That said, it would have one huge caveat. If the <code>List U8</code> is still referenced after the inner lambda returns. The function will crash. It would crash with a longer message explaining why. I think this would lead to a function that in practice will only ever crash during development. It will be very easy to iron out any kinks.</p>
+<p>This could also return a result, but I think in practice the result isn't useful. If you are calling this function, you are doing so specifically for small string support. If you need small string support, you need this function to never fail.</p>
+<hr>
+<p>The big reason I think we need a more general function is that anyone can write a hasher. The hasher has control of its own internal state. As such, there is no safe way to pass a small string as a <code>List U8</code> to the hasher <code>addBytes</code> function. The implementation of that function could be:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">addBytes</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="err">@</span><span class="kt">MyHasher</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">lazyByteQueue</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="nv">bytes</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">     </span><span class="err">@</span><span class="kt">MyHasher</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">lazyByteQueue</span><span class="nf">:</span><span class="w"> </span><span class="nv">queue</span><span class="nf">.</span><span class="nv">push</span><span class="w"> </span><span class="kt">LazyByteQueue</span><span class="w"> </span><span class="nv">bytes</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>This would break any sort of guarantees around a small string that lives on the stack and temporarily is being referenced as a list. So hashing has no choice but to panic if someone were to write this hasher and it received a small string input.</p>
+<p>In practice, I think this function would rarely lead to crashes except during development. I believe this cause it is vary rare to only occasionally capture an input list in a function like this. As such, it is much more likely they either always capture or never capture. If they do occasionally capture, if any tests hit that workflow, the crash will be seen during development instead of release.</p>
+<hr>
+<p>What are peoples general thoughts on this? I think it is a useful enough tool that we should add it even with the potential crash. In the case of <a class="stream-topic" data-stream-id="231634" href="/#narrow/channel/231634-beginners/topic/performance.20question">#beginners &gt; performance question</a> about 19% of the execution time was spent in allocating, copying, and freeing single character lists for hashing strings. About 2% of the time was spent in the actual hashing.</p>
+<p>Any other ideas? My next best solution is adding a specific special case for <code>List U8</code> that allows it to have small list optimization. It would use the one free bit on the length.</p>
+
+
+
+<a name="478563516"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478563516" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478563516">(Oct 23 2024 at 18:57)</a>:</h4>
+<p><span class="user-mention" data-user-id="281383">@Richard Feldman</span> do you have any thoughts on this?</p>
+
+
+
+<a name="478568174"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478568174" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478568174">(Oct 23 2024 at 19:26)</a>:</h4>
+<p>I think there's some nicer way to do it with <code>Iter U8</code> or maybe even something bigger like <code>Iter U64</code> but I haven't thought it through all the way</p>
+
+
+
+<a name="478580237"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478580237" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478580237">(Oct 23 2024 at 20:45)</a>:</h4>
+<p>In the case of hashing, I think it would be an <code>Iter U384</code> for my use case</p>
+
+
+
+<a name="478580405"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478580405" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478580405">(Oct 23 2024 at 20:45)</a>:</h4>
+<p>Except it also has to degrade down to smaller size as we reach the edge of the list</p>
+
+
+
+<a name="478580522"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478580522" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478580522">(Oct 23 2024 at 20:46)</a>:</h4>
+<p>And other hashing algorithms probably use different sizes, so I would be skeptical that would work out well.</p>
+
+
+
+<a name="478581226"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478581226" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478581226">(Oct 23 2024 at 20:51)</a>:</h4>
+<p>yeah, overall my thought is that this seems like a scary thing to introduce to the language, and I'd really prefer to find an API that doesn't have that problem</p>
+
+
+
+<a name="478581448"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478581448" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478581448">(Oct 23 2024 at 20:53)</a>:</h4>
+<p>for example, another possibility is just that we give the hasher <code>[SmallStr U64, BigStr (List U8)]</code></p>
+
+
+
+<a name="478593021"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478593021" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478593021">(Oct 23 2024 at 22:24)</a>:</h4>
+<p>That doesn't quite work either. Cause a big string that is 3 bytes needs to hash the same as a small string that is 3 bytes.</p>
+
+
+
+<a name="478593954"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478593954" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478593954">(Oct 23 2024 at 22:33)</a>:</h4>
+<p>we could always convert to a <code>SmallStr</code> variant in that case</p>
+
+
+
+<a name="478593975"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478593975" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478593975">(Oct 23 2024 at 22:33)</a>:</h4>
+<p>like if it's a big string, before we pass it to hash, we check the length, and smallify it if appropriate</p>
+
+
+
+<a name="478595470"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478595470" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478595470">(Oct 23 2024 at 22:48)</a>:</h4>
+<p>Honestly, thinking about this more, I really think we should just implement small list u8</p>
+
+
+
+<a name="478595509"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478595509" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478595509">(Oct 23 2024 at 22:48)</a>:</h4>
+<p>Fully removes this issue in all cases and we have the bit laying around</p>
+
+
+
+<a name="478596998"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478596998" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478596998">(Oct 23 2024 at 23:04)</a>:</h4>
+<p>that really would simplify a lot of string stuff haha</p>
+
+
+
+<a name="478598314"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478598314" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478598314">(Oct 23 2024 at 23:18)</a>:</h4>
+<p>And since a u8 is too small to contain any sort of pointers, we don't have to worry about refcounting complications on small lists. I don't think I want to make a generic small list (from what I have seen in the c++ ecosystems it often isn't valuable for most types unless your list is allowed to be larger than 3 usizes) Since we are limited to 3 usizes including the 1 u8 being used for recording the size, I think it would be best to keep things simple and only special cases of 1 byte sized things.</p>
+
+
+
+<a name="478598438"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478598438" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478598438">(Oct 23 2024 at 23:19)</a>:</h4>
+<p>Though I guess from c++ llvm small vector, I think that anything 32bit or smaller on a 64bit system is pretty reasonable to put in a small list as well. But making it generic makes the rules a lot more complicated for hosts (and our builtins).</p>
+
+
+
+<a name="478598528"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478598528" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478598528">(Oct 23 2024 at 23:20)</a>:</h4>
+<p>So I think I want to only apply it to lists of 1 byte wide elements and keep things simple while still unblocking all things related to small strings and lists</p>
+
+
+
+<a name="478598631"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478598631" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478598631">(Oct 23 2024 at 23:21)</a>:</h4>
+<p>This would mean that a Str litterally will be byte for byte a list u8</p>
+
+
+
+<a name="478600724"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478600724" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478600724">(Oct 23 2024 at 23:43)</a>:</h4>
+<p>yeah that sounds reasonable</p>
+
+
+
+<a name="478600739"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478600739" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478600739">(Oct 23 2024 at 23:43)</a>:</h4>
+<p>I keep trying to avoid that but it feels like it's crossed some threshold where it's worth it</p>
+
+
+
+<a name="478600785"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478600785" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478600785">(Oct 23 2024 at 23:44)</a>:</h4>
+<p>what about <code>List I8</code>?</p>
+
+
+
+<a name="478600808"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478600808" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478600808">(Oct 23 2024 at 23:44)</a>:</h4>
+<p>Sounds like anything &lt;= 8 bits would be a candidate</p>
+
+
+
+<a name="478600842"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478600842" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478600842">(Oct 23 2024 at 23:44)</a>:</h4>
+<p>Aka <code>U8</code>, <code>I8</code>, and <code>Bool</code></p>
+
+
+
+<a name="478600921"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478600921" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478600921">(Oct 23 2024 at 23:45)</a>:</h4>
+<p>I don't expect we pack <code>Bool</code> into smaller than a byte, though. Meaning we would just apply this to any <code>List Byte</code></p>
+
+
+
+<a name="478601763"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478601763" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478601763">(Oct 23 2024 at 23:54)</a>:</h4>
+<p>Yeah, would work for anything that is a single byte with padding</p>
+
+
+
+<a name="478602411"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478602411" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478602411">(Oct 24 2024 at 00:00)</a>:</h4>
+<p>Definitely adds some extra complexity costs. Will mostly be felt by host authors (or glue authors once glue is good).</p>
+
+
+
+<a name="478602520"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478602520" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478602520">(Oct 24 2024 at 00:01)</a>:</h4>
+<p>I think llvm will always optimize the extra checks in zig away as long as the builtins get inlined.</p>
+
+
+
+<a name="478603316"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478603316" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478603316">(Oct 24 2024 at 00:08)</a>:</h4>
+<p>Even if they don't get inlined, I think llvm has a pass were is can inline constants and generate multiple variations of a function. So it may inline element_width and optimize that away even if the function doesn't fully inline</p>
+
+
+
+<a name="478603490"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478603490" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478603490">(Oct 24 2024 at 00:10)</a>:</h4>
+<p>Yeah, I think it is <a href="https://llvm.org/docs/Passes.html#id55"><code>ipsccp</code>: Interprocedural Sparse Conditional Constant Propagation</a><a href="https://llvm.org/docs/Passes.html#ipsccp-interprocedural-sparse-conditional-constant-propagation">https://llvm.org/docs/Passes.html#ipsccp-interprocedural-sparse-conditional-constant-propagation</a></p>
+
+
+
+<a name="478639042"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478639042" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478639042">(Oct 24 2024 at 06:10)</a>:</h4>
+<p><a href="#narrow/channel/302903-platform-development/topic/Memory.20Layout.20of.20Lists">It was complicated to implement the list type in <code>go</code></a>. This will make it a bit more complicated. For that reason, it would be nice, if there is a clear rule, when a list can be small. It will be complicated to make the decision with glue, since the list implementation in many host languages will probably be generic. In go, the type is <code>type RocList[t any] C.struct_RocList</code>. This type does not know, if <code>t</code> is <code>Bool</code>, <code>U8</code> or <code>I8</code>.</p>
+<p>I would propose, that a list can be a small list, if the type has a size of one byte or less. This also includes opaque types and <code>{a: U8}</code>. </p>
+<p>With a rule like this, I think, that many host languages can check the size of <code>t</code>. For example in go, I could use <code>unsafe.Sizeof</code>.</p>
+
+
+
+<a name="478639969"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/small%20string%20hashing/near/478639969" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/small.20string.20hashing.html#478639969">(Oct 24 2024 at 06:19)</a>:</h4>
+<p>Yeah, I think I would like to keep the rule simple. Small list optimization only happens if the size of <code>t</code> with padding is 1 byte. Small list optimization is then exactly the same as small string optimization.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

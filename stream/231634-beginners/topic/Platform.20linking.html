@@ -1,0 +1,193 @@
+<html>
+<head><meta charset="utf-8"><title>Platform linking · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html">Platform linking</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="306591264"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/306591264" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#306591264">(Oct 28 2022 at 06:41)</a>:</h4>
+<p>I have been playing around with the compiler to improve my understanding of how Roc platforms work. I thought I might take some notes and share what I have so far for anyone else on a similar journey. I would appreciate any corrections to the below, or additions.</p>
+<p>What is the pattern for how Roc functions are named in the generated files?</p>
+<h2>Roc Platform Linking</h2>
+<p><code>roc build main.roc --debug</code> with a debug build of the Roc compiler will compile the application into a dynamic library at <code>main.o</code>.</p>
+<p>If there is a prebuilt platform available it will be located at <code>platform/host.o</code>. If not then the Roc binary will <em>do something</em> to generate it.</p>
+<p>The surgical linker will then dynamically link the aplpication <code>main.o</code> into the platform <code>host.o</code> to generate an exectuable.</p>
+<h2>Inspecting generated object files</h2>
+<p>Using <code>objdump -t main.o</code> you can see the symbol tables for the application e.g.</p>
+<div class="codehilite"><pre><span></span><code>main.o: file format mach-o arm64
+
+SYMBOL TABLE:
+0000000000000000 l     F __TEXT,__text ltmp0
+0000000000000000 l     F __TEXT,__text _roc_builtins.utils.allocate_with_refcount
+// collapsed for brevity
+00000000000001a4 g     F __TEXT,__text _roc__renderForHost_1_exposed
+0000000000000184 g     F __TEXT,__text _roc__renderForHost_1_exposed_generic
+00000000000001b4 g     F __TEXT,__text _roc__renderForHost_size
+</code></pre></div>
+<p>And <code>objdump -t platform/host.o | grep "roc_"</code> to the symbol table for the host, which gives something like the following;</p>
+<div class="codehilite"><pre><span></span><code>// collapsed for brevity, this can be a very large number of symbols
+000000000007ce68 g     F __TEXT,__text _roc_alloc
+000000000007ced4 g     F __TEXT,__text _roc_dealloc
+000000000007cfe8 g     F __TEXT,__text _roc_memcpy
+000000000007d024 g     F __TEXT,__text _roc_memset
+000000000007cf00 g     F __TEXT,__text _roc_panic
+000000000007ce98 g     F __TEXT,__text _roc_realloc
+0000000000000000         *UND* _roc__renderForHost_1_exposed
+</code></pre></div>
+<h2>Rust FFI</h2>
+<p>For now you can generate Rust bindings for most Roc types using the <code>roc glue platform/main.roc platform/glue.rs</code> command.</p>
+<p>Roc functions will be exposed in the symbol table. Take for example a function in the <code>Effect.roc</code> file <code>setCwd : List U8 -&gt; Effect (Result {} {})</code> function. It requires the following rust function to be defined. </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[no_mangle]</span><span class="w"></span>
+<span class="k">pub</span><span class="w"> </span><span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="k">fn</span> <span class="nf">roc_fx_setCwd</span><span class="p">(</span><span class="n">roc_path</span>: <span class="kp">&amp;</span><span class="nc">RocList</span><span class="o">&lt;</span><span class="kt">u8</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="nc">RocResult</span><span class="o">&lt;</span><span class="p">(),</span><span class="w"> </span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="k">match</span><span class="w"> </span><span class="n">std</span>::<span class="n">env</span>::<span class="n">set_current_dir</span><span class="p">(</span><span class="n">path_from_roc_path</span><span class="p">(</span><span class="n">roc_path</span><span class="p">))</span><span class="w"> </span><span class="p">{</span><span class="w"></span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">RocResult</span>::<span class="n">ok</span><span class="p">(()),</span><span class="w"></span>
+<span class="w">        </span><span class="nb">Err</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">RocResult</span>::<span class="n">err</span><span class="p">(()),</span><span class="w"></span>
+<span class="w">    </span><span class="p">}</span><span class="w"></span>
+<span class="p">}</span><span class="w"></span>
+</code></pre></div>
+
+
+
+<a name="306592347"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/306592347" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#306592347">(Oct 28 2022 at 06:51)</a>:</h4>
+<p>Another question... should <code>roc glue</code> generate rust type for builtins like <code>Str</code> etc?</p>
+
+
+
+<a name="306602939"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/306602939" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#306602939">(Oct 28 2022 at 08:15)</a>:</h4>
+<p>We already have Rust definitions of Str etc since long before glue existed. See roc_std crate.</p>
+
+
+
+<a name="306617587"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/306617587" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#306617587">(Oct 28 2022 at 09:45)</a>:</h4>
+<p>Thank you, I'm importing the dependency with the below in <code>Cargo.toml</code>, which works well.  </p>
+<div class="codehilite"><pre><span></span><code>[dependencies]
+libc = &quot;0.2&quot;
+roc_std = { git = &quot;https://github.com/roc-lang/roc/&quot; }
+</code></pre></div>
+
+
+
+<a name="306643458"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/306643458" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#306643458">(Oct 28 2022 at 12:27)</a>:</h4>
+<p>although I'd actually like the Rust glue to generate <code>roc_std</code> automatically for the particular project - long-term I think the best experience will be "all I need to do is run <code>roc glue</code> for my target language and it generates me everything I need for my bindings to work, no further dependencies to install or keep in sync"</p>
+
+
+
+<a name="306662840"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/306662840" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#306662840">(Oct 28 2022 at 14:00)</a>:</h4>
+<p>Your description of roc linking is not surgical linking. That is legacy linking. Also, i am a bit confused by <code>main.o</code>. unless something changed recently, the application file we generate should be created in a temporary folder and called <code>app.o</code></p>
+<p>EDIT: maybe <code>--debug</code> causes <code>main.o</code> to be generated?</p>
+
+
+
+<a name="306663877"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/306663877" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#306663877">(Oct 28 2022 at 14:04)</a>:</h4>
+<blockquote>
+<p>What is the pattern for how Roc functions are named in the generated files?</p>
+</blockquote>
+<p><code>roc</code> + <code>__</code> + name of function + specialization number + <code>exposed</code> + optional <code>generic</code>. Generic version is a work around to complex c abi that instead of returning a type directly, take a pointer to the type as an out param. Theoretically shouldn't be needed.</p>
+
+
+
+<a name="306663987"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/306663987" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#306663987">(Oct 28 2022 at 14:04)</a>:</h4>
+<p>Also, specialization number might be slightly wrong wording.</p>
+
+
+
+<a name="306664368"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/306664368" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#306664368">(Oct 28 2022 at 14:06)</a>:</h4>
+<p>Also, each of these is paired with a size function because the size of the return type may not be know until the roc app is compiled, so we have to expose it to the platform</p>
+
+
+
+<a name="306664736"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/306664736" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#306664736">(Oct 28 2022 at 14:08)</a>:</h4>
+<p>Also, the main thing<code>--debug</code>does is run our llvm ir though a tool called debug ir that gives us debug info based on the llvm ir.</p>
+
+
+
+<a name="307045888"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307045888" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307045888">(Oct 31 2022 at 07:06)</a>:</h4>
+<p>I've had a go at trying to visualise the flow of the files through to application binary. I'm pretty sure this isn't quite right, but would appreciate any corrections. I thought <span class="user-mention" data-user-id="361169">@Anton</span> had filed an issue to describe common Roc terms, and thought something like this might be helpful. <br>
+<a href="/user_uploads/22008/2zevkIFlvwi1CkQWz_spqRUD/Building-a-Roc-Application.png">Building-a-Roc-Application.png</a></p>
+<div class="message_inline_image"><a href="/user_uploads/22008/2zevkIFlvwi1CkQWz_spqRUD/Building-a-Roc-Application.png" title="Building-a-Roc-Application.png"><img src="/user_uploads/22008/2zevkIFlvwi1CkQWz_spqRUD/Building-a-Roc-Application.png"></a></div>
+
+
+
+<a name="307055025"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307055025" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307055025">(Oct 31 2022 at 08:28)</a>:</h4>
+<p>Awesome initiative <span class="user-mention" data-user-id="515757">@Luke Boswell</span> <span aria-label="heart eyes" class="emoji emoji-1f60d" role="img" title="heart eyes">:heart_eyes:</span>  !<br>
+I'd love to generate a view like this from the code so it stays up-to-date and can show specific files.<br>
+I'm going to make an issue for that, we can probably log things to a file in debug builds and perhaps write a roc cli program to convert it to a graphviz image <img alt=":roc:" class="emoji" src="https://zulip-avatars.s3.amazonaws.com/22008/emoji/images/18217.png" title="roc"></p>
+<p>btw Roc terms issue was <a href="https://github.com/roc-lang/roc/issues/913">#913</a>.</p>
+
+
+
+<a name="307059992"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307059992" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307059992">(Oct 31 2022 at 09:06)</a>:</h4>
+<p>What do you think of the content? Is it reasonably close?</p>
+
+
+
+<a name="307065018"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307065018" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307065018">(Oct 31 2022 at 09:40)</a>:</h4>
+<p>Yeah, I'm not very familiar with the details of the compiler pipeline so I'm not sure there but the rest looks good.<br>
+<del>We do call <code>cargo</code> in the code which does call rustc but perhaps best to rename that one to cargo.</del></p>
+
+
+
+<a name="307068073"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307068073" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307068073">(Oct 31 2022 at 09:59)</a>:</h4>
+<p><a href="https://github.com/roc-lang/roc/issues/4438">New graph logging issue</a></p>
+
+
+
+<a name="307133767"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307133767" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307133767">(Oct 31 2022 at 15:22)</a>:</h4>
+<p>The compiler pipeline is a good high level picture.<br>
+The app and host are joined together by a linker. You could draw a box for that if you like. We can use our own <code>--linker=surgical</code> or an external one <code>--linker=legacy</code>. I think it's fine without it though. Whatever you think.</p>
+
+
+
+<a name="307134476"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307134476" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307134476">(Oct 31 2022 at 15:26)</a>:</h4>
+<p>I just happened to come across the fact that we use both <code>cargo</code> and <a href="https://github.com/roc-lang/roc/blob/ae1a9e4dd6077b7db0b412ac20e5b5ec12c93c6a/crates/compiler/build/src/link.rs#L712"><code>rustc</code></a>.</p>
+
+
+
+<a name="307391965"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307391965" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307391965">(Nov 01 2022 at 19:51)</a>:</h4>
+<p>Is it worth adding this somewhere more permanent? maybe the rust docs README?</p>
+
+
+
+<a name="307396219"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307396219" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307396219">(Nov 01 2022 at 20:17)</a>:</h4>
+<p>I think in practice we only use <code>cargo</code></p>
+
+
+
+<a name="307402783"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307402783" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307402783">(Nov 01 2022 at 21:01)</a>:</h4>
+<p>So that block should say cargo then? I wasnt sure what the name os the rust compiler was. Thanks</p>
+
+
+
+<a name="307431792"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Platform%20linking/near/307431792" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Platform.20linking.html#307431792">(Nov 02 2022 at 00:42)</a>:</h4>
+<p>That's right, the block should say cargo.</p>
+<p>Context:  <code>rustc</code> is the Rust compiler and <code>cargo</code> is a build tool that sits on top of it. Most Rust users only ever use <code>cargo</code>. rustc is considered very low level. Roc calls cargo practically all the time too. I never knew it called rustc directly before the comment above. For this high level diagram we can ignore that, and only mention cargo.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

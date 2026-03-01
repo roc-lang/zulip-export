@@ -1,0 +1,167 @@
+<html>
+<head><meta charset="utf-8"><title>approach to optimization · contributing · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/index.html">contributing</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html">approach to optimization</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="497165997"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497165997" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497165997">(Feb 01 2025 at 13:46)</a>:</h4>
+<p>Before we start on <a href="#narrow/channel/316715-contributing/topic/contributor.20coordination.20meeting.20-.20Feb.202024.20.232/near/497101907">rewriting the compiler in Zig</a> I'd like us to agree on our approach to optimization of runtime. I feel we currently have substantial differences between individuals as to where compiler runspeed falls on the priority ladder.</p>
+<p>One important note; the consensus <a href="#narrow/channel/395097-compiler-development/topic/casual.20conversation/near/495968183">here</a> seemed to be that we want to write small compiler passes. With the current compiler I believe we've taken the approach that we plan things for maximum execution speed because it's too hard to change it later. But with small passes this does not seem to apply, they should be much easier to re-write for execution speed if that pass is a serious bottleneck.  </p>
+<p>I would personally always prioritize correctness, maintainability~simplicity~debugability and error message quality over run speed. I think we should not allow any optimization that complicates the code in a pass that is nowhere close to being the bottleneck pass. Any optimization that does meet this standard should be proven to be beneficial through benchmarks before it is merged.</p>
+<p>What do you think?</p>
+
+
+
+<a name="497166570"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497166570" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497166570">(Feb 01 2025 at 13:55)</a>:</h4>
+<p>I think you just, for each pass, try to make the fastest possible pass implementation you can that is simple to understand, easy to debug, and a joy to maintain.</p>
+<p>So for instance, Arena allocation makes sense and is easy to reason about and provides great performance.  In some cases SoAs can have the same qualities (even if they can take some adjustment to those not familiar with the pattern).  But we just avoid performance optimization patterns that sacrifice those other two.</p>
+
+
+
+<a name="497167994"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497167994" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497167994">(Feb 01 2025 at 14:17)</a>:</h4>
+<p>some thoughts on passes:</p>
+<ul>
+<li>All else being equal, fewer passes is faster. Minimizing number of passes has been a goal in the Rust compiler, and it has made things harder to get right and to debug. I don't think we should push for a small number of passes in the rewrite. (Someday we may decide to combine passes, but if so, we should do that well after having a reliable implementation.)</li>
+<li>More passes is slower, but it's not necessarily easier to understand. I also don't think we should push for a large number of passes in the rewrite.</li>
+<li>Instead, I think we should be focusing on the goals of simplicity, debuggability, and easiness to get right. However many passes that results in, that's how many passes we have.</li>
+</ul>
+
+
+
+<a name="497168440"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497168440" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497168440">(Feb 01 2025 at 14:24)</a>:</h4>
+<p>some thoughts on parallelization:</p>
+<ul>
+<li>The current compiler is parallel across multiple stages of compilation, but the parallel loading code is very complex and doesn't have a noticeable payoff because all Roc code bases today are so small. So if it weren't parallel, I doubt anyone would notice.</li>
+<li>As we discovered, we need a single-threaded build pipeline anyway for wasm (we had to introduce one for the web repl), so this is needed regardless.</li>
+<li>As such, I don't think the new compiler should be parallel for 0.1.0 - just run everything in one thread. </li>
+<li>That said, although there's a long history of compilers being rewritten, there's also a long history of multi-year "make the compiler parallel" efforts in compilers which were built without any thought to parallelism up front.</li>
+<li>I think we should architect the dependencies between the various stages of the compiler in a way where parallelism is possible without another rewrite even if we aren't running things in parallel up front.</li>
+<li>This means thinking about dependencies between modules, between stages, etc. Which steps <em>could</em> be run in parallel, and which couldn't? I think we should organize our data in such a way that we could put the operations into a scheduler and have them run in parallel.</li>
+<li>I do think this will make things take a bit longer and be a bit more complex. But I think the cost-benefit is massively skewed on this; trying to retrofit for parallelism in the future will be a massive project compared to if we plan for it now, even if we aren't actually running things in parallel yet.</li>
+<li>Concretely, this means I don't think we should eagerly combine multiple modules into one. I think we should keep them separate (and be able to process each of them independently) until close to the end of the compiler pipeline, so that in the future that work can be done in parallel.</li>
+</ul>
+
+
+
+<a name="497170073"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497170073" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497170073">(Feb 01 2025 at 14:48)</a>:</h4>
+<p>(these are coming in a sporadic order because we just started potty training today and I'm writing them in between cleaning up accidents <span aria-label="joy" class="emoji emoji-1f602" role="img" title="joy">:joy:</span>)</p>
+
+
+
+<a name="497173768"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497173768" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497173768">(Feb 01 2025 at 15:34)</a>:</h4>
+<p>some thoughts on memory allocation and data structures:</p>
+<ul>
+<li>Correctness needs to take precedence over performance. Right now we have a fast and buggy compiler. After this rewrite, we need to end up with a reliable compiler. If it's less fast than the current one, that's okay.</li>
+<li>It's been a foundational goal to end up with a very fast compiler. In the same way that I think we should organize the code to be parallelizable in the future, I think we should also organize the code in a way where we can do certain optimizations in the future.</li>
+<li>I think we should intern strings (like we do today) and try using indices into arenas (the way the Zig compiler does) by default, but not really try to optimize anything beyond that overall style.</li>
+<li>There may be some things that are quick and don't really affect debugging, such as storing some info in a few bits of identifiers. As I understand it, Zig makes this really easy and straightforward, and I don't think we need to go out of our way to avoid using easy and straightforward things that make performance better.</li>
+<li>An example of the type of performance optimization I <em>don't</em> think we should do right now is adjacency in IR nodes. (Where we don't store the ID of the next node inside the current node, but rather just know based on its node type that the next node will be the next node in the array.) If everything is already done using indices into arrays, that's something we can do incrementally in the future.</li>
+</ul>
+
+
+
+<a name="497177236"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177236" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177236">(Feb 01 2025 at 16:19)</a>:</h4>
+<p>One of the really nice things about working with mlir over the years is that I think it gets a clear priority correct. First figure out your IR (that is your fundamental interface). Then right passes that operate over IRs. If constraints change enough consider adding a new IR and changing to it. If not, it is fine to add more details to the same IR or save side band info.</p>
+<p>Any stage can be a theoretically cutting point for writing the ir to disk and caching. On top of that mlir can auto parallelize to some extent. Though that mostly depends on passes running patterns on individual IR nodes instead of larger groups (which isn't always practical).</p>
+
+
+
+<a name="497177308"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177308" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177308">(Feb 01 2025 at 16:20)</a>:</h4>
+<p>I think we fundamentally need to focus on our IRs, our interfaces between different stacks of the compiler and. Not writing ourselves into a box that we can't easily get out of</p>
+
+
+
+<a name="497177380"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177380" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177380">(Feb 01 2025 at 16:21)</a>:</h4>
+<p>We have some ideas about where the North Star is for the compiler. Our work should be align with the idea of reaching the North Star. We want to right the cleanest thing possible that allows for easily taking steps towards optimal.</p>
+
+
+
+<a name="497177440"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177440" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177440">(Feb 01 2025 at 16:22)</a>:</h4>
+<p>yeah, and then later if we want to merge some of them together to improve performance, we can do that incrementally and after we've already gotten things correct</p>
+
+
+
+<a name="497177441"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177441" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177441">(Feb 01 2025 at 16:22)</a>:</h4>
+<p>So it isn't strictly about simple. It is about correct now, but also easy to improve upon</p>
+
+
+
+<a name="497177505"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177505" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177505">(Feb 01 2025 at 16:23)</a>:</h4>
+<p>Totally agreed. You weren't there for the meeting, but that's what <a href="https://github.com/smores56/proposed-roc-pipeline">I wrote in Rust</a> for the post-typechecking part of the compiler: a set of IRs for each of the stages. By next Saturday, my hope is to have the IRs for all of the stages of the compiler (not just the build part like before) translated to Zig so we can collaborate on it and agree what this all should look like.</p>
+
+
+
+<a name="497177593"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177593" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177593">(Feb 01 2025 at 16:24)</a>:</h4>
+<p>If anyone wants to work on that on their own in parallel, go for it, it's valuable to have different people try to come up with these IRs separately so we can see what the good ideas we agree on are.</p>
+
+
+
+<a name="497177636"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177636" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177636">(Feb 01 2025 at 16:24)</a>:</h4>
+<p>So in my mind the two most important pieces outside of correctness are making the IR and passes have a CPU/memory friendly core along with making splits in places that will help enabe improvements in the future (parallelism, caching, etc).</p>
+
+
+
+<a name="497177667"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177667" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177667">(Feb 01 2025 at 16:25)</a>:</h4>
+<p>that's almost exactly what I advocated for in the meeting <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<a name="497177677"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177677" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177677">(Feb 01 2025 at 16:25)</a>:</h4>
+<p>focus on the boundaries</p>
+
+
+
+<a name="497177687"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177687" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177687">(Feb 01 2025 at 16:25)</a>:</h4>
+<p>and dependencies</p>
+
+
+
+<a name="497177812"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177812" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177812">(Feb 01 2025 at 16:27)</a>:</h4>
+<p>Yeah, I guess I just add on top CPU/memory friendly core design.</p>
+<p>Then all the correctness, debugability simplicity,, etc without too much concern for the rest of the performance.</p>
+
+
+
+<a name="497177832"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497177832" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497177832">(Feb 01 2025 at 16:27)</a>:</h4>
+<p>But yeah making good bones first.</p>
+
+
+
+<a name="497211406"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/approach%20to%20optimization/near/497211406" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/approach.20to.20optimization.html#497211406">(Feb 02 2025 at 00:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/316715-contributing/topic/approach.20to.20optimization/near/497173768">said</a>:</p>
+<blockquote>
+<ul>
+<li>There may be some things that are quick and don't really affect debugging, such as storing some info in a few bits of identifiers. </li>
+</ul>
+</blockquote>
+<p>Yeah, I think this can even help debugging because you can gather more information from just the value without having to look it up in a side table. For Purity Inference, I reserved one bit of <code>Symbol</code>s as a <code>!</code>-prefixed flag and it greatly simplified the implementation overall.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

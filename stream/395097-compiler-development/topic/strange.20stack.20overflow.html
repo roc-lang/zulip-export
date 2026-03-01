@@ -1,0 +1,363 @@
+<html>
+<head><meta charset="utf-8"><title>strange stack overflow · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html">strange stack overflow</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="407022852"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407022852" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407022852">(Dec 10 2023 at 07:43)</a>:</h4>
+<p>So I have a benchmark program that stack overflows and is really confusing me. I think it is an llvm codegen bug, but I am not fully sure.</p>
+<p>I don't have a minimized example yet, but this example is not that big: <a href="https://github.com/bhansconnect/roc-dict-bench/blob/main/random-find-u64.roc">https://github.com/bhansconnect/roc-dict-bench/blob/main/random-find-u64.roc</a></p>
+<p>Run as:</p>
+<div class="codehilite"><pre><span></span><code>roc build --optimize --profiling random-find-u64.roc --linker=legacy
+./random-find-u64 500000 1000
+</code></pre></div>
+<p>It will segfault. If run with <code>valgrind</code>, it will comment that the segfault was due to accessing byte off the end of the stack due to a stack overflow.</p>
+<p>If run with a debugger, the stack trace is never deep. So we aren't generating a giant chain of calls leading to a stack overflow. That said, if you every few seconds interupt the app with <code>ctrl + c</code> then print the stack pointer <code>p $sp</code> or <code>p $rsp</code> depending on arch. With each print, the stack pointer will get lower and lower. So the stack keeps growing.</p>
+<p>My guess is that somehow our joinpoint loop is leaking stack. So each iteration the stack is a bit larger even though we are in a tail recursive function taht shouldn't grow the stack at all.</p>
+<p>I think there is a good chance that this is related to the bug mentioned here: <a href="#narrow/stream/358903-Advent-of-Code/topic/2023.20Day.202/near/406983404">https://roc.zulipchat.com/#narrow/stream/358903-Advent-of-Code/topic/2023.20Day.202/near/406983404</a></p>
+<p>Somehow our joinpoints aren't clean in relation to variables being loading and stored to the stack. This can lead to mutation or stack overflow despite having tail recursion and joinpoints.</p>
+<p>That is my guess, but I am having quite a hard time debugging or verifying this. Any help would be greatly appreciated.</p>
+
+
+
+<a name="407046537"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407046537" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407046537">(Dec 10 2023 at 10:48)</a>:</h4>
+<p>Ah, some alloca that is not put in the initial basic block?</p>
+
+
+
+<a name="407046556"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407046556" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407046556">(Dec 10 2023 at 10:48)</a>:</h4>
+<p>We've had that before</p>
+
+
+
+<a name="407069177"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407069177" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407069177">(Dec 10 2023 at 13:32)</a>:</h4>
+<p>yeah, I suspect this is the problem</p>
+<div class="codehilite" data-code-language="LLVM"><pre><span></span><code><span class="nl">then_block14:</span><span class="w">                                     </span><span class="c">; preds = %Num_add_30b4e3263e25f386953934b64a917c5af1369696c8155e3052c6ba1bb8ddcba7.exit57</span>
+<span class="w">  </span><span class="nv">%struct_alloca</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="k">alloca</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="kt">i32</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="k">align</span><span class="w"> </span><span class="m">8</span><span class="p">,</span><span class="w"> </span><span class="nv">!dbg</span><span class="w"> </span><span class="nv nv-Anonymous">!753</span>
+<span class="w">  </span><span class="k">store</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="kt">i64</span><span class="p">,</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="p">},</span><span class="w"> </span><span class="kt">i32</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="nv">%insert_record_field16</span><span class="p">,</span><span class="w"> </span><span class="kt">ptr</span><span class="w"> </span><span class="nv">%struct_alloca</span><span class="p">,</span><span class="w"> </span><span class="k">align</span><span class="w"> </span><span class="m">8</span><span class="p">,</span><span class="w"> </span><span class="nv">!dbg</span><span class="w"> </span><span class="nv nv-Anonymous">!753</span>
+<span class="w">  </span><span class="k">br</span><span class="w"> </span><span class="kt">label</span><span class="w"> </span><span class="nv">%joinpointcont10</span><span class="p">,</span><span class="w"> </span><span class="nv">!dbg</span><span class="w"> </span><span class="nv nv-Anonymous">!753</span>
+</code></pre></div>
+
+
+
+<a name="407069710"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407069710" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407069710">(Dec 10 2023 at 13:39)</a>:</h4>
+<p>lol</p>
+<div class="codehilite" data-code-language="LLVM"><pre><span></span><code><span class="c">; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)</span>
+<span class="k">define</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="vg">@roc__mainForHost_1_exposed_generic</span><span class="p">(</span><span class="kt">ptr</span><span class="w"> </span><span class="k">nocapture</span><span class="w"> </span><span class="k">readnone</span><span class="w"> </span><span class="nv nv-Anonymous">%0</span><span class="p">)</span><span class="w"> </span><span class="k">local_unnamed_addr</span><span class="w"> </span><span class="vg">#10</span><span class="w"> </span><span class="nv">!dbg</span><span class="w"> </span><span class="nv nv-Anonymous">!105</span><span class="w"> </span><span class="p">{</span>
+<span class="nl">entry:</span>
+<span class="w">  </span><span class="k">ret</span><span class="w"> </span><span class="k">void</span><span class="p">,</span><span class="w"> </span><span class="nv">!dbg</span><span class="w"> </span><span class="nv nv-Anonymous">!110</span>
+<span class="p">}</span>
+
+<span class="c">; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)</span>
+<span class="k">define</span><span class="w"> </span><span class="k">void</span><span class="w"> </span><span class="vg">@roc__mainForHost_1_exposed</span><span class="p">()</span><span class="w"> </span><span class="k">local_unnamed_addr</span><span class="w"> </span><span class="vg">#10</span><span class="w"> </span><span class="nv">!dbg</span><span class="w"> </span><span class="nv nv-Anonymous">!112</span><span class="w"> </span><span class="p">{</span>
+<span class="nl">entry:</span>
+<span class="w">  </span><span class="k">ret</span><span class="w"> </span><span class="k">void</span><span class="p">,</span><span class="w"> </span><span class="nv">!dbg</span><span class="w"> </span><span class="nv nv-Anonymous">!113</span>
+<span class="p">}</span>
+
+<span class="c">; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)</span>
+<span class="k">define</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="vg">@roc__mainForHost_1_exposed_size</span><span class="p">()</span><span class="w"> </span><span class="k">local_unnamed_addr</span><span class="w"> </span><span class="vg">#10</span><span class="w"> </span><span class="nv">!dbg</span><span class="w"> </span><span class="nv nv-Anonymous">!115</span><span class="w"> </span><span class="p">{</span>
+<span class="nl">entry:</span>
+<span class="w">  </span><span class="k">ret</span><span class="w"> </span><span class="kt">i64</span><span class="w"> </span><span class="m">0</span><span class="p">,</span><span class="w"> </span><span class="nv">!dbg</span><span class="w"> </span><span class="nv nv-Anonymous">!116</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="407083639"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407083639" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407083639">(Dec 10 2023 at 16:18)</a>:</h4>
+<p>Ah, when we have join's we have to also reuse allocas to avoid eating stack space.</p>
+
+
+
+<a name="407086229"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407086229" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407086229">(Dec 10 2023 at 16:59)</a>:</h4>
+<p>yeah, but if you do that here you get a very odd program with just tons of allocas</p>
+
+
+
+<a name="407087272"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407087272" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407087272">(Dec 10 2023 at 17:12)</a>:</h4>
+<p>Why would you have more allocas? I'm just saying if the join point arg is already an alloca, reuse the alloca. So track when creating a join point generate all allocas right before the join point instead of in each branch jumping into the alloca</p>
+
+
+
+<a name="407100338"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407100338" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407100338">(Dec 10 2023 at 19:56)</a>:</h4>
+<p>I meant this as an observation. e.g. for your <code>Bug.roc</code> program from that example,  I get</p>
+<div class="codehilite"><pre><span></span><code>  %incrementing_element_loop_load.i300 = alloca %str.RocStr, align 8, !dbg !159
+  %incrementing_element_loop_load.i277 = alloca %str.RocStr, align 8, !dbg !189
+  %incrementing_element_loop_load.i254 = alloca %str.RocStr, align 8, !dbg !193
+  %incrementing_element_loop_load.i231 = alloca %str.RocStr, align 8, !dbg !197
+  %incrementing_element_loop_load.i213 = alloca %str.RocStr, align 8, !dbg !199
+  %str_alloca.i.i18.i.i.i = alloca %str.RocStr, align 8
+  %result_value.i9.i.i.i = alloca %str.RocStr, align 8
+  %const_str_store2.i.i.i = alloca %str.RocStr, align 8
+  %result_value1.i.i.i = alloca %str.RocStr, align 8
+  %result_value.i.i9.i = alloca %str.RocStr, align 8
+  %const_str_store.i.i.i = alloca %str.RocStr, align 8
+  %result_value1.i211 = alloca %str.RocStr, align 8, !dbg !249
+  %result_value.i212 = alloca %str.RocStr, align 8, !dbg !249
+  %const_str_store.i = alloca %str.RocStr, align 8, !dbg !249
+  %struct_field.i = alloca %str.RocStr, align 8, !dbg !249
+  %incrementing_element_loop_load.i188 = alloca %str.RocStr, align 8, !dbg !253
+  %incrementing_element_loop_load.i = alloca %str.RocStr, align 8, !dbg !258
+  %element_to_pass_as_opaque.i.i = alloca %str.RocStr, align 8, !dbg !260
+  %str_alloca.i.i19.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8
+  %str_alloca.i.i8.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8
+  %result_value.i9.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8
+  %str_alloca.i.i.i.i.i.i.i.i.i.i.i.i.i154 = alloca %str.RocStr, align 8
+  %result_value.i.i.i.i.i.i.i.i.i.i.i.i155 = alloca %str.RocStr, align 8
+  %const_str_store2.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8
+  %result_value1.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8
+  %result_value.i.i.i.i.i.i.i.i.i.i.i156 = alloca %str.RocStr, align 8
+  %const_str_store.i.i.i.i.i.i.i.i.i.i.i157 = alloca %str.RocStr, align 8
+  %result_value.i.i.i.i.i.i.i.i.i162 = alloca %str.RocStr, align 8, !dbg !267
+  %const_str_store.i.i.i.i.i.i.i.i.i163 = alloca %str.RocStr, align 8, !dbg !267
+  %struct_field.i.i.i.i.i.i.i.i.i164 = alloca %str.RocStr, align 8, !dbg !267
+  %result_value.i.i.i.i.i.i.i.i166 = alloca %str.RocStr, align 8, !dbg !271
+  %str_alloca.i.i.i.i.i.i.i167 = alloca %str.RocStr, align 8
+  %const_str_store2.i.i.i.i.i170 = alloca %str.RocStr, align 8
+  %result_value1.i.i.i.i.i171 = alloca %str.RocStr, align 8
+  %const_str_store.i.i.i.i.i173 = alloca %str.RocStr, align 8
+  %struct_field1.i.i.i = alloca %str.RocStr, align 8, !dbg !272
+  %result_value.i3.i.i177 = alloca %str.RocStr, align 8, !dbg !272
+  %struct_field.i.i.i178 = alloca %str.RocStr, align 8, !dbg !272
+  %result_value1.i.i181 = alloca %str.RocStr, align 8
+  %result_value.i.i182 = alloca { %str.RocStr, %str.RocStr }, align 8
+  %list_alloca.i133 = alloca %list.RocList, align 8
+  %list_alloca.i = alloca %list.RocList, align 8
+  %str_alloca.i.i10.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8
+  %result_value.i.i.i.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !273
+  %str_alloca.i.i.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8
+  %const_str_store4.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !274
+  %result_value3.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !274
+  %const_str_store.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !274
+  %str_alloca.i.i20.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8
+  %result_value.i10.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8
+  %const_str_store3.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !275
+  %result_value2.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !275
+  %result_value.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !275
+  %const_str_store.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !275
+  %load_element.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !275
+  %result_value.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !279
+  %const_str_store.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !279
+  %struct_field.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !279
+  %result_value.i.i.i.i.i.i.i.i = alloca { [0 x i64], [3 x i64], i8, [7 x i8] }, align 8, !dbg !280
+  %str_alloca.i.i.i.i.i.i.i = alloca %str.RocStr, align 8
+  %const_str_store2.i.i.i.i.i = alloca %str.RocStr, align 8
+  %result_value1.i.i.i.i.i = alloca %str.RocStr, align 8
+  %const_str_store.i.i.i.i.i = alloca %str.RocStr, align 8
+  %struct_field.i.i.i = alloca %str.RocStr, align 8, !dbg !281
+  %result_value1.i.i = alloca %str.RocStr, align 8
+  %result_value21 = alloca %str.RocStr, align 8, !dbg !282
+  %result_value15 = alloca %str.RocStr, align 8, !dbg !282
+  %const_str_store = alloca %str.RocStr, align 8, !dbg !282
+  %result_value14 = alloca %str.RocStr, align 8, !dbg !282
+  %result_value8 = alloca %str.RocStr, align 8, !dbg !282
+  %result_value = alloca %str.RocStr, align 8, !dbg !282
+</code></pre></div>
+
+
+
+<a name="407100386"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407100386" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407100386">(Dec 10 2023 at 19:57)</a>:</h4>
+<p>we should not need this number of allocas for that example, really</p>
+
+
+
+<a name="407100433"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407100433" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407100433">(Dec 10 2023 at 19:57)</a>:</h4>
+<p>Ah</p>
+
+
+
+<a name="407102394"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407102394" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407102394">(Dec 10 2023 at 20:11)</a>:</h4>
+<p>this problem is much worse with <code>dbg</code>s</p>
+
+
+
+<a name="407103019"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407103019" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407103019">(Dec 10 2023 at 20:16)</a>:</h4>
+<p>Can we tell llvm to free allocas? Like make it so that at the jump we clear all allocas and only keep more global things?</p>
+
+
+
+<a name="407103052"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407103052" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407103052">(Dec 10 2023 at 20:17)</a>:</h4>
+<p>Cause even if we make too many allocas, they should be cheap if we don't stack overflow</p>
+
+
+
+<a name="407103081"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407103081" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407103081">(Dec 10 2023 at 20:17)</a>:</h4>
+<p>Feels like a lifetime issue of locals living too long</p>
+
+
+
+<a name="407103229"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407103229" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407103229">(Dec 10 2023 at 20:18)</a>:</h4>
+<p>Aside, have you seen: <a href="https://github.com/roc-lang/roc/issues/6139">https://github.com/roc-lang/roc/issues/6139</a></p>
+<p>It feels related. Allocas and bad lifetime assumptions leading to overwriting data</p>
+
+
+
+<a name="407109900"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407109900" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407109900">(Dec 10 2023 at 21:35)</a>:</h4>
+<p>yes these all seem related</p>
+
+
+
+<a name="407112127"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407112127" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407112127">(Dec 10 2023 at 22:03)</a>:</h4>
+<p>So, may not be the right solution in this case, but <a href="https://llvm.org/docs/LangRef.html#llvm-stacksave-intrinsic">llvm.stacksave</a> and <a href="https://llvm.org/docs/LangRef.html#llvm-stackrestore-intrinsic">llvm.stackrestore</a> may be what we need.</p>
+<p>The idea would be:</p>
+<ol>
+<li>All joinpoint args are stored either by value or in allocas that are defined before the joinpoint.</li>
+<li>At the start of the joined code, we <code>llvm.stacksave</code></li>
+<li>We use allocas in the function and locally define as normal.</li>
+<li>All final values for the joinpoint are copied into the allocas defined above the joinpoint</li>
+<li>We <code>llvm.stackrestore</code>.</li>
+<li>We jump to the joinpoint.</li>
+</ol>
+
+
+
+<a name="407112219"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407112219" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407112219">(Dec 10 2023 at 22:05)</a>:</h4>
+<p>stack save and restore just save and restore the stack pointer. They don't do anything fancy.</p>
+
+
+
+<a name="407117553"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117553" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117553">(Dec 10 2023 at 23:26)</a>:</h4>
+<p>well if you do the copying anyway, you can just define all of the allocas in the entry block</p>
+
+
+
+<a name="407117570"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117570" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117570">(Dec 10 2023 at 23:27)</a>:</h4>
+<p>there is no reason to define them locally. But in the example case we'd need an extra alloca to keep both the old and new value alive till the jump</p>
+
+
+
+<a name="407117616"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117616" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117616">(Dec 10 2023 at 23:27)</a>:</h4>
+<p>Just define the allocas for the join point args in the entry. Not all allocas</p>
+
+
+
+<a name="407117698"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117698" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117698">(Dec 10 2023 at 23:28)</a>:</h4>
+<p>why not?</p>
+
+
+
+<a name="407117721"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117721" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117721">(Dec 10 2023 at 23:29)</a>:</h4>
+<p>if you define any allocas in the loop you grow the stack. There is no need to define them at the use site, you can have them predefined in the entry block</p>
+
+
+
+<a name="407117729"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117729" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117729">(Dec 10 2023 at 23:29)</a>:</h4>
+<p>Nested joinpoints and functions that aren't inlined yet.</p>
+
+
+
+<a name="407117800"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117800" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117800">(Dec 10 2023 at 23:30)</a>:</h4>
+<p>Wouldn't that mess up the allocas that need to be defined in the entry block to avoid stack growth?</p>
+
+
+
+<a name="407117818"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117818" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117818">(Dec 10 2023 at 23:30)</a>:</h4>
+<p>I don't think nested join points are a problem if you define in the entry block. I believe llvm is smart about floating allocas when inlining</p>
+
+
+
+<a name="407117822"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117822" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117822">(Dec 10 2023 at 23:30)</a>:</h4>
+<p>Cause theoretically in the nested case all need to defined before the first joinpoint</p>
+
+
+
+<a name="407117835"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117835" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117835">(Dec 10 2023 at 23:31)</a>:</h4>
+<p>Oh, llvm will fix. Cool</p>
+
+
+
+<a name="407117856"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117856" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117856">(Dec 10 2023 at 23:31)</a>:</h4>
+<p>that has been my experience if the allocas are in the entry point</p>
+
+
+
+<a name="407117867"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117867" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117867">(Dec 10 2023 at 23:31)</a>:</h4>
+<p>that is nicer than doing stack save and restore</p>
+
+
+
+<a name="407117877"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117877" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117877">(Dec 10 2023 at 23:31)</a>:</h4>
+<p>we'll need to validate that properly now though. Certainly if you define the alloca in a weird place LLVM will not float it. So in that case inlining can cause stack overflows</p>
+
+
+
+<a name="407117932"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117932" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117932">(Dec 10 2023 at 23:32)</a>:</h4>
+<p>hmm actually I may have run into that in rust</p>
+
+
+
+<a name="407117947"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117947" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117947">(Dec 10 2023 at 23:32)</a>:</h4>
+<p>yeah I'd rather not mess with the stack pointer manually</p>
+
+
+
+<a name="407117952"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407117952" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407117952">(Dec 10 2023 at 23:32)</a>:</h4>
+<p>Fair</p>
+
+
+
+<a name="407118006"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407118006" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407118006">(Dec 10 2023 at 23:33)</a>:</h4>
+<p>Ok. So I guess goal one would be hoist alloca out of joinpoints and ensure uniqueness of joinpoint args so they don't get accidentally overwritten?</p>
+
+
+
+<a name="407128968"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407128968" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407128968">(Dec 11 2023 at 01:34)</a>:</h4>
+<p><span class="user-mention" data-user-id="281543">@Folkert de Vries</span> just curious, is this something you will have time to look at and hopefully fix?</p>
+
+
+
+<a name="407187067"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407187067" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407187067">(Dec 11 2023 at 08:16)</a>:</h4>
+<p>yeah, I've done some investigation but no clear solution presented itself so far. I think it's a bunch of issues combining into one</p>
+
+
+
+<a name="407187117"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/strange%20stack%20overflow/near/407187117" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/strange.20stack.20overflow.html#407187117">(Dec 11 2023 at 08:17)</a>:</h4>
+<p>we also just have some allocas that happen in the non-entry block which should be lifted to the entry block</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

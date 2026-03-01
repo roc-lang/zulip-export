@@ -1,0 +1,475 @@
+<html>
+<head><meta charset="utf-8"><title>non-nullable unwrapped closures · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html">non-nullable unwrapped closures</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="344983279"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/344983279" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#344983279">(Mar 27 2023 at 23:02)</a>:</h4>
+<p>So apparently closures can be recursive and their own base case, as long as "something else" evaluates whether it's satisfied the base case or not. This is from Nick's example in <a class="stream-topic" data-stream-id="231634" href="/#narrow/stream/231634-beginners/topic/recursive.20closures">#beginners &gt; recursive closures</a> </p>
+<div class="codehilite"><pre><span></span><code>interface A exposes [recurTest] imports []
+
+const = \val -&gt;
+    const1 = \{} -&gt; Ok val
+    const1
+
+map = \parser, f -&gt;
+    iMap = \input -&gt;
+        when parser input is
+            Ok a -&gt; Ok (f a)
+            Err  -&gt; Err
+    iMap
+
+orElse = \parser1, parser2 -&gt;
+    iOrElse = \input -&gt;
+        when parser1 input is
+            Ok a -&gt; Ok a
+            Err  -&gt; parser2 input
+    iOrElse
+
+two = const 2u8
+
+recurTest = two |&gt; map List.single |&gt; orElse recurTest
+
+main =
+    when recurTest {} is
+        Ok n -&gt; n == [1u8, 2u8]
+        Err -&gt; Bool.false
+
+expect main
+</code></pre></div>
+
+
+
+<a name="344983435"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/344983435" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#344983435">(Mar 27 2023 at 23:03)</a>:</h4>
+<p>We can generate the layout okay, that's all good. The problem is how we generate the reference to <code>recurTest</code> in the <code>orElse</code> call</p>
+<div class="codehilite"><pre><span></span><code>procedure : `A.recurTest` [&lt;rnnu&gt;C *self {U8, {}}]
+procedure = `A.recurTest` ():
+    let `A.49` : U8 = CallByName `A.two`;
+    let `A.50` : {} = Struct {};
+    let `A.39` : {U8, {}} = CallByName `A.map` `A.49` `A.50`;
+    let `A.40` : [&lt;rnnu&gt;C *self {U8, {}}] = CallByName `A.recurTest`;
+    let `A.38` : [&lt;rnnu&gt;C *self {U8, {}}] = CallByName `A.orElse` `A.39` `A.40`;
+    ret `A.38`;
+</code></pre></div>
+<p>we unconditionally generate the lambda set for <code>recurTest</code> before we call <code>orElse</code>, since the language is eager. But of course this causes a stackoverflow</p>
+
+
+
+<a name="344983569"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/344983569" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#344983569">(Mar 27 2023 at 23:04)</a>:</h4>
+<p>On the one hand this is programmer error because, what else could we do? The language is eager</p>
+
+
+
+<a name="344983917"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/344983917" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#344983917">(Mar 27 2023 at 23:07)</a>:</h4>
+<p>on the other hand, the only reason this happens is because <code>recurTest</code> is defunctionalized, and so isn't entirely hidden behind the <code>\{} -&gt; </code> - and the only way to understand that is to understand the compilation model of lambda sets</p>
+
+
+
+<a name="344984317"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/344984317" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#344984317">(Mar 27 2023 at 23:10)</a>:</h4>
+<p>It's not clear to me how we (1) detect this a-priori or (2) how to compile it differently so that the construction of the recursive part of the lambda set is actually hidden behind an explicit forcing of the <code>recurTest</code> thunk. Like ideally it would be</p>
+<div class="codehilite"><pre><span></span><code>procedure : `A.getRecurTest` {}
+procedure = `A.getRecurTest ` ():
+  ret {}
+
+procedure : `A.recurTest` [&lt;rnnu&gt;C *self {U8, {}}]
+procedure = `A.recurTest` ():
+    let `A.49` : U8 = CallByName `A.two`;
+    let `A.50` : {} = Struct {};
+    let `A.39` : {U8, {}} = CallByName `A.map` `A.49` `A.50`;
+    let `A.40` : {} = CallByName `A.getRecurTest `;
+    let `A.38` : [&lt;rnnu&gt;C *self {U8, {}}] = CallByName `A.orElse` `A.39` `A.40`;
+    ret `A.38`;
+</code></pre></div>
+<p>but I'm not sure how we get here</p>
+
+
+
+<a name="345014846"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/345014846" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#345014846">(Mar 28 2023 at 03:12)</a>:</h4>
+<p>what if we said you can only recurse with an explicit lambda?</p>
+
+
+
+<a name="345014878"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/345014878" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#345014878">(Mar 28 2023 at 03:13)</a>:</h4>
+<p>e.g. you can write <code>x = \anything -&gt; # goes on to reference x</code> but not <code>x = # not a lambda, goes on to reference x</code></p>
+
+
+
+<a name="345014901"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/345014901" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#345014901">(Mar 28 2023 at 03:13)</a>:</h4>
+<p>we can detect that problem during canonicalization</p>
+
+
+
+<a name="345014970"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/345014970" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#345014970">(Mar 28 2023 at 03:14)</a>:</h4>
+<p>so turn it into an error before lambda sets get involved in the first place</p>
+
+
+
+<a name="345015976"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/345015976" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#345015976">(Mar 28 2023 at 03:26)</a>:</h4>
+<p>That doesn’t resolve the problem. If you wrap “recurseTest” in a thunk (“recurseTest = \{} -&gt; …”) the issue persists</p>
+
+
+
+<a name="345016024"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/345016024" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#345016024">(Mar 28 2023 at 03:27)</a>:</h4>
+<p>the reason being, the lambda set is the same under the thunk</p>
+
+
+
+<a name="348835096"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/348835096" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#348835096">(Apr 12 2023 at 21:20)</a>:</h4>
+<p>Found another instance of this: <a href="https://github.com/roc-lang/roc/issues/4725">https://github.com/roc-lang/roc/issues/4725</a>. The problem is the same.</p>
+
+
+
+<a name="348835156"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/348835156" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#348835156">(Apr 12 2023 at 21:21)</a>:</h4>
+<p>Note that the issue is a type checker bug, but after the type checker bug is resolved, the program runs into the above problem.</p>
+
+
+
+<a name="376829515"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376829515" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376829515">(Jul 20 2023 at 02:19)</a>:</h4>
+<p>Can somebody please move this thread to <a class="stream" data-stream-id="395097" href="/#narrow/stream/395097-compiler-development-.28public.29">#compiler development (public)</a> ?</p>
+
+
+
+<a name="376925068"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376925068" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376925068">(Jul 20 2023 at 10:31)</a>:</h4>
+<p>sure, done!</p>
+
+
+
+<a name="376983257"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376983257" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376983257">(Jul 20 2023 at 13:41)</a>:</h4>
+<p>Thanks</p>
+
+
+
+<a name="376983465"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376983465" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376983465">(Jul 20 2023 at 13:42)</a>:</h4>
+<p>We need to figure out how to solve this. I know Brendan ran into it trying effect interpreters in pure roc and <a class="stream-topic" data-stream-id="231634" href="/#narrow/stream/231634-beginners/topic/Compiler.20stack.20overflow.20on.20recursive.20parser">#beginners &gt; Compiler stack overflow on recursive parser</a> has the same thing</p>
+
+
+
+<a name="376983625"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376983625" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376983625">(Jul 20 2023 at 13:42)</a>:</h4>
+<p>I don't really know what to do. We need to force evaluation of these kinds of lambda sets as thunks rather than constructing them eagerly. But how we get there is totally unclear to me.</p>
+
+
+
+<a name="376985054"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376985054" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376985054">(Jul 20 2023 at 13:47)</a>:</h4>
+<p>so regarding how to detect this scenario: can it be detected using dependencies between identifiers, e.g. using the dependency graph we build in canonicalization?</p>
+
+
+
+<a name="376986166"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376986166" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376986166">(Jul 20 2023 at 13:50)</a>:</h4>
+<p>and follow up idea: if we can detect it prior to mono, we can insert a canonical IR wrapper node that explicitly forces the thunk</p>
+
+
+
+<a name="376987428"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376987428" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376987428">(Jul 20 2023 at 13:54)</a>:</h4>
+<p>I don't think so. It's only applicable to these lambda sets that are self-recursive and have only one constructor. I don't see how we can detect that before inference</p>
+
+
+
+<a name="376987684"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376987684" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376987684">(Jul 20 2023 at 13:55)</a>:</h4>
+<p>now, maybe we could inject a wrapper after inference, or during mono. but how exactly do we do that? it's not clear to me. we need to propogate all the information somehow, and that piece is unclear to me</p>
+
+
+
+<a name="376988541"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376988541" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376988541">(Jul 20 2023 at 13:58)</a>:</h4>
+<p>we could always add the wrapper during canonicalization, but put a Variable on it to detect whether forcing is needed later during mono</p>
+
+
+
+<a name="376988584"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376988584" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376988584">(Jul 20 2023 at 13:58)</a>:</h4>
+<p>so if it turns out it wasn't needed, we just make it be a no op in mono</p>
+
+
+
+<a name="376988766"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376988766" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376988766">(Jul 20 2023 at 13:59)</a>:</h4>
+<p>Maybe I'm not following but then I think we have the inverse problem of having to propogate information that the wrapper should be removed</p>
+
+
+
+<a name="376989587"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376989587" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376989587">(Jul 20 2023 at 14:02)</a>:</h4>
+<p>I may have misunderstood the comment about earlier about getting the layout being not a problem</p>
+
+
+
+<a name="376993282"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376993282" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376993282">(Jul 20 2023 at 14:11)</a>:</h4>
+<p>so I'm assuming that if we have a variant like <code>Expr::MaybeForceBecauseRecursive(Variable, Expr)</code> and that Variable is Equal (from a constraint perspective) to the Variable for the top level value that we might need to force, then later on after that variable has been solved, we know whether it's applicable or not</p>
+
+
+
+<a name="376993942"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376993942" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376993942">(Jul 20 2023 at 14:13)</a>:</h4>
+<p>so the <code>Expr::MaybeForce</code> gets added during canonicalization because it looks like we <em>might</em> have this scenario, then solving tells us the rest of the info about whether we're actually in this scenario, and then when mono encounters this expr it has all the info needed to determine whether to generate a force</p>
+
+
+
+<a name="376994696"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376994696" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376994696">(Jul 20 2023 at 14:15)</a>:</h4>
+<p>How do you decide whether that Expr should be created?</p>
+
+
+
+<a name="376995311"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376995311" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376995311">(Jul 20 2023 at 14:17)</a>:</h4>
+<p>if it looks like a recursive call - so the easy case would be if it's a call to a symbol that we're in the process of being declared, but if I remember right, I think we already have some dependency graph stuff in there to detect less direct recursion than that</p>
+
+
+
+<a name="376996681"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376996681" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376996681">(Jul 20 2023 at 14:21)</a>:</h4>
+<p>there is no syntactically recursive function in the program <a href="#narrow/stream/395097-compiler-development-.28public.29/topic/non-nullable.20unwrapped.20closures/near/344983279">https://roc.zulipchat.com/#narrow/stream/395097-compiler-development-.28public.29/topic/non-nullable.20unwrapped.20closures/near/344983279</a> though</p>
+
+
+
+<a name="376997145"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376997145" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376997145">(Jul 20 2023 at 14:22)</a>:</h4>
+<p>sorry, those links don't work on mobile for some reason (I'm at the pediatrician) - what's that link go to? <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="376997585"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376997585" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376997585">(Jul 20 2023 at 14:24)</a>:</h4>
+<p>the first message in the thread</p>
+
+
+
+<a name="376997863"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376997863" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376997863">(Jul 20 2023 at 14:24)</a>:</h4>
+<p>ah I see - maybe syntactic self-reference then?</p>
+
+
+
+<a name="376997968"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376997968" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376997968">(Jul 20 2023 at 14:25)</a>:</h4>
+<p>like it doesn't call itself, but its definition refers to itself</p>
+
+
+
+<a name="376998570"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376998570" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376998570">(Jul 20 2023 at 14:27)</a>:</h4>
+<p>but the self-reference is not a function</p>
+
+
+
+<a name="376998658"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376998658" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376998658">(Jul 20 2023 at 14:27)</a>:</h4>
+<p><code>iOrElse</code> is where you'd want to perform the transformation</p>
+
+
+
+<a name="376998864"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/376998864" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#376998864">(Jul 20 2023 at 14:27)</a>:</h4>
+<p>ahh right</p>
+
+
+
+<a name="377000286"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377000286" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377000286">(Jul 20 2023 at 14:30)</a>:</h4>
+<p>I'm not sure if this could help, but it came to mind: we've talked before about doing compile time evaluation of top level expressions</p>
+
+
+
+<a name="377000314"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377000314" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377000314">(Jul 20 2023 at 14:31)</a>:</h4>
+<p>could that help here?</p>
+
+
+
+<a name="377006315"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377006315" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377006315">(Jul 20 2023 at 14:43)</a>:</h4>
+<p>actually - working backwards, I think what we want is a different specialization of <code>iOrElse</code>, right? Like we want it to force (or not) depending on what it's passed?</p>
+
+
+
+<a name="377006613"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377006613" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377006613">(Jul 20 2023 at 14:43)</a>:</h4>
+<p>which would generally mean we want multiple different specializations of it, I'd assume</p>
+
+
+
+<a name="377006775"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377006775" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377006775">(Jul 20 2023 at 14:44)</a>:</h4>
+<p>yes</p>
+
+
+
+<a name="377008507"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377008507" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377008507">(Jul 20 2023 at 14:47)</a>:</h4>
+<p>ok, so if that's the case, then it seems like the propagation mechanicsm would be type unification, yeah?</p>
+
+
+
+<a name="377008648"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377008648" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377008648">(Jul 20 2023 at 14:48)</a>:</h4>
+<p>or at least that seems like the most natural fit</p>
+
+
+
+<a name="377011145"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377011145" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377011145">(Jul 20 2023 at 14:54)</a>:</h4>
+<p>like for example maybe we do the syntax detection, insert the <code>Expr</code> node around <code>recurTest</code>, and then during constraint gen (and/or mono?), when we see that Expr node, we can take steps to propagate some extra type information from that <code>recurTest</code> argument into <code>orElse</code> at the call site, and then from there into <code>iOrElse</code></p>
+
+
+
+<a name="377011377"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377011377" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377011377">(Jul 20 2023 at 14:54)</a>:</h4>
+<p>but a different call site could specialize differently, so I guess it would have to be a mono thing and not a constraint gen thing?</p>
+
+
+
+<a name="377017154"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377017154" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377017154">(Jul 20 2023 at 15:09)</a>:</h4>
+<p>Yeah, the mechanics here are what I don't think is straightforward. Like, how do we go from a syntactic detection on <code>recurTest</code> to seeing that <code>iOrElse</code> needs to be fixed? And how do you actually update the variables based on each specialization site?</p>
+
+
+
+<a name="377017633"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377017633" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377017633">(Jul 20 2023 at 15:10)</a>:</h4>
+<p>It might be doable in principle but in practice it seems very difficult</p>
+
+
+
+<a name="377017847"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/377017847" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#377017847">(Jul 20 2023 at 15:11)</a>:</h4>
+<p>i feel like we should try to find the simplest possible implementation, and all the ideas so far feel very complicated. on the other hand, i have no good ideas for a simple implementation</p>
+
+
+
+<a name="397863439"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397863439" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397863439">(Oct 21 2023 at 16:55)</a>:</h4>
+<p>We need to figure out a solution to this if we want to make any headway on the "lazy function" style bugs that are popping up more frequently from users. I still don't have any good ideas. <span class="user-mention" data-user-id="281543">@Folkert de Vries</span>  do you have any thoughts?</p>
+
+
+
+<a name="397866751"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397866751" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397866751">(Oct 21 2023 at 17:46)</a>:</h4>
+<p>maybe you can check it at generalization time</p>
+
+
+
+<a name="397870156"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397870156" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397870156">(Oct 21 2023 at 18:39)</a>:</h4>
+<p><span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span> what would that look like?</p>
+
+
+
+<a name="397870354"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397870354" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397870354">(Oct 21 2023 at 18:42)</a>:</h4>
+<p>i don’t know</p>
+
+
+
+<a name="397870705"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397870705" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397870705">(Oct 21 2023 at 18:48)</a>:</h4>
+<p>should we schedule a video chat next week to brainstorm ideas?</p>
+
+
+
+<a name="397877020"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397877020" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397877020">(Oct 21 2023 at 20:51)</a>:</h4>
+<p>Sure. I’m free most times after Wednesday after <time datetime="2023-10-25T15:00:00Z">2023-10-25T11:00:00-04:00</time></p>
+
+
+
+<a name="397880249"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397880249" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397880249">(Oct 21 2023 at 22:04)</a>:</h4>
+<p>I'm also available at that time, for up to 2.5 hours. After that I'm busy for the rest of the day.</p>
+
+
+
+<a name="397881153"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397881153" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397881153">(Oct 21 2023 at 22:25)</a>:</h4>
+<p><span class="user-mention" data-user-id="281543">@Folkert de Vries</span> ? and anyone else interested</p>
+
+
+
+<a name="397881438"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397881438" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397881438">(Oct 21 2023 at 22:29)</a>:</h4>
+<p>Vaguely interested, but I'll be traveling.</p>
+
+
+
+<a name="397890870"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397890870" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397890870">(Oct 22 2023 at 01:04)</a>:</h4>
+<p>Should be able to make that.</p>
+
+
+
+<a name="397917542"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397917542" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397917542">(Oct 22 2023 at 06:52)</a>:</h4>
+<p>It’s prob gonna be way over my head, but I’d like to join if that’s ok, and maybe learn by osmosis <span aria-label="grinning" class="emoji emoji-1f600" role="img" title="grinning">:grinning:</span></p>
+
+
+
+<a name="397942075"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397942075" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397942075">(Oct 22 2023 at 12:41)</a>:</h4>
+<p>sure! ok let’s do the time i posted</p>
+
+
+
+<a name="397942088"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397942088" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397942088">(Oct 22 2023 at 12:41)</a>:</h4>
+<p>Ill send a meeting link at that time</p>
+
+
+
+<a name="397948687"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/397948687" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#397948687">(Oct 22 2023 at 14:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="454654">Ayaz Hafiz</span> <a href="#narrow/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures/near/377017847">said</a>:</p>
+<blockquote>
+<p>i feel like we should try to find the simplest possible implementation, and all the ideas so far feel very complicated. on the other hand, i have no good ideas for a simple implementation</p>
+</blockquote>
+<p>thinking ahead of what to talk about: one possible thing we could talk about is "if we assume there's no simple solution, what's a complicated solution that we can implement incrementally?" - e.g. "ok now it fixes this one situation, but not all known situations"</p>
+<p>that could (for example) get us to a point where we could fix some of the specific bugs people have been running into, potentially including recursive parsers</p>
+
+
+
+<a name="398505706"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/398505706" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#398505706">(Oct 25 2023 at 15:03)</a>:</h4>
+<p>@agus (and others, maybe) <a href="https://meet.jit.si/roc-types-bugfix-discussion">https://meet.jit.si/roc-types-bugfix-discussion</a></p>
+
+
+
+<a name="398505784"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/398505784" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#398505784">(Oct 25 2023 at 15:03)</a>:</h4>
+<p>Running a few minutes late</p>
+
+
+
+<a name="398505832"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/non-nullable%20unwrapped%20closures/near/398505832" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures.html#398505832">(Oct 25 2023 at 15:03)</a>:</h4>
+<p><span class="user-mention" data-user-id="489294">@Agus Zubiaga</span> fyi!</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

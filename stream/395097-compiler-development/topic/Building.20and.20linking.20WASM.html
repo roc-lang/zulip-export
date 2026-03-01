@@ -1,0 +1,868 @@
+<html>
+<head><meta charset="utf-8"><title>Building and linking WASM · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html">Building and linking WASM</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="436821262"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436821262" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436821262">(May 03 2024 at 05:49)</a>:</h4>
+<p>I'm trying to build a wasm host and app manually to check I really understand the process. </p>
+<p>I've been following along closely with the implementation in <code>crates/compiler/build/src/link.rs</code> specifically for <code>build_zig_host_wasm32</code> and <code>link_wasm32</code>, and experimenting with a bunch of things. </p>
+<p>I dont have an easy way to reproduce this rn, though I guess I could make a random commit if that would help. </p>
+<p>But basically I'm running the following commands, but having some issues. This is the furthest I've managed to get I think (it's hard to follow the errors and see if I'm progressing or regressing sometimes).</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code><span class="c1"># compile host into a LLVM .bc file</span>
+zig<span class="w"> </span>build-obj<span class="w"> </span>-target<span class="w"> </span>wasm32-wasi-musl<span class="w"> </span>-lc<span class="w"> </span>-rdynamic<span class="w"> </span>-femit-llvm-ir<span class="o">=</span>platform/host.bc<span class="w"> </span>host/main.zig
+
+<span class="c1"># compile app into a LLVM .ll file</span>
+roc<span class="w"> </span>build<span class="w"> </span>--no-link<span class="w"> </span>--emit-llvm-ir<span class="w"> </span>rocLovesWebAssembly.roc
+
+<span class="c1"># link together host and app</span>
+zig<span class="w"> </span>build-exe<span class="w"> </span>-target<span class="w"> </span>wasm32-wasi-musl<span class="w"> </span>-fPIC<span class="w"> </span>-fstrip<span class="w"> </span>-rdynamic<span class="w"> </span>-lc<span class="w"> </span>platform/host.bc<span class="w"> </span>rocLovesWebAssembly.ll
+</code></pre></div>
+<p>My understanding here is that we are successfuly building the <code>host.zig</code> into a LLVM bitcode <code>.bc</code> file (I'm still not 100% sure why we need to go that route, but I can't get a library or anything else working either). </p>
+<p>Roc is generating a LLVM human readable bitcode <code>.ll</code> file.</p>
+<p>When we link these together to build a <code>.wasm</code> file the implementation of symbols in compiler-rt is slightly different, and we are missing setjmp and longjmp. </p>
+<p>I am looking for any ideas why the roc generated code might be missing these, or different to zig. I'm using zig version 0.11.0 for everything. Do we include our own version of compiler-rt? playing with zig's <code>-fcompiler-rt</code> doesn't seem to make any difference. Maybe we have included those in the builtins or something? </p>
+<p>Also unsure why setjmp and longjmp are undefined. From what I can tell these should be included in musl. </p>
+<div class="codehilite"><pre><span></span><code>error: wasm-ld:
+    note: defined as (i32, i32, i32) -&gt; i32 in /Users/luke/.cache/zig/o/e1ad72288e7681c39fb42e87c2506cfb/libcompiler_rt.a(/Users/luke/.cache/zig/o/e1ad72288e7681c39fb42e87c2506cfb/libcompiler_rt.a.o)
+    note: defined as (i32, i32, i64) -&gt; i32 in /Users/luke/.cache/zig/o/8e32b79d2f74ce8703ec76103c3fa0de/rocLovesWebAssembly.o
+error: wasm-ld:
+    note: defined as (i32, i32, i32) -&gt; i32 in /Users/luke/.cache/zig/o/e1ad72288e7681c39fb42e87c2506cfb/libcompiler_rt.a(/Users/luke/.cache/zig/o/e1ad72288e7681c39fb42e87c2506cfb/libcompiler_rt.a.o)
+    note: defined as (i32, i32, i64) -&gt; i32 in /Users/luke/.cache/zig/o/8e32b79d2f74ce8703ec76103c3fa0de/rocLovesWebAssembly.o
+error: wasm-ld: /Users/luke/.cache/zig/o/8e32b79d2f74ce8703ec76103c3fa0de/rocLovesWebAssembly.o: undefined symbol: setjmp
+error: wasm-ld: /Users/luke/.cache/zig/o/8e32b79d2f74ce8703ec76103c3fa0de/rocLovesWebAssembly.o: undefined symbol: longjmp
+</code></pre></div>
+
+
+
+<a name="436821754"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436821754" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436821754">(May 03 2024 at 05:56)</a>:</h4>
+<p>If I update the final step to <code>zig build-exe -target wasm32-wasi-musl -lc platform/host.bc rocLovesWebAssembly.ll</code>, now I get;</p>
+<div class="codehilite"><pre><span></span><code>LLD Link... warning(link): unexpected LLD stderr:
+wasm-ld: warning: function signature mismatch: memcpy
+&gt;&gt;&gt; defined as (i32, i32, i64) -&gt; i32 in /Users/luke/.cache/zig/o/7f59f835ce3672f0de84e2fa02508ea0/rocLovesWebAssembly.o
+&gt;&gt;&gt; defined as (i32, i32, i32) -&gt; i32 in /Users/luke/.cache/zig/o/8b8b8ee442982e6b4064dc7bd089866a/libc.a(/Users/luke/.cache/zig/o/10a7521927d8b2330ade4b85f73bcd27/memcpy.o)
+
+wasm-ld: warning: function signature mismatch: memset
+&gt;&gt;&gt; defined as (i32, i32, i64) -&gt; i32 in /Users/luke/.cache/zig/o/7f59f835ce3672f0de84e2fa02508ea0/rocLovesWebAssembly.o
+&gt;&gt;&gt; defined as (i32, i32, i32) -&gt; i32 in /Users/luke/.cache/zig/o/8b8b8ee442982e6b4064dc7bd089866a/libc.a(/Users/luke/.cache/zig/o/46d827fde6ae7406d7854e8a8727cccb/memset.o)
+</code></pre></div>
+
+
+
+<a name="436821769"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436821769" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436821769">(May 03 2024 at 05:56)</a>:</h4>
+<p>I think removing <code>-rdynamic</code> solves the setjmp and longjmp issue</p>
+
+
+
+<a name="436822751"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436822751" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436822751">(May 03 2024 at 06:07)</a>:</h4>
+<p>It all seems far more complicated than I had expected. I thought we would compile the host to a <code>.wasm</code> file and then the app too, and link them together.</p>
+
+
+
+<a name="436823675"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436823675" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436823675">(May 03 2024 at 06:17)</a>:</h4>
+<p>If I use <code>zig build-exe -target wasm32-wasi  host/main.zig</code> I get a nice wasm file, that I can inspect with <code>wasmer inspect</code>. </p>
+<p>But <code>roc build --target=wasm32 --no-link rocLovesWebAssembly.roc</code> gives me a file that seems broken.</p>
+<div class="codehilite"><pre><span></span><code>$ wasmer inspect rocLovesWebAssembly.wasm
+error: failed to inspect `rocLovesWebAssembly.wasm`
+╰─▶ 1: WebAssembly translation error: Error when converting wat: input bytes aren&#39;t valid utf-8
+</code></pre></div>
+<p>Sharing all this here... because I don't really know which way is up, and trying to make sense of things.</p>
+
+
+
+<a name="436824689"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436824689" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436824689">(May 03 2024 at 06:26)</a>:</h4>
+<p>Actually... digging some more, these issues may all just be from using LLVM backend. If we switch over to look at the dev backend then it looks like we are using <code>roc_wasm_module</code>. So maybe the question I should be asking is how to preprocess a wasm host for the surgical linker?</p>
+
+
+
+<a name="436834027"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436834027" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436834027">(May 03 2024 at 07:44)</a>:</h4>
+<p>re that wasmer thing: something seems confused between the text and binary formats there</p>
+
+
+
+<a name="436834068"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436834068" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436834068">(May 03 2024 at 07:45)</a>:</h4>
+<p><code>wat</code> is the webassembly text format, that lisp-like syntax for wasm. What we produce is a binary file.</p>
+
+
+
+<a name="436840469"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436840469" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436840469">(May 03 2024 at 08:35)</a>:</h4>
+<p>Yeah, seems strange.</p>
+
+
+
+<a name="436840500"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436840500" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436840500">(May 03 2024 at 08:35)</a>:</h4>
+<p>Do you think the WASM examples should focus on support for legacy or surgical linker or both?</p>
+
+
+
+<a name="436861200"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436861200" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436861200">(May 03 2024 at 11:01)</a>:</h4>
+<p>unfortunately we need both for now</p>
+
+
+
+<a name="436862795"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/436862795" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#436862795">(May 03 2024 at 11:12)</a>:</h4>
+<p>do we? I thought wasm was pretty much complete too? what breaks when we feed it a module produced by LLVM?</p>
+
+
+
+<a name="438036294"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438036294" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438036294">(May 10 2024 at 19:36)</a>:</h4>
+<p>Instead of wasmer inspect, try to get your hands on wasm-objdump and wasm-validate, which are part of a project called.. binaryen I think</p>
+
+
+
+<a name="438040444"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438040444" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438040444">(May 10 2024 at 20:14)</a>:</h4>
+<p>Or maybe wabt</p>
+
+
+
+<a name="438040682"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438040682" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438040682">(May 10 2024 at 20:16)</a>:</h4>
+<p>Thank you.</p>
+
+
+
+<a name="438040704"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438040704" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438040704">(May 10 2024 at 20:16)</a>:</h4>
+<p>Ill give that a go</p>
+
+
+
+<a name="438162924"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438162924" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438162924">(May 12 2024 at 06:45)</a>:</h4>
+<p>Actually <code>wasmer inspect</code> works just fine for me on files that I know for sure have binary webassembly inside them.<br>
+I wonder if you somehow have a file that has the text format inside it but with a .wasm extension which is for the binary format.</p>
+
+
+
+<a name="438163296"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438163296" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438163296">(May 12 2024 at 06:52)</a>:</h4>
+<blockquote>
+<p>Do we include our own version of compiler-rt?</p>
+</blockquote>
+<p>As part of building the Roc project, <code>crates/wasi-libc-sys/build.rs</code> uses Zig to generate compiled libc and compiler-rt, finds their paths, and sets constants equal to those paths.<br>
+Then in the linker commands in <code>crates/compiler/build/src/link.rs</code> we provide <code>wasm-ld</code> with those paths as well as the paths to the host and the Roc app. See <code>preprocess_host_wasm32</code>.</p>
+
+
+
+<a name="438163546"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438163546" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438163546">(May 12 2024 at 06:57)</a>:</h4>
+<p>In the early days this build process only worked when building Roc from source. But I think later we made it work with nightly builds too. Could be worth double checking that though.</p>
+
+
+
+<a name="438163936"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438163936" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438163936">(May 12 2024 at 07:05)</a>:</h4>
+<p>How did setjmp end up in the roc binary? Shouldn't that be a host-side thing? I have been a bit out of touch with Roc lately, might have missed some big change.</p>
+
+
+
+<a name="438165823"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438165823" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438165823">(May 12 2024 at 07:41)</a>:</h4>
+<p>I don't think it's actually possible to implement <code>setjmp</code> and <code>longjmp</code> in the Wasm instruction set. There are no arbitrary jumps, only structured control flow. So the compiler would have to generate early returns in every function all the way up the call stack. And then I'm not sure why you would even need functions with those names. So maybe one of these errors is happening because they don't exist in this target?<br>
+I just downloaded a zip of the Zig repo at tag <code>0.11.0</code> and searched for references to <code>setjmp</code> in wasm libc and compiler-rt files etc., and I can't find anything.</p>
+
+
+
+<a name="438166314"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438166314" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438166314">(May 12 2024 at 07:50)</a>:</h4>
+<p>One of the error messages complains about a mismatch in last argument of <code>memcpy </code>and <code>memset</code> so we can look up <a href="https://en.cppreference.com/w/c/string/byte/memset">cppreference.com</a> to find out the actual type signatures.</p>
+<div class="codehilite"><pre><span></span><code>void* memcpy( void *dest, const void *src, size_t count );
+void *memset( void *dest, int ch, size_t count );
+</code></pre></div>
+<p>The last argument for each is a <code>size_t</code>. That's a pointer-sized integer, so 32 bits is the correct size for that in Wasm. Whichever one is generating 64 is wrong. Most likely there is somewhere we forgot about 32-bit targets and generated <code>size_t</code> as 64 bits. This is very common. Everyone forgets about 32 bits. It's the root cause of 99% of code gen issues with Wasm.</p>
+
+
+
+<a name="438176175"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438176175" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438176175">(May 12 2024 at 10:46)</a>:</h4>
+<p><span class="user-mention" data-user-id="281543">@Folkert de Vries</span> any idea on the setjmp part of that question?</p>
+
+
+
+<a name="438176400"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438176400" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438176400">(May 12 2024 at 10:50)</a>:</h4>
+<p>I think this message is pretty clear</p>
+<div class="codehilite"><pre><span></span><code>// Utils continued - SJLJ
+// For tests (in particular test_gen), roc_panic is implemented in terms of
+// setjmp/longjmp. LLVM is unable to generate code for longjmp on AArch64 (https://github.com/roc-lang/roc/issues/2965),
+// so instead we ask Zig to please provide implementations for us, which is does
+// (seemingly via musl).
+pub extern fn setjmp([*c]c_int) c_int;
+pub extern fn longjmp([*c]c_int, c_int) noreturn;
+pub extern fn _setjmp([*c]c_int) c_int;
+pub extern fn _longjmp([*c]c_int, c_int) noreturn;
+pub extern fn sigsetjmp([*c]c_int, c_int) c_int;
+pub extern fn siglongjmp([*c]c_int, c_int) noreturn;
+pub extern fn longjmperror() void;
+</code></pre></div>
+
+
+
+<a name="438176453"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438176453" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438176453">(May 12 2024 at 10:51)</a>:</h4>
+<p>so: tests need an implementation of <code>roc_panic!</code>. There is not much we can do there beside a longjmp really</p>
+
+
+
+<a name="438201610"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438201610" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438201610">(May 12 2024 at 18:05)</a>:</h4>
+<p><span class="user-mention" data-user-id="431893">@Brian Carroll</span> what are your thoughts on the best way to pre-build a WASM platform? I'm updating roc so that the platform rebuilding is the sole responsibility of the platform, which provides the pre-built binaries. What should this look like for WASM though?</p>
+
+
+
+<a name="438202111"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202111" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202111">(May 12 2024 at 18:14)</a>:</h4>
+<p>What are you doing for the others and how is Wasm different?</p>
+
+
+
+<a name="438202376"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202376" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202376">(May 12 2024 at 18:19)</a>:</h4>
+<p>Actually let me rephrase that as a statement rather than a question! I don't think there's any conceptual difference with Wasm, it just uses a different linker. And you can't rely on the OS to provide libc for you.</p>
+
+
+
+<a name="438202478"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202478" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202478">(May 12 2024 at 18:21)</a>:</h4>
+<p>So I assume that what you want to produce for all targets, including Wasm, is a library that contains:</p>
+<ul>
+<li>the host itself</li>
+<li>any libc things you need</li>
+<li>roc_alloc and friends</li>
+<li>Any Roc builtins that the app might want to call</li>
+</ul>
+
+
+
+<a name="438202561"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202561" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202561">(May 12 2024 at 18:22)</a>:</h4>
+<p>Although for most targets you can make the library depend on the host machine's libc. For Wasm you have to link that in.</p>
+
+
+
+<a name="438202573"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202573" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202573">(May 12 2024 at 18:22)</a>:</h4>
+<p>I've converted all the others in <a href="https://github.com/roc-lang/roc/pull/6696">https://github.com/roc-lang/roc/pull/6696</a></p>
+
+
+
+<a name="438202585"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202585" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202585">(May 12 2024 at 18:22)</a>:</h4>
+<p>I've written a build script for each of the different platforms.</p>
+
+
+
+<a name="438202598"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202598" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202598">(May 12 2024 at 18:23)</a>:</h4>
+<p>Can you outline it for me so I don't have to go through the whole PR?</p>
+
+
+
+<a name="438202610"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202610" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202610">(May 12 2024 at 18:23)</a>:</h4>
+<p>Most of these only support the legacy linker though... so I'm generating a <code>macos-arm64.a</code> file for the platform prebuilt-binary.</p>
+
+
+
+<a name="438202673"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202673" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202673">(May 12 2024 at 18:24)</a>:</h4>
+<p>That c-archive sits next to the platform/main.roc file and then when we <code>roc run app.roc</code> the roc cli will build the app, link with the platform to produce the final application binary</p>
+
+
+
+<a name="438202783"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202783" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202783">(May 12 2024 at 18:26)</a>:</h4>
+<p>I'm just not sure about WASM, in that the same (or similar) approach seems to require jumping through a lot of hoops. If it should be the same, and we just have a bug somewhere to track down then that is very helpful to know.</p>
+
+
+
+<a name="438202787"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202787" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202787">(May 12 2024 at 18:26)</a>:</h4>
+<p>What hoops are those?</p>
+
+
+
+<a name="438202818"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202818" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202818">(May 12 2024 at 18:27)</a>:</h4>
+<p>Well to support the legacy linker at least. I suspect the surgical linker would be much easier</p>
+
+
+
+<a name="438202899"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438202899" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438202899">(May 12 2024 at 18:29)</a>:</h4>
+<p>For example, we need to compile the host into a LLVM <code>.bc</code> file, instead of just a <code>c-archive</code></p>
+
+
+
+<a name="438203021"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438203021" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438203021">(May 12 2024 at 18:30)</a>:</h4>
+<p>OK why is that?<br>
+I was going to say I haven't seen .a used very much with wasm. But not sure what constraint actually forces this because it's just a concatenation of object files.</p>
+
+
+
+<a name="438203528"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438203528" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438203528">(May 12 2024 at 18:38)</a>:</h4>
+<p>I would have guessed you could create a <code>.wasm</code> file, or a <code>.a</code> file, containing everything you need.<br>
+I don't see why .bc is necessary unless LLVM is for some reason forcing that.<br>
+But I am not super familiar with trying to get LLVM to produce Wasm in various ways. Most of my experience with this stuff is from working on the Wasm dev back end with no LLVM in the path.</p>
+
+
+
+<a name="438203564"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438203564" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438203564">(May 12 2024 at 18:39)</a>:</h4>
+<p>The Wasm dev backend has no understanding whatsoever of <code>.bc</code> or <code>.ll</code> so that would be incompatible with this setup.</p>
+
+
+
+<a name="438203662"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438203662" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438203662">(May 12 2024 at 18:40)</a>:</h4>
+<p>Essentially nobody would ever be able to use the Wasm dev backend because the ecosystem would be incompatible with it.</p>
+
+
+
+<a name="438203692"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438203692" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438203692">(May 12 2024 at 18:41)</a>:</h4>
+<p>So I think it would be worth trying to find a way to use .wasm as that's the only thing the dev backend can work with</p>
+
+
+
+<a name="438203856"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438203856" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438203856">(May 12 2024 at 18:43)</a>:</h4>
+<p>You can look at what I've done for the wasm unit tests or the wasm REPL. They both have "test hosts" that I build into .wasm files.</p>
+
+
+
+<a name="438204015"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438204015" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438204015">(May 12 2024 at 18:45)</a>:</h4>
+<p>crates/repl_wasm/build.rs <code>build_wasm_platform</code><br>
+crates/compiler/test_gen/build.rs <code>build_wasm_test_host</code></p>
+
+
+
+<a name="438253110"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438253110" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438253110">(May 13 2024 at 06:26)</a>:</h4>
+<p>I think currently we generated a <code>.bc</code> and then let llvm directly consume the <code>.bc</code> file cause it was easy and it worked around some early issue when setting up wasm linking with the llvm backend (<span class="user-mention" data-user-id="281543">@Folkert de Vries</span> may know what the issue actually was). That said, it is just a hack, our over-reliance on zig for llvm backend wasm linking is also a dependency we need to fix. Fundamentally, I think most of that is old tech debt that we really need to wrip out a clean up</p>
+
+
+
+<a name="438253201"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438253201" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438253201">(May 13 2024 at 06:27)</a>:</h4>
+<p>Wasm should just generate a/multiple <code>.wasm</code> file and let the additive linker concatenate them together.</p>
+
+
+
+<a name="438253313"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438253313" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438253313">(May 13 2024 at 06:28)</a>:</h4>
+<p>That said, last time I checked, the additive linker could only be used with our wasm dev backend and had some sort of issue linking wasm files generated form the llvm backend (but that might just be a setup/wiring issue and not a real bug, been a long time since I looked at any of this).</p>
+
+
+
+<a name="438253457"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438253457" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438253457">(May 13 2024 at 06:28)</a>:</h4>
+<p>Even if we don't change the llvm backend to use the additive linker, it should still generate a <code>.wasm</code> and that should be consumed by the platform or by a linker of some sort to generate the final executable. The <code>.bc</code> stuff all needs to die and is just a workaround.</p>
+
+
+
+<a name="438253848"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438253848" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438253848">(May 13 2024 at 06:31)</a>:</h4>
+<p>Yes "additive linking" is a term I came up with for the linking that is built into the wasm dev back end.  It is a feature of that back end<br>
+It is not possible to extract as a separate thing and use with LLVM.</p>
+
+
+
+<a name="438253977"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438253977" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438253977">(May 13 2024 at 06:32)</a>:</h4>
+<p>ah. Thought it could be generalized to anything wasm...guess not</p>
+
+
+
+<a name="438254007"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438254007" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438254007">(May 13 2024 at 06:32)</a>:</h4>
+<p>It works by reading in the host file and using that to initialise the state of the code generator so that when you generate more code it is "added on top".<br>
+We do not have that kind of access to the internals of LLVM.</p>
+
+
+
+<a name="438254245"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438254245" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438254245">(May 13 2024 at 06:34)</a>:</h4>
+<p>I see. Yeah, I thought it came at a later stage and was consuming fully generated functions from the wasm dev backend. Thus, I assumed we could pass full wasm functions from llvm to be added on top of the wasm platform. Good to know that is not the case and it is more integrated.</p>
+
+
+
+<a name="438254357"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438254357" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438254357">(May 13 2024 at 06:35)</a>:</h4>
+<p>yeah, so we still need to figure out a good linking story for llvm wasm (that or leave it 100% to the end users). Today, IIRC, we compile to a <code>.bc</code> and then pass the <code>.bc</code> to zig such that it can build the host with the <code>.bc</code> file and generate a finalized platform.</p>
+
+
+
+<a name="438254400"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438254400" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438254400">(May 13 2024 at 06:35)</a>:</h4>
+<p>So we essentially use <code>.bc</code> in a way to avoid needing to figure out correctly linking.</p>
+
+
+
+<a name="438254418"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438254418" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438254418">(May 13 2024 at 06:35)</a>:</h4>
+<p>leave it all to zig</p>
+
+
+
+<a name="438254448"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438254448" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438254448">(May 13 2024 at 06:35)</a>:</h4>
+<p>I believe I might have solved that problem already in the <code>build.rs</code> files I mentioned above. Or at least a very similar problem.</p>
+
+
+
+<a name="438254958"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438254958" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438254958">(May 13 2024 at 06:39)</a>:</h4>
+<p>They produce a preprocessed host as .wasm file containing the host, the Roc builtins, and any libc stuff the host and builtins need.<br>
+So then with LLVM Wasm you would just need to do a final linking step with <code>wasm-ld</code> to combine the preprocessed host <code>.wasm</code> file with the app <code>.wasm</code> file.<br>
+And the Wasm dev backend can also use it by having the preprocessed host passed via CLI options. That's already implemented.</p>
+
+
+
+<a name="438256193"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438256193" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438256193">(May 13 2024 at 06:49)</a>:</h4>
+<p>By the way, a <code>.wasm</code> file is most comparable to <code>.so</code> on Linux or <code>.dylib</code> on Mac. By definition of how Wasm works, it always needs to receive some callback functions from the Wasm interpreter at runtime. And that is a dynamic linking step.</p>
+
+
+
+<a name="438256482"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438256482" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438256482">(May 13 2024 at 06:51)</a>:</h4>
+<p>So they are always dynamic libraries, and they can be linked together. The "imports" and "exports" get merged, and sometimes one export satisfies another import and it gets removed from the final file. In the end you are left with just the ones that actually need to be exposed at runtime.</p>
+
+
+
+<a name="438527395"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438527395" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438527395">(May 14 2024 at 08:36)</a>:</h4>
+<p>is it possible to do stack unwinding in wasm?</p>
+
+
+
+<a name="438527423"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438527423" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438527423">(May 14 2024 at 08:36)</a>:</h4>
+<p>No</p>
+
+
+
+<a name="438527750"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438527750" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438527750">(May 14 2024 at 08:38)</a>:</h4>
+<p>If you had enough power to do that, it would break the security model.</p>
+
+
+
+<a name="438527876"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438527876" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438527876">(May 14 2024 at 08:38)</a>:</h4>
+<p>hm, I see</p>
+
+
+
+<a name="438527990"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438527990" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438527990">(May 14 2024 at 08:39)</a>:</h4>
+<p>I was trying to think of other ways we could potentially make <code>roc_panic</code> work in wasm</p>
+
+
+
+<a name="438528011"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438528011" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438528011">(May 14 2024 at 08:39)</a>:</h4>
+<p>since setjmp/longjmp don't work</p>
+
+
+
+<a name="438528038"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438528038" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438528038">(May 14 2024 at 08:39)</a>:</h4>
+<p>You can "trap" and catch outside and call again</p>
+
+
+
+<a name="438528288"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438528288" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438528288">(May 14 2024 at 08:40)</a>:</h4>
+<p>ah gotcha</p>
+
+
+
+<a name="438528369"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438528369" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438528369">(May 14 2024 at 08:41)</a>:</h4>
+<p>so that works as long as you don't need to recover from the roc_panic from within wasm code</p>
+
+
+
+<a name="438528640"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438528640" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438528640">(May 14 2024 at 08:42)</a>:</h4>
+<p>I guess the <a href="https://github.com/WebAssembly/exception-handling/blob/d399b9e0711b408e15fdfbea1cafe956a6f3d481/proposals/exception-handling/Exceptions.md">exception handling proposal</a> could address that in the future</p>
+
+
+
+<a name="438541487"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/438541487" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#438541487">(May 14 2024 at 09:59)</a>:</h4>
+<p>for tests we don't need to recover from <code>roc_panic</code>, so if setjmp/longjmp in the compiler is a problem we can explore that?</p>
+
+
+
+<a name="439495605"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/439495605" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#439495605">(May 20 2024 at 04:46)</a>:</h4>
+<p>I need to write up a bit of a summary -- but this is where I got to on the plane. <a href="https://github.com/lukewilliamboswell/roc-platform-template-wasi">https://github.com/lukewilliamboswell/roc-platform-template-wasi</a></p>
+
+
+
+<a name="439496066"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/439496066" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#439496066">(May 20 2024 at 04:51)</a>:</h4>
+<p>Basically, I think the way we do linking from roc cli makes this a bit interesting and unique. Most tooling i.e. zig is geared towards making a standalone <code>.wasm</code> library. So a bit of a challenge if we want roc to drive the build/linking. If we build the app separately using <code>roc build --target=wasm32 --no-link app.roc</code> and then use zig or something else to drive the build I think things get much simpler (but not the end user experience consistent with the other platforms). </p>
+<p>I think the next step is to figure out how to manually create the <code>_start</code> symbol, so when we link using e.g. something like <code>/opt/homebrew/opt/llvm@16/bin/wasm-ld app.wasm platform/host.wasm -o out.wasm</code>  it has everything required. Once we can build the pre-built binary and link manually, we will need to revisit the linking in roc cli if we want to support this workflow.</p>
+<p>Mostly leaving this comment to remind my future self.</p>
+
+
+
+<a name="439508250"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/439508250" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#439508250">(May 20 2024 at 06:24)</a>:</h4>
+<p>That all sounds good <br>
+I don't think you should have to manually create _start. The toolchain should be doing that for you if configured to generate a WASI executable. But this is the sort of thing that can be tricky to set up.</p>
+
+
+
+<a name="439515724"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/439515724" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#439515724">(May 20 2024 at 07:15)</a>:</h4>
+<p>Thank you. I think I need to investigate it further. From what I can tell so far it's not generated by zig with <code>b.addSharedLibrary</code> but it is with <code>b.addExecutable</code>. So that's why my current hypothesis is we may need to generate that manually.</p>
+
+
+
+<a name="439516176"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/439516176" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#439516176">(May 20 2024 at 07:19)</a>:</h4>
+<p>As an aside to resolve the <code>function signature mismatch: memset</code> issue, I changed the <code>void</code> return in our zig extern from <code>extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;</code> to <code>extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) i32;</code>. </p>
+<p>It works now and is happy. </p>
+<p>But, I'm just wondering if that is something we should be changing in the other zig platforms too, or maybe it is actually a symptom of another bug elsewhere.</p>
+
+
+
+<a name="447914118"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447914118" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447914118">(Jun 29 2024 at 03:28)</a>:</h4>
+<p>I'm having trouble working with WASM things. I think our build pipeline is a bit broken at the moment.</p>
+<p>If I have two files, <code>platform/main.roc</code> and <code>main.roc</code> and I build this using <code>roc build --target=wasm32 --no-link main.roc</code> on current main I should get valid WASM right?</p>
+<div class="codehilite"><pre><span></span><code>platform &quot;wasm&quot;
+    requires {} { main : Str }
+    exposes []
+    packages {}
+    imports []
+    provides [mainForHost]
+
+mainForHost : Str
+mainForHost = main
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>app [main] {
+        pf: platform &quot;platform/main.roc&quot;,
+    }
+
+main = &quot;hi&quot;
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>$ roc build --target=wasm32 --no-link main.roc
+0 errors and 0 warnings found in 53 ms
+ while successfully building:
+
+    main.wasm
+$ wasmer inspect main.wasm
+error: failed to inspect `main.wasm`
+╰─▶ 1: WebAssembly translation error: Error when converting wat: input bytes aren&#39;t valid utf-8
+$ wasmer validate main.wasm
+error: failed to validate `main.wasm`
+╰─▶ 1: `wasmer validate` only validates WebAssembly files
+</code></pre></div>
+<p>Also, it doesn't seem to like the dev backend. </p>
+<div class="codehilite"><pre><span></span><code>$ roc build --target=wasm32 --no-link --dev main.roc
+An internal compiler expectation was broken.
+This is definitely a compiler bug.
+Please file an issue here: https://github.com/roc-lang/roc/issues/new/choose
+thread &#39;main&#39; panicked at crates/compiler/build/src/program.rs:499:9:
+Failed to read host object file platform/wasm32.rh! Try omitting --prebuilt-platform
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</code></pre></div>
+
+
+
+<a name="447922225"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447922225" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447922225">(Jun 29 2024 at 04:37)</a>:</h4>
+<p>Ok, update on progress with <a href="https://github.com/lukewilliamboswell/roc-platform-template-wasi">https://github.com/lukewilliamboswell/roc-platform-template-wasi</a> <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span> </p>
+<p>I think I am now <strong>really</strong> close to having a working WASM platform -- specifically, a WASI platform using a Task based API. <span aria-label="fingers crossed" class="emoji emoji-1f91e" role="img" title="fingers crossed">:fingers_crossed:</span> </p>
+<p>I updated the repository to use <code>shell.nix</code> so it provides zig 13. (I spent ages trying to get a flake working, but alas no joy... <span aria-label="sad" class="emoji emoji-2639" role="img" title="sad">:sad:</span> )</p>
+<p>Updated the glue script to use the latest release of <a href="https://github.com/lukewilliamboswell/roc-glue-code-gen">roc-glue-code-gen</a>.</p>
+<p>Fixed up <code>build.zig</code> and <code>main.zig</code> with some minor changes for zig 13. </p>
+<p>Now we have it building the host and it looks good to me. </p>
+<div class="codehilite"><pre><span></span><code>$ roc build.roc
+🎉 Generated type declarations in:
+
+    host/
+
+$ wasmer inspect platform/host.wasm
+Type: wasm
+Size: 13.3 KB
+Imports:
+  Functions:
+    &quot;wasi_snapshot_preview1&quot;.&quot;args_get&quot;: [I32, I32] -&gt; [I32]
+    &quot;wasi_snapshot_preview1&quot;.&quot;args_sizes_get&quot;: [I32, I32] -&gt; [I32]
+    &quot;wasi_snapshot_preview1&quot;.&quot;fd_write&quot;: [I32, I32, I32, I32] -&gt; [I32]
+    &quot;wasi_snapshot_preview1&quot;.&quot;proc_exit&quot;: [I32] -&gt; []
+  Memories:
+    &quot;env&quot;.&quot;memory&quot;: not shared (1 pages..)
+  Tables:
+    &quot;env&quot;.&quot;__indirect_function_table&quot;: FuncRef (1..)
+  Globals:
+    &quot;env&quot;.&quot;__stack_pointer&quot;: I32 (mutable)
+    &quot;env&quot;.&quot;__memory_base&quot;: I32 (constant)
+    &quot;env&quot;.&quot;__table_base&quot;: I32 (constant)
+    &quot;GOT.mem&quot;.&quot;__heap_end&quot;: I32 (mutable)
+    &quot;GOT.mem&quot;.&quot;__heap_base&quot;: I32 (mutable)
+Exports:
+  Functions:
+    &quot;__wasm_apply_data_relocs&quot;: [] -&gt; []
+    &quot;_start&quot;: [] -&gt; []
+    &quot;main&quot;: [I32, I32] -&gt; [I32]
+    &quot;roc_alloc&quot;: [I32, I32] -&gt; [I32]
+    &quot;roc_realloc&quot;: [I32, I32, I32, I32] -&gt; [I32]
+    &quot;roc_dealloc&quot;: [I32, I32] -&gt; []
+    &quot;roc_panic&quot;: [I32, I32] -&gt; []
+    &quot;roc_dbg&quot;: [I32, I32, I32] -&gt; []
+    &quot;roc_memset&quot;: [I32, I32, I32] -&gt; [I32]
+    &quot;roc_fx_stdoutLine&quot;: [I32, I32] -&gt; []
+  Memories:
+  Tables:
+  Globals:
+</code></pre></div>
+<p>The problem is I can't get roc to produce valid WASM for the app using <code>--no-link</code> to then link and verify things manually. I would like to be able to do things manually, before hacking away at the cli build pipeline.</p>
+<p>The cli is definitely not working yet... it tries to rebuild the host using <code>host.zig</code>, or tries to use the surgical linker, or some other combination of things that all fail. Some examples below.</p>
+<div class="codehilite"><pre><span></span><code>$ roc build --target=wasm32 app.roc
+🔨 Rebuilding platform...
+error: unrecognized file extension of parameter &#39;glue&#39;
+thread &#39;main&#39; panicked at crates/compiler/build/src/program.rs:1048:17:
+not yet implemented: gracefully handle `ld` (or `zig` in the case of wasm with --optimize) returning exit code Some(1)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+$ roc build --target=wasm32 --dev app.roc
+🔨 Rebuilding platform...
+An internal compiler expectation was broken.
+This is definitely a compiler bug.
+Please file an issue here: https://github.com/roc-lang/roc/issues/new/choose
+thread &#39;&lt;unnamed&gt;&#39; panicked at crates/compiler/build/src/link.rs:1410:21:
+Error:
+    Failed to rebuild platform/wasm32.rh:
+        The executed command was:
+            zig wasm-ld /tmp/host_bitcodecUbER9HV.wasm platform/main.o /Users/luke/Documents/GitHub/roc/target/release/lib/wasi-libc.a /Users/luke/Documents/GitHub/roc/target/release/build/wasi_libc_sys-0c00ed7e69066201/out/zig-cache/o/fbe76c5baee393dea3c7d358da7d00e5/libcompiler_rt.a -o platform/wasm32.rh --export-all --no-entry --import-undefined --relocatable
+        stderr of that command:
+            wasm-ld: error: cannot open platform/main.o: No such file or directory
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+thread &#39;main&#39; panicked at crates/compiler/build/src/program.rs:927:18:
+Failed to (re)build platform.: Any { .. }
+
+$ roc build --target=wasm32 --prebuilt-platform app.roc
+Because I was run with --prebuilt-platform, I was expecting this file to exist:
+
+    platform/host.zig
+
+However, it was not there!
+
+If you have the platform&#39;s source code locally, you may be able to generate it by re-running this command omitting --prebuilt-platform
+</code></pre></div>
+
+
+
+<a name="447923685"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447923685" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447923685">(Jun 29 2024 at 04:45)</a>:</h4>
+<blockquote>
+<p>I spent ages trying to get a flake working, but alas no joy...</p>
+</blockquote>
+<p>I really wanted something that would give me a shell with the correct versions of roc and zig. It feels like something nix can do, based on the flakes we have in basic-cli and basic-webserver</p>
+
+
+
+<a name="447925965"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447925965" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447925965">(Jun 29 2024 at 05:12)</a>:</h4>
+<p>So I think the next steps with this are to;</p>
+<ol>
+<li>figure out how to get roc to build an app with <code>--no-link</code> and produce valid WASM</li>
+<li>use that to manually link with the host and confirm it produces a valid WASI executable</li>
+<li>modify the roc cli to use either the dev backend parts, or wasm-ld, so that it can link a prebuilt <code>.wasm</code> host instead of building that from source. Maybe it defaults to using the prebuilt platform and only tries to rebuild the host if it cant find a <code>platform/host.wasm</code> or something</li>
+</ol>
+
+
+
+<a name="447934463"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447934463" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447934463">(Jun 29 2024 at 06:17)</a>:</h4>
+<p>Great progress Luke! <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<a name="447938815"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447938815" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447938815">(Jun 29 2024 at 06:53)</a>:</h4>
+<p>Those next steps make sense.</p>
+<p>At step 2 I'd be curious to know how long <code>wasm-ld</code> takes to link the app and host. If it turns out to be really fast maybe there'll be no need to make our own surgical linker for Wasm (from pieces of the dev backend). The decision might be different from native code.</p>
+<p>Maybe we can also run the same app through the dev backend and dump some timing info.</p>
+
+
+
+<a name="447939806"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447939806" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447939806">(Jun 29 2024 at 06:58)</a>:</h4>
+<p>It looks like <code>wasmer validate</code> is not useful for figuring out _why_ a file is invalid, and debugging it. I always used <code>wasm-objdump</code> for that.</p>
+
+
+
+<a name="447940781"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447940781" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447940781">(Jun 29 2024 at 07:10)</a>:</h4>
+<p>It's part of the WebAssembly Binary Toolkit, wabt</p>
+
+
+
+<a name="447941355"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447941355" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447941355">(Jun 29 2024 at 07:18)</a>:</h4>
+<p>I was working a little with Luke here. Here is the relevant excerpt from our DMs<br>
+<a href="/user_uploads/22008/6Ib0hh6Eg3eH_Iz51lqAvJJu/image.png">image.png</a></p>
+<div class="message_inline_image"><a href="/user_uploads/22008/6Ib0hh6Eg3eH_Iz51lqAvJJu/image.png" title="image.png"><img src="/user_uploads/22008/6Ib0hh6Eg3eH_Iz51lqAvJJu/image.png"></a></div>
+
+
+
+<a name="447941412"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447941412" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447941412">(Jun 29 2024 at 07:19)</a>:</h4>
+<p>When the llvm compiles wasm currently it is emitting the LLVM bytecode directly to the wasm file because of that 2nd branch</p>
+
+
+
+<a name="447941586"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447941586" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447941586">(Jun 29 2024 at 07:20)</a>:</h4>
+<p>allowing wasm to follow the same branch as native code (plus a little bit of feature flag cleanup) results in this<br>
+<a href="https://github.com/roc-lang/roc/pull/6852">https://github.com/roc-lang/roc/pull/6852</a></p>
+
+
+
+<a name="447941693"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447941693" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447941693">(Jun 29 2024 at 07:20)</a>:</h4>
+<p>I am able to compile the nodejs interop example without linking</p>
+
+
+
+<a name="447941810"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447941810" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447941810">(Jun 29 2024 at 07:21)</a>:</h4>
+<p>obviously there is some stuff missing from that output (but at least it builds in &lt;10ms even with a debug build of the compiler <span aria-label="laughing" class="emoji emoji-1f606" role="img" title="laughing">:laughing:</span> )</p>
+
+
+
+<a name="447942095"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447942095" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447942095">(Jun 29 2024 at 07:23)</a>:</h4>
+<p>Most notably it is missing the bump allocator that gets inlined to the wasm output of the <code>gen_wasm</code> module</p>
+
+
+
+<a name="447950899"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447950899" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447950899">(Jun 29 2024 at 09:02)</a>:</h4>
+<p>Good job debugging that <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span><br>
+Makes sense now why it wasn't valid Wasm if it was actually LLVM!</p>
+
+
+
+<a name="447950906"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447950906" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447950906">(Jun 29 2024 at 09:02)</a>:</h4>
+<p>I didn't follow what you meant in the last part about the bump allocator. Do you mean that the output file has no roc_alloc? Does the nodejs host use a bump allocator?</p>
+
+
+
+<a name="447957214"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/447957214" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#447957214">(Jun 29 2024 at 09:52)</a>:</h4>
+<blockquote>
+<p>I really wanted something that would give me a shell with the correct versions of roc and zig. It feels like something nix can do, based on the flakes we have in basic-cli and basic-webserver</p>
+</blockquote>
+<p>In the inputs section you'll need to change the line <code>nixpkgs.follows = "roc/nixpkgs";</code> to <code>nixpkgs.url = "github:nixos/nixpkgs?rev=ab7cf5d23c90ee5b83444e0a80a606688d278ecd";</code> if you want to be able to get zig 13. The package is just named zig in that case, not zig_0_13.</p>
+
+
+
+<a name="448156857"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/448156857" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#448156857">(Jun 30 2024 at 18:47)</a>:</h4>
+<p>Ok, I am getting very close on this PR. At this point I think I am running into artificial limitations / panics in the compiler. I can hand generate the unlinked app, host, wasi-libc and link them. Which basically leaves the platform. I cannot just <code>roc build platform/main.roc --target=wasm32 --no-link --optimize</code>. Is there a reason for or do we want to keep this limitation?</p>
+
+
+
+<a name="448157780"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/448157780" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#448157780">(Jun 30 2024 at 18:53)</a>:</h4>
+<p>I also have questions about how much of the wasi platform we include in the compiler. It seems like the entire <code>wasm_interp/src/wasi.rs</code> should be pulled out into a seperate wasi platform. This would simplefy a bunch. You would not have to ship a wasi-libc. You would get <code>freestanding</code> wasm for free since now since wasi is not baked into the compiler. There could be a yet another wasm freestanding platform.</p>
+
+
+
+<a name="448157944"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/448157944" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#448157944">(Jun 30 2024 at 18:54)</a>:</h4>
+<p>Another platform author could provide their own wasi implementation that does not depend on libc</p>
+
+
+
+<a name="448159957"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/448159957" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#448159957">(Jun 30 2024 at 19:06)</a>:</h4>
+<p>Wasm interp is not part of the compiler, we just use it for our tests</p>
+
+
+
+<a name="448163910"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/448163910" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#448163910">(Jun 30 2024 at 19:28)</a>:</h4>
+<p>My mistake. I was wondering what was providing all <a href="https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-wasi_snapshot_preview1">this</a> in the final wasm binary. It must be <code>wasi-libc.a</code> then?</p>
+
+
+
+<a name="448164101"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/448164101" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#448164101">(Jun 30 2024 at 19:30)</a>:</h4>
+<p>I just started hunting for the symbols in the roc codebase and hit that module</p>
+
+
+
+<a name="448175739"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/448175739" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#448175739">(Jun 30 2024 at 21:12)</a>:</h4>
+<p>Yeah there's a crate called something like <code>wasi-libc-sys</code>. It contains almost no code, just a <a href="http://build.rs">build.rs</a> that fools zig into giving us a path to its libc implementation.</p>
+
+
+
+<a name="448176409"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/448176409" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#448176409">(Jun 30 2024 at 21:15)</a>:</h4>
+<p>If an app doesn't use anything from libc then the linker just won't need to use that library and that's it.</p>
+
+
+
+<a name="448185401"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Building%20and%20linking%20WASM/near/448185401" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Barth <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Building.20and.20linking.20WASM.html#448185401">(Jun 30 2024 at 22:51)</a>:</h4>
+<p>So check this out. Platformless Roc.</p>
+<p><a href="https://github.com/roc-lang/roc/pull/6852/files">https://github.com/roc-lang/roc/pull/6852/files</a></p>
+<p>You can check it out and run:</p>
+<div class="codehilite"><pre><span></span><code>export PROJ=$(pwd)
+cargo build
+cd examples/nodejs-interop/noplatform
+bash doit.sh
+</code></pre></div>
+<p>Running this gets you:</p>
+<div class="codehilite"><pre><span></span><code>+ /home/ryan/src/roc-lang/roc/target/debug/roc build main.roc --target=wasm32 --optimize --no-link
+0 errors and 0 warnings found in 160 ms
+ while successfully building:
+
+    main.wasm
++ wasm-ld main.wasm -o out.wasm --export-all --no-entry --export-table --import-undefined
++ node nolink.js
+@om Roc! 3
+</code></pre></div>
+<p>Now obviously in my haste to throw this together and experiment i messed up my pointers somewhere (probably not taking alignment into account). But I see it! Roc performs the computation and spits out the result without a (compiled) platform in wasm! This also omits wasi-libc.a and the compiler_rt.a (though admittedly i do not know what this one does) from the linking process.</p>
+<p>So basically I forked and was experimenting with the nodejs-interop/wasm example. I used --no-link and --optimize to build an unlinked main.wasm. I have to run wasm-ld to populate the global memory and stack pointer as well as publicly expose the roc functions.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

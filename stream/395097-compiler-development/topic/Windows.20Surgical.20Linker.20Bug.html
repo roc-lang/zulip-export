@@ -1,0 +1,109 @@
+<html>
+<head><meta charset="utf-8"><title>Windows Surgical Linker Bug · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20Surgical.20Linker.20Bug.html">Windows Surgical Linker Bug</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="411658274"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20Surgical%20Linker%20Bug/near/411658274" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20Surgical.20Linker.20Bug.html#411658274">(Jan 08 2024 at 02:34)</a>:</h4>
+<p>Some debugging Windows; I'm trying to track down why roc is segfaulting on the most basic examples.</p>
+<p>If I build and/or run using roc cli then it segfaults at the point where the host calls into Roc. </p>
+<p>However if I emit the LLVM IR for the application and then use zig to build an executable against the platform it runs as expected. </p>
+<p>So I'm wondering if there may be something specific in the Roc cli build toolchain that might be causing this? I suspect there is a build configuration or something in the roc cli causing this?? </p>
+<p>The below shows this workflow, note that I had to vendor the zig builtins into the platform so that it can build the host without roc, and I also included a couple of print debugs in the platform to see where things fail</p>
+<div class="codehilite"><pre><span></span><code>PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\target\debug\roc.exe build .\examples\platform-switching\rocLovesZig.roc
+🔨 Rebuilding platform...
+0 errors and 0 warnings found in 3786 ms while successfully building:
+
+    .\examples\platform-switching\rocLovesZig.exe
+PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\examples\platform-switching\rocLovesZig.exe
+STARTING
+&lt;-- SEGFAULTS HERE when zig calls roc__mainForHost_1_exposed_generic(&amp;callresult);--&gt;
+PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\target\debug\roc.exe build --emit-llvm-ir .\examples\platform-switching\rocLovesZig.roc
+🔨 Rebuilding platform...
+Emitting LLVM IR to .\examples\platform-switching\rocLovesZig.ll
+0 errors and 0 warnings found in 3762 ms while successfully building:
+
+    .\examples\platform-switching\rocLovesZig.exe
+PS C:\Users\bosyl\Documents\GitHub\ROC&gt; zig build-exe .\examples\platform-switching\rocLovesZig.ll .\examples\platform-switching\zig-platform\host.zig -lc
+PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\host.exe
+STARTING
+HERE
+Roc &lt;3 Zig!
+runtime: 0.020ms
+</code></pre></div>
+<p>I'll continue digging...</p>
+
+
+
+<a name="411662251"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20Surgical%20Linker%20Bug/near/411662251" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20Surgical.20Linker.20Bug.html#411662251">(Jan 08 2024 at 03:19)</a>:</h4>
+<p>Ok the issue here is in the Windows <strong>surgical linker</strong>; using <code>--linker=legacy</code> is working ok ... but only if you build the app and then run the executable, something fishy is going on when you use <code>roc run</code></p>
+<div class="codehilite"><pre><span></span><code>PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\target\release\roc.exe build --linker=legacy .\examples\platform-switching\rocLovesZig.roc
+🔨 Rebuilding platform...
+0 errors and 0 warnings found in 4630 ms while successfully building:
+
+    .\examples\platform-switching\rocLovesZig.exe
+PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\examples\platform-switching\rocLovesZig.exe
+STARTINGHERERoc &lt;3 Zig!
+runtime: 0.022ms
+PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\target\release\roc.exe build .\examples\platform-switching\rocLovesZig.roc
+🔨 Rebuilding platform...
+0 errors and 0 warnings found in 4706 ms while successfully building:
+
+    .\examples\platform-switching\rocLovesZig.exe
+PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\examples\platform-switching\rocLovesZig.exe
+STARTING
+</code></pre></div>
+
+
+
+<a name="411662828"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20Surgical%20Linker%20Bug/near/411662828" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20Surgical.20Linker.20Bug.html#411662828">(Jan 08 2024 at 03:26)</a>:</h4>
+<p>Totally irrelevant for debugging... but just noticed this and thought it was interesing</p>
+<div class="codehilite"><pre><span></span><code>                Surgical Linker Legacy Linker
+DEV backend     96 ms           3219 ms
+LLVM backend    184 ms          3244 ms
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\target\release\roc.exe build --dev --prebuilt-platform .\examples\platform-switching\rocLovesZig.roc
+0 errors and 0 warnings found in 96 ms while successfully building:
+
+    .\examples\platform-switching\rocLovesZig.exe
+PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\target\release\roc.exe build --dev --linker=legacy --prebuilt-platform .\examples\platform-switching\rocLovesZig.roc
+0 errors and 0 warnings found in 3219 ms while successfully building:
+
+    .\examples\platform-switching\rocLovesZig.exe
+PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\target\release\roc.exe build --prebuilt-platform .\examples\platform-switching\rocLovesZig.roc
+0 errors and 0 warnings found in 184 ms while successfully building:
+
+    .\examples\platform-switching\rocLovesZig.exe
+PS C:\Users\bosyl\Documents\GitHub\ROC&gt; .\target\release\roc.exe build --linker=legacy --prebuilt-platform .\examples\platform-switching\rocLovesZig.roc
+0 errors and 0 warnings found in 3244 ms while successfully building:
+
+    .\examples\platform-switching\rocLovesZig.exe
+</code></pre></div>
+
+
+
+<a name="411663058"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20Surgical%20Linker%20Bug/near/411663058" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20Surgical.20Linker.20Bug.html#411663058">(Jan 08 2024 at 03:30)</a>:</h4>
+<p>Using the <strong>legacy linker</strong> both DEV and LLVM backends work correctly <span aria-label="check" class="emoji emoji-2705" role="img" title="check">:check:</span><br>
+Using the <strong>surgical linker</strong> both crash with a segfault <span aria-label="lady beetle" class="emoji emoji-1f41e" role="img" title="lady beetle">:lady_beetle:</span></p>
+
+
+
+<a name="411666831"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20Surgical%20Linker%20Bug/near/411666831" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20Surgical.20Linker.20Bug.html#411666831">(Jan 08 2024 at 03:58)</a>:</h4>
+<p>3300% speed improvement for surgical linker <span aria-label="joy" class="emoji emoji-1f602" role="img" title="joy">:joy:</span> </p>
+<p><a href="/user_uploads/22008/AeGR6c1qyN_hMIB65kiYWdPI/Screenshot-2024-01-07-at-10.58.28-PM.png">Screenshot-2024-01-07-at-10.58.28-PM.png</a></p>
+<div class="message_inline_image"><a href="/user_uploads/22008/AeGR6c1qyN_hMIB65kiYWdPI/Screenshot-2024-01-07-at-10.58.28-PM.png" title="Screenshot-2024-01-07-at-10.58.28-PM.png"><img src="/user_uploads/22008/AeGR6c1qyN_hMIB65kiYWdPI/Screenshot-2024-01-07-at-10.58.28-PM.png"></a></div>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

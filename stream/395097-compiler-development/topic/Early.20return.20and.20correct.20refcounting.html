@@ -1,0 +1,262 @@
+<html>
+<head><meta charset="utf-8"><title>Early return and correct refcounting · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html">Early return and correct refcounting</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="478671610"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478671610" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478671610">(Oct 24 2024 at 09:25)</a>:</h4>
+<p>So I'm working on the <code>return</code> keyword that allows for early returns from functions, and unblocks the <code>try</code> keyword implementation. Besides adding tests, <a href="https://github.com/roc-lang/roc/pull/7173">the PR is ready</a>... but for one issue: I'm not yet handling refcounting correctly on early returns (<a href="https://github.com/roc-lang/roc/blob/7518a2c5ab0a13a69f357ba85a65f68c87b909f1/crates/compiler/mono/src/ir.rs#L5885-L5900">I'm just returning naively</a>).</p>
+<p>Though I'd normally try to fully investigate myself before pulling in help, I'm not finding things obvious enough to figure out how to make the right change without delaying the PR a good bit, so I'd love some help on at least the strategy to do this. AFAICT there are two ways to go about this:</p>
+<ol>
+<li>Convert functions with early returns to SSA, and use the existing code. In a GC language, this would be annoying (see nested ifs with deeply nested returns) but not terrible. Refcounting makes that approach less desirable since each instance can't just "joinpoint" to the final return, as each return has incremented the refcounts of different sets of vars. However, this doesn't need much more understanding of the Roc compiler than I already have.</li>
+<li>Track which refcounted variables have been created/had their refcount incremented up to each early return, and add dec/decref instructions for each of those values with each return statement. Presumably we do this somewhere already for end-of-function-body returns, but I've not found it yet in the ~30k lines of <code>crates/compiler/mono</code>.</li>
+</ol>
+<p>Does anyone with backend experience have thoughts on which of those options would be better/easier, and potentially could help me with the high-level plan? Or maybe there's another option? Any help is welcome.</p>
+<p><span class="user-mention" data-user-id="281543">@Folkert de Vries</span> I've heard that you may have some expertise here? If not, no worries.</p>
+
+
+
+<a name="478677050"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478677050" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478677050">(Oct 24 2024 at 09:55)</a>:</h4>
+<p>Logging off for the day, but my current concept is to implement the equivalent of <a href="https://github.com/roc-lang/roc/blob/06996d88f29589e189843171cf74187a45cc777e/crates/compiler/can/src/scope.rs#L18">roc_can::scope::Scope</a> in <a href="https://github.com/roc-lang/roc/blob/main/crates/compiler/mono/src/inc_dec.rs#L411">insert_inc_dec_operations_proc</a> to track which refcounted vars need to be decremented before early returning. I'll try it tomorrow night if I get time</p>
+
+
+
+<a name="478721861"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478721861" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478721861">(Oct 24 2024 at 13:49)</a>:</h4>
+<p>First off, I would check whether you need to handle anything for refcounting. I'm not sure that anything breaks with early returns but maybe it does.</p>
+
+
+
+<a name="478722065"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478722065" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478722065">(Oct 24 2024 at 13:50)</a>:</h4>
+<p>If it does the simplest approach which i would suggest is converting</p>
+<div class="codehilite"><pre><span></span><code>foo = \x -&gt;
+  n = if x then
+    return 1
+  else
+    2
+
+  n + 3
+</code></pre></div>
+<p>to</p>
+<div class="codehilite"><pre><span></span><code>foo = \x -&gt;
+  if x then
+    1
+  else
+    n = 2
+    n + 3
+</code></pre></div>
+
+
+
+<a name="478722344"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478722344" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478722344">(Oct 24 2024 at 13:51)</a>:</h4>
+<p>I'm not sure that scales, e.g. what if you do it in the middle of a <code>when</code> branch? or, even worse, a <code>when</code> guard? (we might want to disallow that <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span>)</p>
+
+
+
+<a name="478769181"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478769181" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478769181">(Oct 24 2024 at 17:43)</a>:</h4>
+<p>Currently, return is only parsed as a statement, meaning anywhere we parse blocks that <code>allow_defs</code> it'll work, and anywhere else is a parse error. Aka it doesn't work for <code>if</code> conditions, <code>when</code> predicates, or <code>when</code> guards</p>
+
+
+
+<a name="478772940"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478772940" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478772940">(Oct 24 2024 at 18:08)</a>:</h4>
+<p>oh I meant in one of the <code>when</code> branches, not the conditional</p>
+
+
+
+<a name="478773031"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773031" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773031">(Oct 24 2024 at 18:09)</a>:</h4>
+<p>If we don't allow early return in <code>when</code> branches, then <code>try</code> won't work in <code>when</code> branches</p>
+
+
+
+<a name="478773040"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773040" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773040">(Oct 24 2024 at 18:09)</a>:</h4>
+<p>especially if it's a <code>when</code> inside another <code>when</code></p>
+
+
+
+<a name="478773101"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773101" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773101">(Oct 24 2024 at 18:09)</a>:</h4>
+<p>yeah my point is that I think the "translate <code>return</code> to sugar" idea runs into common situations where it doesn't work pretty quickly</p>
+
+
+
+<a name="478773158"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773158" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773158">(Oct 24 2024 at 18:10)</a>:</h4>
+<p>Oh, I agree!</p>
+
+
+
+<a name="478773272"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773272" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773272">(Oct 24 2024 at 18:10)</a>:</h4>
+<p>I guess the core issue is that we alway deal with refcounting for an entire block. With return, you have to be able to deal with refcounting for a partial block</p>
+
+
+
+<a name="478773286"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773286" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773286">(Oct 24 2024 at 18:11)</a>:</h4>
+<p>Yep</p>
+
+
+
+<a name="478773301"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773301" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773301">(Oct 24 2024 at 18:11)</a>:</h4>
+<p>This means that order of variable definition matters</p>
+
+
+
+<a name="478773360"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773360" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773360">(Oct 24 2024 at 18:11)</a>:</h4>
+<p>that's already true for other reasons though <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="478773398"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773398" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773398">(Oct 24 2024 at 18:11)</a>:</h4>
+<p>I think we still toposort our variables at some point</p>
+
+
+
+<a name="478773473"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773473" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773473">(Oct 24 2024 at 18:12)</a>:</h4>
+<p>So I don't think order matters today even though it probably should</p>
+
+
+
+<a name="478773629"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773629" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773629">(Oct 24 2024 at 18:13)</a>:</h4>
+<p>I guess purity inference may change this?</p>
+<p>With <code>!</code> desugaring to await, order kinda mattered due to all of the secret lambdas enforcing ordering.</p>
+
+
+
+<a name="478773823"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773823" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773823">(Oct 24 2024 at 18:14)</a>:</h4>
+<p>Anyway, we probably just need a statement by statement build up of refcounted lifetimes that can be used anytime a return is created. If no return is hit, we just do full refcount handling at the end of the block. If a return is hit, we do a partial refcount handling before actually running the return</p>
+
+
+
+<a name="478773893"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773893" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773893">(Oct 24 2024 at 18:15)</a>:</h4>
+<p>We form an SCC graph for defs and sort here: <a href="https://github.com/roc-lang/roc/blob/06996d88f29589e189843171cf74187a45cc777e/crates/compiler/can/src/def.rs#L2003">https://github.com/roc-lang/roc/blob/06996d88f29589e189843171cf74187a45cc777e/crates/compiler/can/src/def.rs#L2003</a></p>
+
+
+
+<a name="478773966"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478773966" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478773966">(Oct 24 2024 at 18:15)</a>:</h4>
+<p>That's my thought as well</p>
+
+
+
+<a name="478774246"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478774246" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478774246">(Oct 24 2024 at 18:17)</a>:</h4>
+<p>yeah we need to stop reordering them</p>
+
+
+
+<a name="478774333"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478774333" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478774333">(Oct 24 2024 at 18:18)</a>:</h4>
+<p>that's already true in isolation today <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="478774379"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478774379" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478774379">(Oct 24 2024 at 18:18)</a>:</h4>
+<p>That'll happen with the canonicalization rewrite, right? unless we wanna do it earlier</p>
+
+
+
+<a name="478774388"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478774388" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478774388">(Oct 24 2024 at 18:18)</a>:</h4>
+<p>yeah, it could happen then, or earlier - either way</p>
+
+
+
+<a name="478774413"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478774413" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478774413">(Oct 24 2024 at 18:18)</a>:</h4>
+<p>Wouldn't be bad to do that first to keep the changes smaller</p>
+
+
+
+<a name="478774421"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478774421" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478774421">(Oct 24 2024 at 18:18)</a>:</h4>
+<p>I think we still need to reorder function defs actually</p>
+
+
+
+<a name="478774445"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478774445" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478774445">(Oct 24 2024 at 18:18)</a>:</h4>
+<p>but not non-functions</p>
+
+
+
+<a name="478774566"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478774566" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478774566">(Oct 24 2024 at 18:19)</a>:</h4>
+<p>although that gets a bit tricky in the sense that they shouldn't be reordered earlier than when things they close over are defined</p>
+
+
+
+<a name="478775788"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478775788" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478775788">(Oct 24 2024 at 18:28)</a>:</h4>
+<p>I thought we only planned to reorder top level functions.</p>
+
+
+
+<a name="478775844"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478775844" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478775844">(Oct 24 2024 at 18:28)</a>:</h4>
+<p>But maybe mutually recursive lambdas with closures shouldn't work? I'm not actually sure they are really important to make work</p>
+
+
+
+<a name="478777333"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478777333" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478777333">(Oct 24 2024 at 18:39)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/channel/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting/near/478775788">said</a>:</p>
+<blockquote>
+<p>I thought we only planned to reorder top level functions.</p>
+</blockquote>
+<p>oh yeah I think this is right...I forget where we talked about reordering, but I think there was a thread somewhere</p>
+
+
+
+<a name="478777865"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478777865" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478777865">(Oct 24 2024 at 18:42)</a>:</h4>
+<p>This?</p>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/395097-compiler-development/topic/shadowing.20functions/near/442502567">said</a>:</p>
+<blockquote>
+<p>I guess that's the simplest design because the rule is basically "you have to define a value before you use it, except top-level values can be defined in any order and used in any order"</p>
+</blockquote>
+
+
+
+<a name="478847149"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478847149" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478847149">(Oct 25 2024 at 06:03)</a>:</h4>
+<p>Okay, after much fiddling with <code>test_mono</code>, it seems that <span class="user-mention" data-user-id="454654">@Ayaz Hafiz</span> was correct and the refcounting is working even with nested returns. I added two test cases, one for nested if and the other for nested when, and they both seem to be working correctly.</p>
+<p>It might be good to get an extra review, but yeah, this PR is ready for review!</p>
+
+
+
+<a name="478847427"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478847427" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478847427">(Oct 25 2024 at 06:06)</a>:</h4>
+<p>I'll double check that I have all the tests I want, and then move on to implementing <code>try</code></p>
+
+
+
+<a name="478851381"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Early%20return%20and%20correct%20refcounting/near/478851381" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting.html#478851381">(Oct 25 2024 at 06:44)</a>:</h4>
+<p>Yeah, tests look good to me. Moving on to <code>try</code></p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

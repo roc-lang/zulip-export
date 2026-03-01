@@ -1,0 +1,90 @@
+<html>
+<head><meta charset="utf-8"><title>Database Apocalypse · software unscripted podcast · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/429850-software-unscripted-podcast/index.html">software unscripted podcast</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/429850-software-unscripted-podcast/topic/Database.20Apocalypse.html">Database Apocalypse</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="450302108"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/429850-software%20unscripted%20podcast/topic/Database%20Apocalypse/near/450302108" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zellyn Hunter <a href="https://roc-lang.github.io/zulip-export/stream/429850-software-unscripted-podcast/topic/Database.20Apocalypse.html#450302108">(Jul 09 2024 at 22:32)</a>:</h4>
+<p>Hey, <span class="user-mention" data-user-id="281383">@Richard Feldman</span>! I know this is going back a loooong way, all the way to <a href="https://podcasts.apple.com/us/podcast/database-apocalypse/id1602572955?i=1000552676741">episode 6</a>, but I have questions!</p>
+<p>Something about the description of pulling functionality out into Haskell stuck with me. I think it was the "do the queries at the start, then the business logic, then return the queries to make changes". It seems like something people who were used to monadic or task-based I/O and pure functional languages would think about things.</p>
+<p>I have a few questions (due to a crazy database/object store design that's growing in my mind and won't leave me alone, but that's another story):</p>
+<ul>
+<li>Did you have to know all the queries you wanted to make up-front, or could there be a back-and-forth? Like, could you query a user, find out they're an admin, and then do a different set of queries. Or did you have to do the set of all queries that could be relevant no matter which path the Haskell business logic took?</li>
+<li>Did the side-effects returned by the Haskell business logic include both DB mutations as well as RPCs, Kafka writes, etc?</li>
+<li>Could the side-effects be marked as atomic? How was failure handled? What if the DB had been mutated by a parallel request and the side-effects were no longer valid?</li>
+<li>Am I completely wrong about how the scheme worked? Or was it a guiding pattern rather than a rigorous boundary?</li>
+</ul>
+<p>To briefly motivate this, my coworker and I were batting ideas back and forth about a data store where things are rigorously split into two phases: in phase 1, you can ask for data via RPCs, object fetches, etc. but the main object being operated on is read-only. (I <em>think</em> it makes sense to let you have a back-and-forth, letting the results of earlier queries influence the choices you make for later ones. I imagine it as using Roc Tasks, for example.)</p>
+<p>As you make the calls to fetch data, the results are recorded. (This is kinda how Temporal works, allowing you to replay half-done actions deterministically). (In the probably common case that what you're doing is fetching another object, we could record just the (type, ID, version) tuple and save space.)</p>
+<p>In phase two, you get to run a deterministic function on the main object, taking as input (a) the things you asked for in phase 1, (b) the parameters given to you by your caller, and (c) the current state of the main object being operated on. You return the new state…</p>
+<p>…plus some side effects. Which I'm very fuzzy on. I feel like if I had truly grokked Haskell I/O, I might have better mental models to reason about what is likely to be sufficient in terms of types of side-effects. But I haven't, so I'm asking questions here, since the <em>pattern</em> described in the podcast episode has a similar shape, at least in broad strokes. <span aria-label="smile" class="emoji emoji-1f642" role="img" title="smile">:smile:</span></p>
+<p>Sorry to necro an ancient episode, but as I said, it really has stuck with me for months/years now!</p>
+
+
+
+<a name="450314825"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/429850-software%20unscripted%20podcast/topic/Database%20Apocalypse/near/450314825" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/429850-software-unscripted-podcast/topic/Database.20Apocalypse.html#450314825">(Jul 10 2024 at 00:11)</a>:</h4>
+<p>haha it's all good! <span class="user-mention" data-user-id="477725">@Jasper Woudenberg</span> want to chime in, since you were directly involved in building it? <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="450353376"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/429850-software%20unscripted%20podcast/topic/Database%20Apocalypse/near/450353376" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/429850-software-unscripted-podcast/topic/Database.20Apocalypse.html#450353376">(Jul 10 2024 at 06:15)</a>:</h4>
+<p>Hiya! It's fun to hear back about this!</p>
+<p>We did know all the queries we wanted to make up front. Leading up to writing our first Haskell code, we spent quite a bit of time instrumenting our Rails code to let us know where in the code we were querying particular tables. Once we were confident we found all the spots, we made it so an exception would be thrown if those tables were queried anywhere else, to prevent changes from accidentally introducing new queries to these tables.</p>
+<p>We didn't really know upfront this would happen, but it turned out that the branching for these endpoints was such that with relatively little effort we could make the Rails code fit this broad pattern:</p>
+<ul>
+<li>First fetch of data *</li>
+<li>Some conditional logic - request might stop here</li>
+<li>Second fetch of data *</li>
+<li>Some processing</li>
+<li>Storing data *</li>
+</ul>
+<p>That was our starting point when we started adding Haskell. We then went ahead and modified the steps marked with a * above to be calls to Haskell instead.</p>
+<p>First we needed the Haskell code to reach parity with the Rails code it was replacing. This was the phase in which Haskell would return the side effects to run to Rails, so that Rails could run the database queries of the migrated-to-Haskell portion of the code in the same transaction as the queries of the still-in-Rails portion of the code. Kafka was not a part of the architecture yet at this point, I don't remember us doing any side-effects other than database queries in this phase.</p>
+<p>Once we had ported all the querying logic to Haskell, we built then flipped a switch to let Haskell run those queries directly, instead of passing side effects to run back to Rails. Then we started to build the replacement storage backend using Kafka, entirely in Haskell.</p>
+<p>I hope that clarifies some things, let me know if you've other questions!</p>
+<p>The database sounds cool too! Reading your description, my first thought is "Elm Architecture - The Database". I could imagine it might be useful as a persistence layer for elm-architecture-like applications. Is that a use you were thinking of as well?</p>
+
+
+
+<a name="450483066"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/429850-software%20unscripted%20podcast/topic/Database%20Apocalypse/near/450483066" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Zellyn Hunter <a href="https://roc-lang.github.io/zulip-export/stream/429850-software-unscripted-podcast/topic/Database.20Apocalypse.html#450483066">(Jul 10 2024 at 15:19)</a>:</h4>
+<p>I <em>really</em> like "Elm Architecture - The Database". That makes it so clear. I'd already been thinking of the phase 1 queries as Tasks…</p>
+<p>One last question: once Ruby handed the side effects back to Haskell at the end, could they fail? Or did you ensure it was only things that could succeed?</p>
+
+
+
+<a name="450500061"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/429850-software%20unscripted%20podcast/topic/Database%20Apocalypse/near/450500061" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/429850-software-unscripted-podcast/topic/Database.20Apocalypse.html#450500061">(Jul 10 2024 at 16:17)</a>:</h4>
+<p>I think we probably passed back failures as well, but don't remember with 100% certainty. Reason why I think we did is that when we swapped from 'send queries to ruby for execution' to 'let Haskell do the queries', we didn't need to change our application logic, we could flip the switch inside our internal 'database query library'. So failures were something we definitely handle in Haskell after that switch, which means it must have been part of our query api already when we were doing side effects in Rails.</p>
+
+
+
+<a name="450508475"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/429850-software%20unscripted%20podcast/topic/Database%20Apocalypse/near/450508475" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/429850-software-unscripted-podcast/topic/Database.20Apocalypse.html#450508475">(Jul 10 2024 at 16:55)</a>:</h4>
+<p><span class="user-mention" data-user-id="478939">@Michael Glass</span> might know</p>
+
+
+
+<a name="450549688"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/429850-software%20unscripted%20podcast/topic/Database%20Apocalypse/near/450549688" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Michael Glass <a href="https://roc-lang.github.io/zulip-export/stream/429850-software-unscripted-podcast/topic/Database.20Apocalypse.html#450549688">(Jul 10 2024 at 19:52)</a>:</h4>
+<p>I mean, there are two systems, the haskell system could always fail. </p>
+<p>We didn't model failure states so closely. I think just a couple of common expected failures  (not found, unauthorized). What we did do was catch and report all failures to ensure we didn't have to spend so much time worrying about that edge of things.</p>
+
+
+
+<a name="450549797"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/429850-software%20unscripted%20podcast/topic/Database%20Apocalypse/near/450549797" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Michael Glass <a href="https://roc-lang.github.io/zulip-export/stream/429850-software-unscripted-podcast/topic/Database.20Apocalypse.html#450549797">(Jul 10 2024 at 19:53)</a>:</h4>
+<p>(~similarly, in most systems that use, e.g. postgres, we don't spend a lot of time worrying if postgres is up or not. Failures at that edge mean the whole system is broken)</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

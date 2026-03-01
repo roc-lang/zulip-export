@@ -1,0 +1,275 @@
+<html>
+<head><meta charset="utf-8"><title>Tail Recursion Modulo Cons · contributing · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/index.html">contributing</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html">Tail Recursion Modulo Cons</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="354684624"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354684624" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Nulldata <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354684624">(Apr 30 2023 at 13:21)</a>:</h4>
+<p>Hello, I've been looking into Tail Recursion Modulo Cons (TRMC).<br>
+Here are my thoughts so far:</p>
+<p>The approaches I've read about so far implements TRMC using destination patching.<br>
+While the mono-IR doesn't have a direct way of representing the mutation that would need to be preformed, maybe <code>reuse</code> could do the job.</p>
+<p>Something like, transforming:</p>
+<div class="codehilite"><pre><span></span><code>map = \f, l -&gt;
+    when l is
+        Nil -&gt; Nil
+        Cons x xs -&gt; Cons (f x) (map f xs)
+</code></pre></div>
+<p>Into this (pseudocode):</p>
+<div class="codehilite"><pre><span></span><code>map = \f, l -&gt;
+  dst0 = Nil
+  let joinpoint j f l dst =
+    when l is
+      # Redundant in this case
+      Nil -&gt; reuse dst Nil
+      Cons x xs -&gt;
+        x&#39; = f x
+        dst&#39; = Nil
+        # Effectively write to dst
+        _ = reuse dst (Cons x&#39; dst&#39;)
+        jump j f xs dst&#39;
+  in
+    jump j f l dst0
+</code></pre></div>
+<p>I'm not sure if this is an elegant solution to not introducing the required mutating constructs into the mono-IR or a gross misuse of <code>reuse</code>:)</p>
+<p>Also, I must admit that I haven't fully dug in to how layouts work and how <code>reuse</code> interacts with them (started looking at the code yesterday).<br>
+So maybe for some layouts the termninal tags of a union are not valid "patchable" destinations?<br>
+In that case perhaps passing the outer union and a patch-index and <code>reuse</code>'ing the slot via an <code>UnionAtIndex</code> access would work?</p>
+<p>If this approach is valid, then this transform should probably either be a part of <code>make_tail_recursive</code> or run just before it.<br>
+Since it would use <code>reuse</code> et al, the pass(es) should probably be moved to after <code>insert_reset_reuse_operations</code> instead of at the start of <code>get_specializd_procs_without_rc</code>.<br>
+Would moving the tail-recursion pass to after the ref-counting passes affect anything else?</p>
+
+
+
+<a name="354688394"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354688394" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354688394">(Apr 30 2023 at 13:43)</a>:</h4>
+<p>this reminds me, we chatted with Anton Lorenzen a while ago and he mentioned that Daan Leijen had some trick for how TRMC is actually implemented in Koka</p>
+
+
+
+<a name="354688717"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354688717" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354688717">(Apr 30 2023 at 13:44)</a>:</h4>
+<p>I've had thoughts similar to ^. I think what you run into though is that <code>Nil</code> is represented as a null pointer. hence re-using it won't work.</p>
+
+
+
+<a name="354688812"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354688812" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354688812">(Apr 30 2023 at 13:45)</a>:</h4>
+<p>and generally a problem is that the papers assume you have one element of "scratch space" available at the start of the recursion, which is suboptimal. I would like it to actually be in-place</p>
+
+
+
+<a name="354688832"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354688832" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354688832">(Apr 30 2023 at 13:45)</a>:</h4>
+<p>but that means unrolling the recursive function, which would be tricky</p>
+
+
+
+<a name="354689180"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354689180" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354689180">(Apr 30 2023 at 13:47)</a>:</h4>
+<p>also, in general, cool that you're looking into this! we'd benefit from actually implementing TRMC a lot!</p>
+
+
+
+<a name="354689694"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354689694" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354689694">(Apr 30 2023 at 13:50)</a>:</h4>
+<div class="codehilite"><pre><span></span><code>        dst&#39; = Nil
+        # Effectively write to dst
+        _ = reuse dst (Cons x&#39; Nil)
+        jump j f xs dst&#39;
+</code></pre></div>
+<p>To clarify, I think you'd really want something like</p>
+<div class="codehilite" data-code-language="Diff"><pre><span></span><code><span class="w"> </span>       dst' = Nil
+<span class="w"> </span>       # Effectively write to dst
+<span class="gd">-       _ = reuse dst (Cons x' Nil)</span>
+<span class="gi">+       _ = reuse dst (Cons x' dst')</span>
+<span class="w"> </span>       jump j f xs dst' # index into the new `Nil` cell above
+</code></pre></div>
+<p>here, right?</p>
+
+
+
+<a name="354689928"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354689928" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Nulldata <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354689928">(Apr 30 2023 at 13:51)</a>:</h4>
+<p>Yes! Fixed the original post</p>
+
+
+
+<a name="354690005"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354690005" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354690005">(Apr 30 2023 at 13:51)</a>:</h4>
+<p>Folkert, does <code>reuse</code> have to be 1-to-1 with <code>reset</code>?</p>
+
+
+
+<a name="354690127"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354690127" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354690127">(Apr 30 2023 at 13:52)</a>:</h4>
+<blockquote>
+<p>this reminds me, we chatted with Anton Lorenzen a while ago and he mentioned that Daan Leijen had some trick for how TRMC is actually implemented in Koka</p>
+</blockquote>
+<p>aside: yeah, they said they would send us a note on how they do it sometime later this spring or summer</p>
+
+
+
+<a name="354690355"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354690355" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354690355">(Apr 30 2023 at 13:53)</a>:</h4>
+<p>no they'll publish a paper on FBIP. I think I should follow up about that TRMC thing</p>
+
+
+
+<a name="354690393"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354690393" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Nulldata <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354690393">(Apr 30 2023 at 13:53)</a>:</h4>
+<blockquote>
+<p>this reminds me, we chatted with Anton Lorenzen a while ago and he mentioned that Daan Leijen had some trick for how TRMC is actually implemented in Koka</p>
+</blockquote>
+<p>Ooh, nice, I'll have a look at that (maybe we should steal some of their benchmarks too)</p>
+<blockquote>
+<p>I've had thoughts similar to ^. I think what you run into though is that Nil is represented as a null pointer. hence re-using it won't work.</p>
+</blockquote>
+<p>Yeah I feared that, but would the "passing outer value + patch index" index then work?</p>
+<blockquote>
+<p>and generally a problem is that the papers assume you have one element of "scratch space" available at the start of the recursion, which is suboptimal. I would like it to actually be in-place<br>
+but that means unrolling the recursive function, which would be tricky</p>
+</blockquote>
+<p>Maybe instead of unrolling, we could replace the inductive case(s) with a call to a generated helper which then basically has the body of my proposed transform, modulo that it would take the outer structure and a patch index instead, so that it's guarranteed to do an in-place update?</p>
+
+
+
+<a name="354690408"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354690408" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354690408">(Apr 30 2023 at 13:53)</a>:</h4>
+<p>eh, let's see. strictly speaking <code>reuse</code> is not tied to <code>reset</code></p>
+
+
+
+<a name="354691332"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354691332" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354691332">(Apr 30 2023 at 13:58)</a>:</h4>
+<p>something like this?</p>
+<div class="codehilite"><pre><span></span><code>map = \f, l -&gt;
+    when l is
+        Nil -&gt; Nil
+        Cons x xx -&gt; helper f x xx l
+
+helper = \f, x, xx, dst -&gt;
+    when xx is
+        Nil -&gt; Cons@dst (f x) xx
+        Cons y yy -&gt;
+            _ = Cons@dst (f x) xx
+
+            helper f y yy xx
+</code></pre></div>
+
+
+
+<a name="354691492"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354691492" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354691492">(Apr 30 2023 at 13:59)</a>:</h4>
+<p>the challenge is of course to recognize the inductive cases</p>
+
+
+
+<a name="354691555"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354691555" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354691555">(Apr 30 2023 at 13:59)</a>:</h4>
+<p>e.g. we also want this to work for (binary) trees</p>
+
+
+
+<a name="354696491"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354696491" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Nulldata <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354696491">(Apr 30 2023 at 14:27)</a>:</h4>
+<blockquote>
+<p>something like this? ...</p>
+</blockquote>
+<p>Yes something like that. Though wouldn't yours replace the input list <code>l</code> in-place?</p>
+
+
+
+<a name="354696776"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354696776" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354696776">(Apr 30 2023 at 14:28)</a>:</h4>
+<p>yes. that only works if the input and output types are roughly similar</p>
+
+
+
+<a name="354696813"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354696813" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354696813">(Apr 30 2023 at 14:28)</a>:</h4>
+<p>for us anyway</p>
+
+
+
+<a name="354696994"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354696994" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354696994">(Apr 30 2023 at 14:29)</a>:</h4>
+<p>ah I understand better now what you originally intended. If we cannot re-use the input list, then using <code>Nil</code> as the <code>dst</code> is exactly what you want</p>
+
+
+
+<a name="354697035"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354697035" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354697035">(Apr 30 2023 at 14:29)</a>:</h4>
+<p>because the reuse will allocate the required space</p>
+
+
+
+<a name="354697134"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354697134" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354697134">(Apr 30 2023 at 14:30)</a>:</h4>
+<p>but, if the update can happen in-place, we'd like that too of course</p>
+
+
+
+<a name="354697628"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354697628" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Nulldata <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354697628">(Apr 30 2023 at 14:32)</a>:</h4>
+<p>Yeah, I mean we're not necessarily trying to avoid fresh allocs all together. After all the input list might still live after the call, so constructing a whole new output list is fine in those cases. We mainly want to use the <code>reuse</code> in order to enable tail-recursion</p>
+
+
+
+<a name="354697961"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354697961" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354697961">(Apr 30 2023 at 14:33)</a>:</h4>
+<p>yes, limiting scope a bit here is probably a good idea</p>
+
+
+
+<a name="354698755"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354698755" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354698755">(Apr 30 2023 at 14:37)</a>:</h4>
+<p>also, hi and welcome <span class="user-mention" data-user-id="613571">@Nulldata</span>! <span aria-label="wave" class="emoji emoji-1f44b" role="img" title="wave">:wave:</span></p>
+
+
+
+<a name="354699361"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354699361" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Nulldata <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354699361">(Apr 30 2023 at 14:40)</a>:</h4>
+<p>As for detection, a naïve approach would maybe be:<br>
+Look for tail position constructor calls, check if one of the arguments is a recursive call, and then mark that slot as the "hole"<br>
+Since, we're working with a pure functional language, I guess the argument position/order of the recursive call doesn't actually matter?</p>
+<p>This doesn't handle mutually recursive functions nor more advanced cases, but might be a good starting point</p>
+
+
+
+<a name="354699484"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354699484" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354699484">(Apr 30 2023 at 14:40)</a>:</h4>
+<p>sure, you're right that order of arguments does not matter</p>
+
+
+
+<a name="354701991"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354701991" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Nulldata <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354701991">(Apr 30 2023 at 14:51)</a>:</h4>
+<p>Great</p>
+
+
+
+<a name="354703901"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/354703901" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#354703901">(Apr 30 2023 at 15:02)</a>:</h4>
+<p>this is the detection heuristic koka uses (<a href="https://github.com/koka-lang/koka/blob/b1670308f88dd1fc6c22cad28385fcb185d5b27d/src/Core/CTail.hs#L179-L217">1</a>, <a href="https://github.com/koka-lang/koka/blob/b1670308f88dd1fc6c22cad28385fcb185d5b27d/src/Core/CTail.hs#L304-L371">2</a>)</p>
+
+
+
+<a name="356268539"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Tail%20Recursion%20Modulo%20Cons/near/356268539" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Nulldata <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Tail.20Recursion.20Modulo.20Cons.html#356268539">(May 06 2023 at 10:41)</a>:</h4>
+<p>So I haven't been able to work much on this so far. I mainly have the weekends for this and this weekend is kinda busy for me.<br>
+But I have started the first step, which is moving the <code>tail_recursion</code> transform past the RC/Reuse transforms to avoid introducing <code>Reuse</code> instructions before them. </p>
+<p>I've made a draft PR for tracking: <a href="https://github.com/roc-lang/roc/pull/5382">https://github.com/roc-lang/roc/pull/5382</a></p>
+<p>Most of the mono changes caused by the moving of the <code>tail_recursion</code> transform seem to be just renamings, except this one: <a href="https://github.com/roc-lang/roc/pull/5382/files#diff-41b4132f97c437f17a0b8a438ad86d2c5311451161e13f58357e6bdb3781f065">https://github.com/roc-lang/roc/pull/5382/files#diff-41b4132f97c437f17a0b8a438ad86d2c5311451161e13f58357e6bdb3781f065</a><br>
+Which looks kinda odd. I'll look more into it later.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

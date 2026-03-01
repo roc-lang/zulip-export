@@ -1,0 +1,490 @@
+<html>
+<head><meta charset="utf-8"><title>`Task _ {}` kinda sucks · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html">`Task _ {}` kinda sucks</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="475111554"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475111554" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475111554">(Oct 06 2024 at 16:23)</a>:</h4>
+<p>So recently, we realized that open tags where leading to a solid number of ffi bugs. These were made apparent when we switch over to task as a builtin. Anytime we made a task like <code>Task someData []</code> it lead to ffi issues. The big problem is that <code>[]</code> was an open tag. It would eventually specialize to <code>SomeErrorTag</code>. That was leading to the ffi changing depending on the error type used by an application.</p>
+<p>This was the root of all kinds of strange bugs. As such, we switch over basic cli and other platforms using <code>{}</code> as the no error type. This solved the immediate ffi problem by requiring that the platform author manually deal with the issue.</p>
+<p>This has two main downsides:</p>
+<ol>
+<li>Even if a task can't fail, we are generating unnecessary result wrappings in the platform api. Often adding in a <code>crash</code> if the <code>{}</code> error case is ever somehow hit.</li>
+<li>We are leaving the fix up to the platform author, who may not even know there is a problem.</li>
+</ol>
+<hr>
+<p>I think we should more directly fix this. I also don't think it will be too hard:</p>
+<ol>
+<li>Ban any sort of type variables in the task type for a hosted function. No <code>Task Str *</code>. Those clearly have undefined ffi types.</li>
+<li>If we run into a <code>[]</code> in the ok or err case of a <code>Task</code>. Automatically map it in a way that ensures it will never expand.</li>
+</ol>
+<p>2 is pretty easy to do. This is an example of doing it manually for the error case:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="err">#</span><span class="w"> </span><span class="kt">Hosted</span><span class="w"> </span><span class="nv">generated</span><span class="w"> </span><span class="nv">function</span>
+<span class="nv">stdoutLine</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">Str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Task</span><span class="w"> </span><span class="p">{}</span><span class="w"> </span><span class="p">[]</span>
+
+<span class="err">#</span><span class="w"> </span><span class="kt">Wrapping</span><span class="w"> </span><span class="nv">function</span><span class="nf">:</span>
+<span class="nv">line</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">Str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Task</span><span class="w"> </span><span class="p">{}</span><span class="w"> </span><span class="p">[]</span>
+<span class="nv">line</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">str</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="p">(</span><span class="kt">Ok</span><span class="w"> </span><span class="nv">x</span><span class="p">)</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nv">stdoutLine</span><span class="w"> </span><span class="nv">str</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Task</span><span class="nf">.</span><span class="nv">result</span><span class="err">!</span>
+<span class="w">    </span><span class="kt">Task</span><span class="nf">.</span><span class="nv">ok</span><span class="w"> </span><span class="nv">x</span>
+</code></pre></div>
+<p>We just have to automatically generate the equivalent of that wrapping function. Preferably when we implement it, we inline the representation instead of actually calling <code>Task.result</code>.</p>
+<p>This enables user to just write <code>Task _ []</code> and it to automatically work. It will never expand accidentally and break ffi with the platform.</p>
+<p>Aside: I think we also have to ban <code>Task [] []</code>, but we can allow for both <code>Task [] _</code> and <code>Task _ []</code> where <code>_</code> is a proper type that enables instantiate the task.</p>
+<p>Thoughts?</p>
+
+
+
+<a name="475111655"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475111655" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475111655">(Oct 06 2024 at 16:25)</a>:</h4>
+<p>One ffi note that is important to note to platform authors:</p>
+<p><code>Task {} []</code> will just be <code>void</code> return type.<br>
+<code>Task Something []</code> will just be <code>Something</code> return type.<br>
+<code>Task Something SomeErr</code> will be <code>Result Something SomeErr</code> return type.</p>
+
+
+
+<a name="475112573"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112573" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112573">(Oct 06 2024 at 16:39)</a>:</h4>
+<p>I think it would be simpler to ban <code>[]</code> in hosted types altogether</p>
+
+
+
+<a name="475112580"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112580" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112580">(Oct 06 2024 at 16:39)</a>:</h4>
+<p>in the purity inference world, I don't think anyone would even notice <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="475112653"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112653" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112653">(Oct 06 2024 at 16:40)</a>:</h4>
+<p>because the only reason it comes up a lot now is that <code>Task _ []</code> comes up a lot</p>
+
+
+
+<a name="475112660"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112660" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112660">(Oct 06 2024 at 16:40)</a>:</h4>
+<p>but in the purity inference world, <code>Task Foo []</code> just becomes <code>Foo</code></p>
+
+
+
+<a name="475112672"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112672" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112672">(Oct 06 2024 at 16:40)</a>:</h4>
+<p>If purity inference is coming soon, I agree. If not, I think we should fix this</p>
+
+
+
+<a name="475112701"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112701" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112701">(Oct 06 2024 at 16:41)</a>:</h4>
+<p>yeah Agus already has the type-checking part almost done! <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<a name="475112724"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112724" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112724">(Oct 06 2024 at 16:41)</a>:</h4>
+<p>hm, although shouldn't we still run into problems with non-empty tag unions? <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="475112771"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112771" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112771">(Oct 06 2024 at 16:42)</a>:</h4>
+<p>oh! This is much farther along than I realized.</p>
+
+
+
+<a name="475112772"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112772" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112772">(Oct 06 2024 at 16:42)</a>:</h4>
+<p>like if I send <code>[Foo, Bar]</code> to the host, there are circumstances where that can unify with <code>[Foo, Bar, Baz]</code></p>
+
+
+
+<a name="475112783"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112783" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112783">(Oct 06 2024 at 16:42)</a>:</h4>
+<p>haha...yeah...</p>
+
+
+
+<a name="475112787"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112787" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112787">(Oct 06 2024 at 16:42)</a>:</h4>
+<p>which could change layouts</p>
+
+
+
+<a name="475112797"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112797" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112797">(Oct 06 2024 at 16:42)</a>:</h4>
+<p>So maybe we need a more wholistic solution for any tags sent to the host</p>
+
+
+
+<a name="475112820"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112820" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112820">(Oct 06 2024 at 16:42)</a>:</h4>
+<p>yeah like explicitly saying <code>[Foo, Bar, Baz][]</code> - or inferring it that way I guess</p>
+
+
+
+<a name="475112838"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112838" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112838">(Oct 06 2024 at 16:43)</a>:</h4>
+<p>like basically treating any tag union types in hosted signatures as closed</p>
+
+
+
+<a name="475112857"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112857" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112857">(Oct 06 2024 at 16:43)</a>:</h4>
+<p>Really we want host tags to be closed but to automatically closed, but I also think that it would be preferred to to automatically map them back to open.</p>
+
+
+
+<a name="475112881"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112881" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112881">(Oct 06 2024 at 16:43)</a>:</h4>
+<p>Or at least make it trivial to do so?</p>
+
+
+
+<a name="475112911"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112911" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112911">(Oct 06 2024 at 16:43)</a>:</h4>
+<p>Cause all error tags will want to be open at the end of the day</p>
+
+
+
+<a name="475112973"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112973" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112973">(Oct 06 2024 at 16:44)</a>:</h4>
+<p>oh true</p>
+
+
+
+<a name="475112979"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475112979" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475112979">(Oct 06 2024 at 16:44)</a>:</h4>
+<p>hm</p>
+
+
+
+<a name="475113009"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113009" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113009">(Oct 06 2024 at 16:44)</a>:</h4>
+<div class="spoiler-block"><div class="spoiler-header">
+<p>terrible code in basic-cli to work around this</p>
+</div><div class="spoiler-content" aria-hidden="true">
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">Err</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="kt">EndOfFile</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">BrokenPipe</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">UnexpectedEof</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">InvalidInput</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">OutOfMemory</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">Interrupted</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">Unsupported</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">Other</span><span class="w"> </span><span class="kt">Str</span><span class="p">,</span>
+<span class="p">]</span>
+
+<span class="nv">handleErr</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">err</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">when</span><span class="w"> </span><span class="nv">err</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">        </span><span class="nv">e</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="nv">e</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="s">"EOF"</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">StdinErr</span><span class="w"> </span><span class="kt">EndOfFile</span>
+<span class="w">        </span><span class="nv">e</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="nv">e</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="s">"ErrorKind::BrokenPipe"</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">StdinErr</span><span class="w"> </span><span class="kt">BrokenPipe</span>
+<span class="w">        </span><span class="nv">e</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="nv">e</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="s">"ErrorKind::UnexpectedEof"</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">StdinErr</span><span class="w"> </span><span class="kt">UnexpectedEof</span>
+<span class="w">        </span><span class="nv">e</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="nv">e</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="s">"ErrorKind::InvalidInput"</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">StdinErr</span><span class="w"> </span><span class="kt">InvalidInput</span>
+<span class="w">        </span><span class="nv">e</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="nv">e</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="s">"ErrorKind::OutOfMemory"</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">StdinErr</span><span class="w"> </span><span class="kt">OutOfMemory</span>
+<span class="w">        </span><span class="nv">e</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="nv">e</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="s">"ErrorKind::Interrupted"</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">StdinErr</span><span class="w"> </span><span class="kt">Interrupted</span>
+<span class="w">        </span><span class="nv">e</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="nv">e</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="s">"ErrorKind::Unsupported"</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">StdinErr</span><span class="w"> </span><span class="kt">Unsupported</span>
+<span class="w">        </span><span class="nv">str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">StdinErr</span><span class="w"> </span><span class="p">(</span><span class="kt">Other</span><span class="w"> </span><span class="nv">str</span><span class="p">)</span>
+
+<span class="nv">line</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">Task</span><span class="w"> </span><span class="kt">Str</span><span class="w"> </span><span class="p">[</span><span class="kt">StdinErr</span><span class="w"> </span><span class="kt">Err</span><span class="p">]</span>
+<span class="nv">line</span><span class="w"> </span><span class="nf">=</span>
+<span class="w">    </span><span class="kt">PlatformTasks</span><span class="nf">.</span><span class="nv">stdinLine</span>
+<span class="w">    </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Task</span><span class="nf">.</span><span class="nv">mapErr</span><span class="w"> </span><span class="nv">handleErr</span>
+</code></pre></div>
+</div></div>
+
+
+
+<a name="475113139"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113139" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113139">(Oct 06 2024 at 16:46)</a>:</h4>
+<p>so, setting aside ergonomics, I think there is only one way to do this correctly</p>
+
+
+
+<a name="475113142"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113142" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113142">(Oct 06 2024 at 16:46)</a>:</h4>
+<p>To work around this today in roc would require returning the open tag and then mapping every tag field (potentially recursively)  with a <code>when task |&gt; Task.result! is</code>.</p>
+
+
+
+<a name="475113183"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113183" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113183">(Oct 06 2024 at 16:46)</a>:</h4>
+<p>actually nm I can think of two ways to do it correctly</p>
+
+
+
+<a name="475113187"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113187" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113187">(Oct 06 2024 at 16:46)</a>:</h4>
+<blockquote>
+<p>I think there is only one way to do this correctly</p>
+</blockquote>
+<p>Force all type variables in the hosted api to be empty?</p>
+
+
+
+<a name="475113221"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113221" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113221">(Oct 06 2024 at 16:47)</a>:</h4>
+<p>So open tags are forced closed and <code>Task Str err</code> has not err case?</p>
+
+
+
+<a name="475113244"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113244" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113244">(Oct 06 2024 at 16:47)</a>:</h4>
+<p>so one way to do it correctly is to have a big <code>Error</code> union which represents literally every possible error the host might see</p>
+
+
+
+<a name="475113267"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113267" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113267">(Oct 06 2024 at 16:47)</a>:</h4>
+<p>and then all hosted functions use that as their <code>Error</code> types, and we have a rule that all tag unions in hosted types are closed unions, but that's okay because you've literally enumerated every possible one</p>
+
+
+
+<a name="475113330"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113330" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113330">(Oct 06 2024 at 16:48)</a>:</h4>
+<p>then as the platform author you write wrappers around these that just expose the specific errors that can happen for a particular operation (again, setting aside ergonomics - this would at least <em>work</em>)</p>
+
+
+
+<a name="475113340"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113340" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113340">(Oct 06 2024 at 16:48)</a>:</h4>
+<p>What happens when a user wants to wrap or modify an error? <code>Task.mapErr ExtraContext</code>?</p>
+
+
+
+<a name="475113344"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113344" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113344">(Oct 06 2024 at 16:48)</a>:</h4>
+<p>and those are open unions, and those are what get exposed to application authors</p>
+
+
+
+<a name="475113377"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113377" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113377">(Oct 06 2024 at 16:49)</a>:</h4>
+<p>application author experience is unchanged here</p>
+
+
+
+<a name="475113392"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113392" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113392">(Oct 06 2024 at 16:49)</a>:</h4>
+<p>this is an extra step for the platform author to take for the sake of layout correctness in the host</p>
+
+
+
+<a name="475113402"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113402" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113402">(Oct 06 2024 at 16:49)</a>:</h4>
+<p>I'm not sure I follow this? How are we opening the union such that the application author experience is unchanged?</p>
+
+
+
+<a name="475113411"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113411" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113411">(Oct 06 2024 at 16:50)</a>:</h4>
+<p>the platform author is using <code>Task.mapErr</code></p>
+
+
+
+<a name="475113463"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113463" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113463">(Oct 06 2024 at 16:50)</a>:</h4>
+<p>Ok, then why do we need one giant <code>Error</code> type?</p>
+
+
+
+<a name="475113468"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113468" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113468">(Oct 06 2024 at 16:50)</a>:</h4>
+<p>for layout reasons</p>
+
+
+
+<a name="475113510"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113510" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113510">(Oct 06 2024 at 16:51)</a>:</h4>
+<p>for a hosted function, the host needs to know statically what the layout of that tag union is</p>
+
+
+
+<a name="475113518"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113518" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113518">(Oct 06 2024 at 16:51)</a>:</h4>
+<p>in order to know what the layout of that <code>Result</code> is</p>
+
+
+
+<a name="475113541"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113541" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113541">(Oct 06 2024 at 16:51)</a>:</h4>
+<p>and that's only knowable statically if the tag union is closed</p>
+
+
+
+<a name="475113566"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113566" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113566">(Oct 06 2024 at 16:51)</a>:</h4>
+<p>(and if any closures inside it are boxed, which is already a rule we separately need)</p>
+
+
+
+<a name="475113589"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113589" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113589">(Oct 06 2024 at 16:52)</a>:</h4>
+<p><code>Task.mapErr</code> will deal with any layout issues by mapping to an open union.</p>
+<div class="codehilite"><pre><span></span><code>task1: Str -&gt; Task {} [SomeErr1]
+task2: Str -&gt; Task {} [SomeErr2]
+
+exposedTask1 = \str -&gt; Task.mapErr task1 \Err SomeErr1 -&gt; Err SomeErr1
+exposedTask2 = \str -&gt; Task.mapErr task2 \Err SomeErr2 -&gt; Err SomeErr2
+</code></pre></div>
+
+
+
+<a name="475113681"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113681" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113681">(Oct 06 2024 at 16:52)</a>:</h4>
+<p>oh, I see</p>
+
+
+
+<a name="475113692"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475113692" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475113692">(Oct 06 2024 at 16:52)</a>:</h4>
+<p>sure, that would do the same thing</p>
+
+
+
+<a name="475114022"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114022" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114022">(Oct 06 2024 at 16:54)</a>:</h4>
+<p>But yeah, ignoring ergonomic, I think we just need to ban all type variables. This includes the type variable in open tags.</p>
+
+
+
+<a name="475114133"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114133" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114133">(Oct 06 2024 at 16:55)</a>:</h4>
+<p>** and ban unboxed closures as you mentions</p>
+
+
+
+<a name="475114177"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114177" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114177">(Oct 06 2024 at 16:55)</a>:</h4>
+<p>well named type variables are useful</p>
+
+
+
+<a name="475114203"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114203" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114203">(Oct 06 2024 at 16:55)</a>:</h4>
+<p>but those need to compile to opaque pointers</p>
+
+
+
+<a name="475114279"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114279" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114279">(Oct 06 2024 at 16:56)</a>:</h4>
+<p>like that's what should be doing instead of <code>Model</code> ideally</p>
+
+
+
+<a name="475114340"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114340" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114340">(Oct 06 2024 at 16:56)</a>:</h4>
+<p>Ah, yeah, you have to special case some type variables, but those have to be in a container.</p>
+
+
+
+<a name="475114423"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114423" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114423">(Oct 06 2024 at 16:57)</a>:</h4>
+<p><code>Box model</code>, <code>List model</code>, etc.</p>
+
+
+
+<a name="475114451"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114451" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114451">(Oct 06 2024 at 16:57)</a>:</h4>
+<p>And this is due to the container having a known layout.</p>
+
+
+
+<a name="475114479"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114479" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114479">(Oct 06 2024 at 16:57)</a>:</h4>
+<p>But you can't do <code>Result Str err</code></p>
+
+
+
+<a name="475114666"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114666" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114666">(Oct 06 2024 at 16:58)</a>:</h4>
+<p>yeah I think that should be fine</p>
+
+
+
+<a name="475114819"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475114819" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475114819">(Oct 06 2024 at 16:59)</a>:</h4>
+<p>like <code>Box model</code> instead of the current <code>Model</code> for initializing webserver global state...you'd want that to be heap-allocated anyway so it would be passed by pointer to all the different request handlers</p>
+
+
+
+<a name="475115044"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475115044" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475115044">(Oct 06 2024 at 17:00)</a>:</h4>
+<p>A larger record is passed by reference anyway. So <code>Model</code> is still better.</p>
+
+
+
+<a name="475115074"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475115074" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475115074">(Oct 06 2024 at 17:00)</a>:</h4>
+<p>No need to keep unboxing and reboxing</p>
+
+
+
+<a name="475115091"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475115091" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475115091">(Oct 06 2024 at 17:00)</a>:</h4>
+<p>But yeah <code>Box model</code> is simpler</p>
+
+
+
+<a name="475115386"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475115386" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475115386">(Oct 06 2024 at 17:02)</a>:</h4>
+<p>Cause <code>Box model</code> in roc probably leads to a copy. It will be copied to the stack so it can be used as <code>model</code> without the <code>Box</code> in the roc application.</p>
+
+
+
+<a name="475115820"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475115820" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475115820">(Oct 06 2024 at 17:05)</a>:</h4>
+<p>We can fix this probably with a builtin though. Something that keeps the box alive, but for large records that will be passed by pointer anyway, will just pass in the pointer to the box.</p>
+
+
+
+<a name="475115851"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475115851" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475115851">(Oct 06 2024 at 17:05)</a>:</h4>
+<p>random thought, but we could have a <code>Box.leak : a -&gt; Box a</code> which gives you...</p>
+
+
+
+<a name="475115861"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475115861" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475115861">(Oct 06 2024 at 17:05)</a>:</h4>
+<p>yeah, something like that haha</p>
+
+
+
+<a name="475116085"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475116085" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475116085">(Oct 06 2024 at 17:06)</a>:</h4>
+<p>I wonder how often large records in roc are mutated in place vs make a new copy.....</p>
+
+
+
+<a name="475116172"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475116172" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475116172">(Oct 06 2024 at 17:07)</a>:</h4>
+<p>Anyway, this is a far side tangent at this point.</p>
+
+
+
+<a name="475116493"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475116493" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475116493">(Oct 06 2024 at 17:09)</a>:</h4>
+<p>For the original topic of this thread:</p>
+<p>It sounds like purity inference is actually pretty close. So we should just wait for that. On top of that, we have some known changes around restricting types that get passed to/from the host. That will fix any of these annoying bugs, but will not fix the ergonomics (luckily, the ergonomics are only a platform problem and shouldn't generally affect applications if platforms are implemented well).</p>
+
+
+
+<a name="475116662"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475116662" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475116662">(Oct 06 2024 at 17:10)</a>:</h4>
+<p>agreed!</p>
+
+
+
+<a name="475116842"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/%60Task%20_%20%7B%7D%60%20kinda%20sucks/near/475116842" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/.60Task.20_.20.7B.7D.60.20kinda.20sucks.html#475116842">(Oct 06 2024 at 17:11)</a>:</h4>
+<p>we could do the "make all the unions in hosted types be closed automatically" change anytime</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

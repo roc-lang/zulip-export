@@ -1,0 +1,382 @@
+<html>
+<head><meta charset="utf-8"><title>How to handle json null decoding · contributing · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/index.html">contributing</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html">How to handle json null decoding</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="427908008"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/427908008" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#427908008">(Mar 20 2024 at 11:39)</a>:</h4>
+<p>I'd like to get some opinions on how to handle json's null type.</p>
+<p>I've got an Option type that decodes to <code>@Option None</code> when given a 0 byte decode input. That lets me handle missing fields, but what about fields that are null eg <code>{"name":null,"age":20}</code>vs <code>{"age":20}</code><br>
+Some ideas i had:<br>
+A) Add a special check in the json record decoder that sends the decoder <code>[]</code> instead of <code>null</code><br>
+B) Add a check in the Option decoder that decodes <code>null</code> to <code>None</code> tying it to json<br>
+C) Make some new Opaque type that specifically decodes <code>null</code> and <code>[]</code><br>
+D) some other wizardry </p>
+<p>I like A the most because it's simple, but it does obscure the idea of  "null" vs "undefined". This would put us inline with most other decoding libraries and we could make this optional if the user wants to implement their own extra opaque type for null vs undefined</p>
+
+
+
+<a name="428027293"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/428027293" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#428027293">(Mar 20 2024 at 22:43)</a>:</h4>
+<p>I like the sound of A too. I originally had it decoding null into a valid Str "null" which wasn't a good call. <span class="user-mention" data-user-id="281383">@Richard Feldman</span>  had thoughts on that as he is using it at Vendr for some things and found that bug the hard way. So I definitely would be interested to know what he thinks too. I haven't used JSON much in anger, so for me it's more of a theoretical concept and staring at a spec to guess what we should do.</p>
+
+
+
+<a name="428035130"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/428035130" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#428035130">(Mar 20 2024 at 23:56)</a>:</h4>
+<p>There is also a similar question around encoding. I have currently made it so when a record field's encoder returns <code>[]</code>  the field is omitted and same with elements in a list and in a tuple. <br>
+I've then added an option to put in a <code>null</code> instead.</p>
+<p>Although it's unconventional I'm leaning towards having it put nulls in by default, or making it the default for lists and tuples, I want tuples and options to put in nulls because if you encode <code>[Some 1 ,None ,Some 2 ]</code> to <code>[1,2]</code> then decode it you get <code>[Some 1, Some 2 ]</code> which feels like an annoying "gotcha" moment I'd rather <code>[1,null,2]</code> so it correctly decodes to <code>[Some 1,None,Some 2]</code></p>
+
+
+
+<a name="430706441"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430706441" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430706441">(Apr 02 2024 at 04:00)</a>:</h4>
+<p>I was talking to a friend about this recently and he mentioned that for some APIs there is an important difference between null and undefined in json . Sending a message that has a single field null is and the rest undefined is a way to null-out that one field.<br>
+With my current implementation there is no way to encode both concepts at once. I was able to make a type that does handle both, but it is very coupled to json because it only decodes a null when it gets exactly "null" and encodes exactly "null" on encode.</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">interface</span><span class="w"> </span><span class="kt">OptionOrNull</span>
+<span class="w">    </span><span class="nv">exposes</span><span class="w"> </span><span class="p">[</span><span class="nv">none</span><span class="p">,</span><span class="w"> </span><span class="nv">some</span><span class="p">,</span><span class="w"> </span><span class="nv">null</span><span class="p">]</span>
+<span class="w">    </span><span class="nv">imports</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="kt">Encode</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">Core</span><span class="p">,</span>
+<span class="w">    </span><span class="p">]</span>
+
+<span class="kt">OptionOrNull</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nf">:=</span><span class="w"> </span><span class="p">[</span><span class="kt">Some</span><span class="w"> </span><span class="nv">val</span><span class="p">,</span><span class="w"> </span><span class="kt">None</span><span class="p">,</span><span class="w"> </span><span class="kt">Null</span><span class="p">]</span>
+<span class="w">    </span><span class="nv">implements</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="kt">Eq</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">Decoding</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nv">decoder</span><span class="p">,</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="kt">Encoding</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nv">toEncoder</span><span class="p">,</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="nv">none</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="p">{}</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="err">@</span><span class="kt">OptionOrNull</span><span class="w"> </span><span class="kt">None</span>
+<span class="nv">some</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">a</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="err">@</span><span class="kt">OptionOrNull</span><span class="w"> </span><span class="p">(</span><span class="kt">Some</span><span class="w"> </span><span class="nv">a</span><span class="p">)</span>
+<span class="nv">null</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="p">{}</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="err">@</span><span class="kt">OptionOrNull</span><span class="w"> </span><span class="kt">Null</span>
+
+<span class="nv">nullChars</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="s">"null"</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Str</span><span class="nf">.</span><span class="nv">toUtf8</span>
+
+<span class="nv">toEncoder</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="err">@</span><span class="kt">OptionOrNull</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="kt">Encode</span><span class="nf">.</span><span class="nv">custom</span><span class="w"> </span><span class="nf">\</span><span class="nv">bytes</span><span class="p">,</span><span class="w"> </span><span class="nv">fmt</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">        </span><span class="nv">when</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">            </span><span class="kt">Some</span><span class="w"> </span><span class="nv">contents</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nv">bytes</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Encode</span><span class="nf">.</span><span class="nv">append</span><span class="w"> </span><span class="nv">contents</span><span class="w"> </span><span class="nv">fmt</span>
+<span class="w">            </span><span class="kt">None</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nv">bytes</span>
+<span class="w">            </span><span class="kt">Null</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nv">bytes</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">List</span><span class="nf">.</span><span class="nv">concat</span><span class="w"> </span><span class="p">(</span><span class="nv">nullChars</span><span class="p">)</span>
+
+<span class="nv">decoder</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="kt">Decode</span><span class="nf">.</span><span class="nv">custom</span><span class="w"> </span><span class="nf">\</span><span class="nv">bytes</span><span class="p">,</span><span class="w"> </span><span class="nv">fmt</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">when</span><span class="w"> </span><span class="nv">bytes</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">        </span><span class="p">[]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">result</span><span class="nf">:</span><span class="w"> </span><span class="kt">Ok</span><span class="w"> </span><span class="p">(</span><span class="err">@</span><span class="kt">OptionOrNull</span><span class="w"> </span><span class="kt">None</span><span class="p">),</span><span class="w"> </span><span class="nv">rest</span><span class="nf">:</span><span class="w"> </span><span class="p">[]</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="p">[</span><span class="nf">'</span><span class="nv">n'</span><span class="p">,</span><span class="w"> </span><span class="nf">'</span><span class="nv">u'</span><span class="p">,</span><span class="w"> </span><span class="nf">'</span><span class="nv">l'</span><span class="p">,</span><span class="w"> </span><span class="nf">'</span><span class="nv">l'</span><span class="p">,</span><span class="nf">..</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nv">rest</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">result</span><span class="nf">:</span><span class="w"> </span><span class="kt">Ok</span><span class="w"> </span><span class="p">(</span><span class="nv">null</span><span class="w"> </span><span class="p">{}),</span><span class="w"> </span><span class="nv">rest</span><span class="nf">:</span><span class="w"> </span><span class="nv">rest</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="nv">_</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nv">when</span><span class="w"> </span><span class="nv">bytes</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Decode</span><span class="nf">.</span><span class="nv">decodeWith</span><span class="w"> </span><span class="p">(</span><span class="kt">Decode</span><span class="nf">.</span><span class="nv">decoder</span><span class="p">)</span><span class="w"> </span><span class="nv">fmt</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">                </span><span class="p">{</span><span class="w"> </span><span class="nv">result</span><span class="nf">:</span><span class="w"> </span><span class="kt">Ok</span><span class="w"> </span><span class="nv">res</span><span class="p">,</span><span class="w"> </span><span class="nv">rest</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">result</span><span class="nf">:</span><span class="w"> </span><span class="kt">Ok</span><span class="w"> </span><span class="p">(</span><span class="err">@</span><span class="kt">OptionOrNull</span><span class="w"> </span><span class="p">(</span><span class="kt">Some</span><span class="w"> </span><span class="nv">res</span><span class="p">)),</span><span class="w"> </span><span class="nv">rest</span><span class="w"> </span><span class="p">}</span>
+<span class="w">                </span><span class="p">{</span><span class="w"> </span><span class="nv">result</span><span class="nf">:</span><span class="w"> </span><span class="kt">Err</span><span class="w"> </span><span class="nv">a</span><span class="p">,</span><span class="w"> </span><span class="nv">rest</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">result</span><span class="nf">:</span><span class="w"> </span><span class="kt">Err</span><span class="w"> </span><span class="nv">a</span><span class="p">,</span><span class="w"> </span><span class="nv">rest</span><span class="w"> </span><span class="p">}</span>
+<span class="kt">OptionTest2</span><span class="nf">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">maybe</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">OptionOrNull</span><span class="w"> </span><span class="kt">U8</span><span class="p">,</span><span class="w"> </span><span class="nv">y</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">U8</span><span class="p">,</span><span class="w"> </span><span class="nv">maybe2</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">OptionOrNull</span><span class="w"> </span><span class="kt">U8</span><span class="w"> </span><span class="p">}</span>
+
+<span class="nv">expect</span>
+<span class="w">    </span><span class="nv">decoded</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">Result</span><span class="w"> </span><span class="kt">OptionTest2</span><span class="w"> </span><span class="nv">_</span>
+<span class="w">    </span><span class="nv">decoded</span><span class="w"> </span><span class="nf">=</span>
+<span class="w">        </span><span class="s">"""</span>
+<span class="s">        {"</span><span class="nv">y</span><span class="s">":1,"</span><span class="nv">maybe</span><span class="s">":null}</span>
+<span class="s">        """</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Str</span><span class="nf">.</span><span class="nv">toUtf8</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Decode</span><span class="nf">.</span><span class="nv">fromBytes</span><span class="w"> </span><span class="p">(</span><span class="kt">Core</span><span class="nf">.</span><span class="nv">jsonWithOptions</span><span class="p">{</span><span class="nv">emptyEncodeAsNull</span><span class="nf">:</span><span class="kt">Bool</span><span class="nf">.</span><span class="nv">false</span><span class="p">,</span><span class="nv">nullAsUndefined</span><span class="nf">:</span><span class="kt">Bool</span><span class="nf">.</span><span class="nv">false</span><span class="p">})</span>
+
+<span class="w">    </span><span class="nv">expected</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="kt">Ok</span><span class="w"> </span><span class="p">({</span><span class="w"> </span><span class="nv">y</span><span class="nf">:</span><span class="w"> </span><span class="mi">1</span><span class="nv">u8</span><span class="p">,</span><span class="w"> </span><span class="nv">maybe</span><span class="nf">:</span><span class="w"> </span><span class="nv">null</span><span class="p">{},</span><span class="nv">maybe2</span><span class="nf">:</span><span class="w"> </span><span class="nv">none</span><span class="p">{}}</span><span class="w"> </span><span class="p">)</span>
+<span class="w">    </span><span class="nv">isGood</span><span class="w"> </span><span class="nf">=</span>
+<span class="w">        </span><span class="nv">when</span><span class="w"> </span><span class="p">(</span><span class="nv">decoded</span><span class="p">,</span><span class="w"> </span><span class="nv">expected</span><span class="p">)</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">            </span><span class="p">(</span><span class="kt">Ok</span><span class="w"> </span><span class="nv">a</span><span class="p">,</span><span class="w"> </span><span class="kt">Ok</span><span class="w"> </span><span class="nv">b</span><span class="p">)</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">                </span><span class="nv">a</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="nv">b</span>
+
+<span class="w">            </span><span class="nv">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Bool</span><span class="nf">.</span><span class="nv">false</span>
+<span class="w">    </span><span class="nv">isGood</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="kt">Bool</span><span class="nf">.</span><span class="nv">true</span>
+
+<span class="err">#</span><span class="w"> </span><span class="kt">Encode</span><span class="w"> </span><span class="kt">Option</span><span class="w"> </span><span class="kt">None</span><span class="w"> </span><span class="nv">record</span><span class="w"> </span><span class="nv">with</span><span class="w"> </span><span class="nv">null</span>
+<span class="nv">expect</span>
+<span class="w">    </span><span class="nv">encoded</span><span class="w"> </span><span class="nf">=</span>
+<span class="w">        </span><span class="nv">dat</span><span class="nf">:</span><span class="kt">OptionTest2</span>
+<span class="w">        </span><span class="nv">dat</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">maybe2</span><span class="nf">:</span><span class="w"> </span><span class="nv">none</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="nv">maybe</span><span class="nf">:</span><span class="w"> </span><span class="nv">null</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="nv">y</span><span class="nf">:</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="kt">Encode</span><span class="nf">.</span><span class="nv">toBytes</span><span class="w"> </span><span class="nv">dat</span><span class="w"> </span><span class="p">(</span><span class="kt">Core</span><span class="nf">.</span><span class="nv">jsonWithOptions</span><span class="p">{</span><span class="nv">emptyEncodeAsNull</span><span class="nf">:</span><span class="kt">Bool</span><span class="nf">.</span><span class="nv">false</span><span class="p">})</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Str</span><span class="nf">.</span><span class="nv">fromUtf8</span>
+
+<span class="w">    </span><span class="nv">expected</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="kt">Ok</span>
+<span class="w">        </span><span class="s">"""</span>
+<span class="s">        {"</span><span class="nv">maybe</span><span class="s">":null,"</span><span class="nv">y</span><span class="s">":1}</span>
+<span class="s">        """</span>
+<span class="w">    </span><span class="nv">expected</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="nv">encoded</span>
+</code></pre></div>
+<p>I would love to hear what some other folks with a lot of experience with web stuff and json apis think of this. </p>
+<p>Should we maybe have our encoders and decoders have an inbuilt concept of Null vs undefined so that this implementation isn't tied to json? The builtin decoder could define opaque types for <code>Null </code>and <code>Undefined</code> and expect a  <code>DecodingFormat</code> to implement them somehow.</p>
+<p><span class="user-mention" data-user-id="281383">@Richard Feldman</span> <span class="user-mention" data-user-id="515757">@Luke Boswell</span> Thoughts?</p>
+
+
+
+<a name="430717252"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430717252" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430717252">(Apr 02 2024 at 05:55)</a>:</h4>
+<p>I think the null/undefined distinction is reasonably specific to JSON. Some other serialization formats have it too, but not all of them. For instance, the <a href="https://github.com/jwoudenberg/rvn">rvn</a> format I recently worked on doesn't have null, and neither does TOML or XML. I think it'd be a unintuitive for a TOML encoder/decoder to have to deal with null if neither TOML nor Roc support it. Based on that, null being a JSON-specific think makes a certian amount of sense to me.</p>
+
+
+
+<a name="430717776"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430717776" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430717776">(Apr 02 2024 at 06:00)</a>:</h4>
+<p>Makes sense to me to have something like <code>ValueOrNullOrUndefined</code> lying around in the <code>json</code> library though. I don't like it when an API makes the difference between a null field an a missing field significant, a helper type like the one you have defined would make it super transparent in an implementation what shenanigans the API is up to.</p>
+
+
+
+<a name="430718074"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430718074" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430718074">(Apr 02 2024 at 06:03)</a>:</h4>
+<p>Yeah I think I mostly agree with that, a type like that as part of the Json library would mostly solve that. </p>
+<p>XML does kind of have null undefined distinction &lt;Maytag/&gt; could be thought of as null</p>
+
+
+
+<a name="430806468"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430806468" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430806468">(Apr 02 2024 at 14:44)</a>:</h4>
+<p>This is one of those cases where I really want to say, Don't support it. Apis that need to distinguish both are really poorly designed. Just merge them into one concept.....</p>
+<p>But real life use cases may dictate my above opinion as impractical.</p>
+
+
+
+<a name="430808309"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430808309" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430808309">(Apr 02 2024 at 14:52)</a>:</h4>
+<p>It looks bad from our world, but as a JS Dev I think it's natural to think of null and undefined as different things that should have distinct usage.<br>
+Thinking back I realise I've actually used an API like this. I'm pretty sure Salesforce has this. Unfortunately I think not supporting it would be a real sore spot for a lot of people.</p>
+
+
+
+<a name="430815306"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430815306" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430815306">(Apr 02 2024 at 15:22)</a>:</h4>
+<p>Yeah, I think it is required, but I have seen a number of bugs from it.</p>
+
+
+
+<a name="430818731"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430818731" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430818731">(Apr 02 2024 at 15:37)</a>:</h4>
+<p>I might be misunderstanding something, but JSON <a href="https://www.json.org/json-en.html">doesn't have undefined</a>, just null (although JavaScript has both)</p>
+
+
+
+<a name="430818818"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430818818" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430818818">(Apr 02 2024 at 15:37)</a>:</h4>
+<p>are we using "undefined" here to mean "missing field" or something similar?</p>
+
+
+
+<a name="430834952"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430834952" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430834952">(Apr 02 2024 at 17:01)</a>:</h4>
+<p>I think a js undefined will get encoded as the string "undefined"</p>
+
+
+
+<a name="430835009"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430835009" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430835009">(Apr 02 2024 at 17:01)</a>:</h4>
+<p>Right?</p>
+
+
+
+<a name="430835202"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430835202" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430835202">(Apr 02 2024 at 17:02)</a>:</h4>
+<p>Oh, nvm</p>
+
+
+
+<a name="430835265"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430835265" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430835265">(Apr 02 2024 at 17:02)</a>:</h4>
+<p>Undefined -&gt; field missing<br>
+Null -&gt; explicit null value</p>
+
+
+
+<a name="430981515"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430981515" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430981515">(Apr 03 2024 at 11:36)</a>:</h4>
+<p><span class="user-mention" data-user-id="281383">@Richard Feldman</span> I feel like there is alot of confusion here. I'll have a think and try to create some user story type explanations of why I think null undefined distinction is important for json (not for builtin into roc or anything, just within json encoding and decoding.</p>
+
+
+
+<a name="430981671"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430981671" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430981671">(Apr 03 2024 at 11:37)</a>:</h4>
+<p>fair enough, sounds good! <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span></p>
+
+
+
+<a name="430983526"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430983526" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> witoldsz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430983526">(Apr 03 2024 at 11:46)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding/near/430806468">said</a>:</p>
+<blockquote>
+<p>This is one of those cases where I really want to say, Don't support it. Apis that need to distinguish both are really poorly designed. Just merge them into one concept.....</p>
+</blockquote>
+<p>I can provide a real life example, described initially here: <a href="https://github.com/thoth-org/Thoth.Json/issues/91">https://github.com/thoth-org/Thoth.Json/issues/91</a></p>
+<blockquote>
+<p>[...] imagine creating a JSON payload of MongoDB update. It's big difference between:<br>
+<code>{ $set: { firstname: "…", lastname: null, somethingElse: null } }</code><br>
+ and<br>
+<code>{ $set: { firstname: "…", somethingElse: null } }</code><br>
+First one will change <code>firstname</code> and erase both <code>lastname</code> and <code>somethingElse</code>, the latter will not alter <code>lastname</code> at all.</p>
+</blockquote>
+
+
+
+<a name="430984790"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430984790" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430984790">(Apr 03 2024 at 11:53)</a>:</h4>
+<p><span class="user-mention" data-user-id="515922">@witoldsz</span> thankyou. I was going to write out something very similar for a Salesforce database, basically the same api:<br>
+The accompanying roc code might be:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">PersonUpdate</span><span class="nf">:</span><span class="p">{</span>
+<span class="w">    </span><span class="nv">age</span><span class="nf">:</span><span class="w"> </span><span class="kt">ValOrNullOrUndefined</span><span class="w"> </span><span class="kt">U8</span><span class="p">,</span>
+<span class="w">    </span><span class="nv">firstName</span><span class="nf">:</span><span class="w"> </span><span class="kt">ValOrNullOrUndefined</span><span class="w"> </span><span class="kt">Str</span><span class="p">,</span>
+<span class="w">    </span><span class="nv">lastName</span><span class="nf">:</span><span class="w"> </span><span class="kt">ValOrNullOrUndefined</span><span class="w"> </span><span class="kt">Str</span>
+<span class="p">}</span>
+<span class="nv">updatePerson</span><span class="w"> </span><span class="nf">\</span><span class="nv">update</span><span class="nf">-&gt;</span><span class="w">  </span><span class="nv">encodeAndSendToMongo</span><span class="w"> </span><span class="nv">update</span>
+</code></pre></div>
+<p>In essence if I am decoding or encoding a record type "person" <code>{age, firstName, lastName}</code><br>
+Each field could have one of three states:<br>
+It could not exist(undefined), <br>
+It could be null,<br>
+It could have a value.</p>
+<p>Whether or not we want to encourage roc users to distinguish between null and undefined, some pretty significant existing systems do, and so to interoperate with them fully we would need to be able to represent <em>all</em> possible states. <br>
+Therefore, whilst most roc code shouldn't need to distinguish between null and undefined we should think about supporting distinguishing between them when encoding and decoding.</p>
+
+
+
+<a name="430999454"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/430999454" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#430999454">(Apr 03 2024 at 13:07)</a>:</h4>
+<p>I think this may just be a misalignment of semantics <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="431111064"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431111064" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431111064">(Apr 03 2024 at 14:48)</a>:</h4>
+<p>I have a suggestion: what if instead of talking about "undefined" we talk about "missing" if those are the intended semantics?</p>
+
+
+
+<a name="431111158"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431111158" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431111158">(Apr 03 2024 at 14:49)</a>:</h4>
+<p>I really cannot overemphasize how much of a mistake I think it would be for the word "undefined" to appear anywhere in any Roc JSON library <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="431111288"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431111288" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431111288">(Apr 03 2024 at 14:49)</a>:</h4>
+<p>like if we mean "this is a value which indicates that the field will not be included" then we should choose a word that means that, which <code>undefined</code> only does in one programming language in history</p>
+
+
+
+<a name="431111429"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431111429" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431111429">(Apr 03 2024 at 14:50)</a>:</h4>
+<p>or like "omitted" maybe</p>
+
+
+
+<a name="431111593"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431111593" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431111593">(Apr 03 2024 at 14:50)</a>:</h4>
+<p>there is definitely a distinction between a field being omitted and the field being present and set to <code>null</code> in JSON, and plenty of APIs rely on that distinction, so I agree that it's important that we support a distinction there</p>
+
+
+
+<a name="431173284"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431173284" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431173284">(Apr 03 2024 at 20:48)</a>:</h4>
+<p>I'm totally happy to use whatever term, 'missing' works fine for me <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span>. To be clear though, I used 'undefined' because JSON is JavaScriptObjectNotation and so it seemed obvious to use JavaScript's term for "a field that is missing".</p>
+
+
+
+<a name="431822266"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431822266" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Pei Yang Ching <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431822266">(Apr 07 2024 at 22:37)</a>:</h4>
+<p>I might be missing some context, but wouldn't default values be better than 'undefined' ? most of the time I use missing fields for this, and it's (probably) trivial to add your own "Undefined" type if needed</p>
+
+
+
+<a name="431831868"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431831868" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431831868">(Apr 08 2024 at 01:16)</a>:</h4>
+<p>Undefined, or missing, field is very important - that means omitting of data. You shouldn't just slap any default value in the missing field's place unless maybe you explicitly define it in the Encode ability declaration of your type</p>
+
+
+
+<a name="431832059"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431832059" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431832059">(Apr 08 2024 at 01:19)</a>:</h4>
+<p>Optionality and nullability should be composable, like </p>
+<div class="codehilite"><pre><span></span><code>{
+    age: Optional (Nullable U8),
+    firstName: Optional Str,
+    lastName: Nullable Str
+}
+</code></pre></div>
+<p>as they are in Javascript:</p>
+<div class="codehilite"><pre><span></span><code>{
+    age?: number | null,
+    firstName?: string,
+    lastName: string | null
+}
+</code></pre></div>
+
+
+
+<a name="431832403"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431832403" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431832403">(Apr 08 2024 at 01:23)</a>:</h4>
+<p>Yeah, in roc terms, you probably would want the type to be:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="p">{</span>
+<span class="w">    </span><span class="nv">age</span><span class="nf">:</span><span class="w"> </span><span class="kt">Result</span><span class="w"> </span><span class="kt">U8</span><span class="w"> </span><span class="p">[</span><span class="kt">Null</span><span class="p">,</span><span class="w"> </span><span class="kt">Undefined</span><span class="p">],</span>
+<span class="w">    </span><span class="nv">firstName</span><span class="nf">:</span><span class="w"> </span><span class="kt">Result</span><span class="w"> </span><span class="kt">Str</span><span class="w"> </span><span class="p">[</span><span class="kt">Undefined</span><span class="p">],</span>
+<span class="w">    </span><span class="nv">lastName</span><span class="nf">:</span><span class="w"> </span><span class="kt">Result</span><span class="w"> </span><span class="kt">Str</span><span class="w"> </span><span class="p">[</span><span class="kt">Null</span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>I think collapsing it into a single error tag is the cleanest way to represent this in Roc.</p>
+
+
+
+<a name="431832473"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431832473" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431832473">(Apr 08 2024 at 01:24)</a>:</h4>
+<p>And as mentioned above <code>Undefined</code> could be <code>Missing</code> or <code>Omitted</code>. Just a name.</p>
+
+
+
+<a name="431832513"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431832513" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431832513">(Apr 08 2024 at 01:25)</a>:</h4>
+<p>Would that work for Encode and Decode?</p>
+
+
+
+<a name="431832920"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431832920" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431832920">(Apr 08 2024 at 01:30)</a>:</h4>
+<p>Not presently but that's why this discussion exists. To get ideas as to how we'd like it to work and then see how close we can get/if we need new language features etc</p>
+
+
+
+<a name="431832924"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431832924" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431832924">(Apr 08 2024 at 01:30)</a>:</h4>
+<p>You probably could hack to to work by making the JSON encoder/decoder special case on the tags <code>Null</code> and <code>Undefined</code>. More likely, some form of opaque type for smarter handling is needed.</p>
+
+
+
+<a name="431833130"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431833130" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431833130">(Apr 08 2024 at 01:34)</a>:</h4>
+<p><span class="user-mention" data-user-id="654587">@Karakatiza</span> I have a for k of roc and roc- Json package where This is implemented as an opaque type.</p>
+
+
+
+<a name="431833135"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431833135" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431833135">(Apr 08 2024 at 01:34)</a>:</h4>
+<p>So, like <code>Optional a [Null, Omitted]</code> ?</p>
+
+
+
+<a name="431833400"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431833400" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431833400">(Apr 08 2024 at 01:39)</a>:</h4>
+<p><span class="user-mention" data-user-id="651372">@Eli Dowling</span> just curious, with current roc, why couldn't it be implemented on an opaque type. What caused the need for the fork?</p>
+
+
+
+<a name="431834197"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/How%20to%20handle%20json%20null%20decoding/near/431834197" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding.html#431834197">(Apr 08 2024 at 01:51)</a>:</h4>
+<p><span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span>  There is no way to decode a record with a field that Is missing. I needed to change the internal decoding derive code so that it tries to decode any missing fields to see if they are okay with decoding an empty array <code>[]</code>.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

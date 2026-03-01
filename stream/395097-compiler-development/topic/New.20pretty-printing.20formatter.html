@@ -1,0 +1,346 @@
+<html>
+<head><meta charset="utf-8"><title>New pretty-printing formatter · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html">New pretty-printing formatter</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="463581377"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463581377" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463581377">(Aug 20 2024 at 03:57)</a>:</h4>
+<p>I've been experimenting with a new formatter on the side: <a href="https://github.com/roc-lang/roc/pull/7011">https://github.com/roc-lang/roc/pull/7011</a></p>
+<p>Not quite ready for prime time, but far enough along that it's worth getting some feedback on.</p>
+<p>Lot's of niceties from the old parser aren't implemented yet, so beware!</p>
+<p>TL;DR:</p>
+<ul>
+<li>Instead of formatting in (essentially) one pass, first build up an intermediate tree</li>
+<li>Encode this tree in such a way that we can operate on it via linear traversals, in a way that (I hope, because I haven't benchmarked yet) is substantially faster than pointer-chasing</li>
+<li>This allows us to do things like merge lines together and reduce unnecessary vertical space in cases where it results in acceptable line widths</li>
+<li>It should also be easier to maintain, since it avoids the headache of having to separately implement <code>is_multiline</code> and <code>format_with_options</code> and keep them in sync.</li>
+</ul>
+<p>At this point, I'd be interested in having some discussion around:</p>
+<ul>
+<li>What line "width" limits might be best?</li>
+<li>Is it better to measure visual line length (i.e. not including indents), or try to keep to a particular column limit (i.e. including indents)?</li>
+<li>Are there key cases where we don't ever want to omit newlines?</li>
+</ul>
+
+
+
+<a name="463630836"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463630836" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463630836">(Aug 20 2024 at 08:33)</a>:</h4>
+<blockquote>
+<p>Are there key cases where we don't ever want to omit newlines?</p>
+</blockquote>
+<p>Do we currently get rid of all newlines and introduce our own?</p>
+
+
+
+<a name="463895598"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463895598" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463895598">(Aug 20 2024 at 23:59)</a>:</h4>
+<p>In most current situations, we honor the original user newlines. As a motivating example, here's something that's "stable" under the current formatter (i.e. it doesn't change when formatting):</p>
+<div class="codehilite"><pre><span></span><code>when b is
+    1
+    | 2
+    | 3 -&gt;
+        4
+
+    5 | 6 | 7 -&gt;
+        8
+
+    9
+    | 10 -&gt; 11
+
+    12 | 13 -&gt;
+        when c is
+            14 | 15 -&gt; 16
+            17
+            | 18 -&gt; 19
+
+    20 -&gt; 21
+</code></pre></div>
+<p>And here's what the new formatter gives:</p>
+<div class="codehilite"><pre><span></span><code>when b is
+    1 | 2 | 3 -&gt; 4
+    5 | 6 | 7 -&gt; 8
+    9 | 10 -&gt; 11
+    12 | 13 -&gt;
+        when c is
+            14 | 15 -&gt; 16
+            17 | 18 -&gt; 19
+    20 -&gt; 21
+</code></pre></div>
+
+
+
+<a name="463896202"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463896202" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463896202">(Aug 21 2024 at 00:01)</a>:</h4>
+<p>So much neater as long as we eventually line wrap</p>
+
+
+
+<a name="463896349"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463896349" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463896349">(Aug 21 2024 at 00:02)</a>:</h4>
+<p>Cause sometime 1 match per line is a lot cleaner/clearer</p>
+
+
+
+<a name="463896884"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463896884" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463896884">(Aug 21 2024 at 00:04)</a>:</h4>
+<p>We do eventually line wrap. Here's what happens when I add a bunch of long numbers:</p>
+<div class="codehilite"><pre><span></span><code>when b is
+    1
+    | 2
+    | 3
+    | 123412341234123412341234
+    | 123412341234
+    | 123412341234
+    | 12341234123412
+    | 123412341234 -&gt; 4
+    5 | 6 | 7 -&gt; 8
+    9 | 10 -&gt; 11
+    12 | 13 -&gt;
+        when c is
+            14 | 15 -&gt; 16
+            17 | 18 -&gt; 19
+    20 -&gt; 21
+</code></pre></div>
+
+
+
+<a name="463896985"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463896985" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463896985">(Aug 21 2024 at 00:04)</a>:</h4>
+<p>Yeah, exactly that</p>
+
+
+
+<a name="463896991"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463896991" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463896991">(Aug 21 2024 at 00:04)</a>:</h4>
+<p>Maybe in this case it'd be cleaner if the branch result was forced to be on its own line</p>
+
+
+
+<a name="463897033"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463897033" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463897033">(Aug 21 2024 at 00:04)</a>:</h4>
+<p>(if the pattern is multiline, I mean)</p>
+
+
+
+<a name="463897077"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463897077" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463897077">(Aug 21 2024 at 00:05)</a>:</h4>
+<p>Anyway - that's actually pretty simple to do in this system, if we want</p>
+
+
+
+<a name="463897107"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463897107" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463897107">(Aug 21 2024 at 00:05)</a>:</h4>
+<p>Awesome!</p>
+
+
+
+<a name="463897211"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463897211" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463897211">(Aug 21 2024 at 00:05)</a>:</h4>
+<p>I'm mostly thinking about our rust code around ast and symbol. We have a lot of really dense matches with various formatting that are of this style.</p>
+
+
+
+<a name="463898616"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463898616" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463898616">(Aug 21 2024 at 00:14)</a>:</h4>
+<p>Personally, I really like that the current formatter honors line breaks. I remember loving that feature on elm-format after using prettier for years.</p>
+
+
+
+<a name="463899406"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463899406" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463899406">(Aug 21 2024 at 00:24)</a>:</h4>
+<p>There are definitely a few case in rust where we would prefer for the rust formatter to honor line breaks. I know of some lines in the roc code base that are just <code>//</code> with nothing else in order to force a line break.</p>
+
+
+
+<a name="463899451"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463899451" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463899451">(Aug 21 2024 at 00:25)</a>:</h4>
+<p>So I get both sides for sure. I feel like this is one of the 99% of the time not honoring line breaks leads to more readable code, but that 1% can really hurt if the formatter doesn't honor line breaks</p>
+
+
+
+<a name="463900004"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463900004" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463900004">(Aug 21 2024 at 00:31)</a>:</h4>
+<p>One of the things I was planning on doing (but not implemented yet) is always honoring blank lines - i.e. if you've explicitly put one or more blank lines in your code, those will remain in the formatted output.</p>
+
+
+
+<a name="463900071"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463900071" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463900071">(Aug 21 2024 at 00:32)</a>:</h4>
+<p>That's not exactly the same as "should we honor the user's newlines" - but it is an important subset.</p>
+
+
+
+<a name="463900119"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463900119" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463900119">(Aug 21 2024 at 00:33)</a>:</h4>
+<p><span class="user-mention" data-user-id="489294">@Agus Zubiaga</span> I'd be interested to hear more about your experience. Do you have some examples you could share where the elm formatter honoring newlines was important to maintain the readability of the code?</p>
+
+
+
+<a name="463902650"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463902650" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463902650">(Aug 21 2024 at 00:51)</a>:</h4>
+<p>It's not so much about the readability of a fully-written snippet of code, but about the experience for partially-written code. <br>
+I find it really annoying when I'm writing a function (or case branch, if, list, etc) that I know it's going to be long in a minute, but it currently isn't so when I save (to run tests or something) the formatter collapses it, and then I have to immediately introduce the line break again to continue writing it.</p>
+
+
+
+<a name="463903096"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463903096" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463903096">(Aug 21 2024 at 00:53)</a>:</h4>
+<p>That experience is so much better with a formatter that honors newlines because I naturally introduce them ahead of time when they're needed</p>
+
+
+
+<a name="463912965"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463912965" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463912965">(Aug 21 2024 at 01:59)</a>:</h4>
+<p>Cool, that's helpful</p>
+
+
+
+<a name="463913018"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463913018" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463913018">(Aug 21 2024 at 01:59)</a>:</h4>
+<p>Spitballing for a moment...</p>
+
+
+
+<a name="463913956"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463913956" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463913956">(Aug 21 2024 at 02:02)</a>:</h4>
+<p>There are two potentially significant pieces of information here: where the user put newlines, but also where the user may have intentionally _not_ put newlines. (e.g. the user may intentionally not put a line break after every element of a list, to make it more compact or to show some structure)</p>
+<p>Right now the current formatter will completely disregard any such decisions from the user.</p>
+
+
+
+<a name="463914089"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463914089" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463914089">(Aug 21 2024 at 02:03)</a>:</h4>
+<p>What I'd like to find is what the right "happy medium" is in terms of what "newline" information we preserve and what we ignore.</p>
+
+
+
+<a name="463914227"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463914227" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463914227">(Aug 21 2024 at 02:03)</a>:</h4>
+<p>(it could be that the best "happy medium" is pretty close to the current behavior - but for the sake of discussion I would like to open the possibilities a bit more)</p>
+
+
+
+<a name="463914558"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463914558" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463914558">(Aug 21 2024 at 02:05)</a>:</h4>
+<p>Your point about code you're actively writing was particularly insightful</p>
+
+
+
+<a name="463914913"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463914913" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463914913">(Aug 21 2024 at 02:06)</a>:</h4>
+<p>I've noticed before when coding and rust, but I might have just written a function definition with a pair of empty braces that I'm going to fill in later. But then I format the code and the formatter collapses the braces onto one line (with the function definition).</p>
+
+
+
+<a name="463914947"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463914947" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463914947">(Aug 21 2024 at 02:06)</a>:</h4>
+<p>I do find that mildly annoying.</p>
+
+
+
+<a name="463914964"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463914964" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463914964">(Aug 21 2024 at 02:06)</a>:</h4>
+<p>Is that the sort of thing you're thinking about?</p>
+
+
+
+<a name="463915138"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463915138" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463915138">(Aug 21 2024 at 02:07)</a>:</h4>
+<p>(I have format-on-save turned on, and I decided to hit save after writing the braces)</p>
+
+
+
+<a name="463915853"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463915853" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463915853">(Aug 21 2024 at 02:10)</a>:</h4>
+<p>I do like the behavior of collapsing empty braces onto the same line as the function definition when it's not in code I've just written, so it doesn't feel super clear cut.</p>
+
+
+
+<a name="463916639"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463916639" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463916639">(Aug 21 2024 at 02:13)</a>:</h4>
+<p>What is the formatter had two different modes? The command line/batch mode where it does a more relaxed version of formatting preserves more of the user new lines, and an interactive mode that explicitly ignores most user new lines. The latter would explicitly require an additional input of "where is the user's cursor " - it would only format the surrounding definition. That can then be an explicitly triggered command: "this code is really ugly, please clean it up for me."</p>
+
+
+
+<a name="463916696"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463916696" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463916696">(Aug 21 2024 at 02:13)</a>:</h4>
+<p>I guess at this point this post should probably be in <a class="stream" data-stream-id="304641" href="/#narrow/stream/304641-ideas">#ideas</a></p>
+
+
+
+<a name="463918922"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463918922" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463918922">(Aug 21 2024 at 02:27)</a>:</h4>
+<p>personally my preference is:</p>
+<ul>
+<li>for automatically generated code, I want it to have some way to automatically have line breaks in reasonable places</li>
+<li>for handwritten code, I want to be able to control newlines</li>
+</ul>
+
+
+
+<a name="463919318"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463919318" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463919318">(Aug 21 2024 at 02:31)</a>:</h4>
+<p>my reason for the preference of full control over newlines in handwritten code is basically that there are some situations where I have several chunks of code that I want to treat newlines the same way (e.g. branches in a <code>when</code>), and when the formatter automatically forces one of them to look different from the others because it's slightly longer, that outcome is so bad that for me it outweighs all the upside of the feature <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="463919508"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463919508" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463919508">(Aug 21 2024 at 02:32)</a>:</h4>
+<p>the <a href="https://github.com/roc-lang/roc/issues/1">#1</a> thing I like better about current <code>roc format</code> compared to <code>cargo fmt</code> is that it never enforces making code look worse like that</p>
+
+
+
+<a name="463919962"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463919962" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463919962">(Aug 21 2024 at 02:36)</a>:</h4>
+<p>that said, for generated code such as inferred types (e.g. in error messages or to display inferred types in editors), and also in a future replay debugging feature (where you can generate a .roc file which reproduces the steps you just took manually, so you can make customizable tests out of them) - I very much want it for those use cases!</p>
+
+
+
+<a name="463920094"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463920094" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463920094">(Aug 21 2024 at 02:37)</a>:</h4>
+<blockquote>
+<p>when the formatter automatically forces one of them to look different from the others because it's slightly longer</p>
+</blockquote>
+<p>This is something we could explicitly try to preserve - e.g. "like things have similar formatting decisions"</p>
+
+
+
+<a name="463920158"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463920158" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463920158">(Aug 21 2024 at 02:38)</a>:</h4>
+<p>(that is, even if we disregard user newlines)</p>
+
+
+
+<a name="463920229"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463920229" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463920229">(Aug 21 2024 at 02:39)</a>:</h4>
+<p>e.g. we decide whether branch results of a given <code>when</code> will be on the same line as the pattern or a new line, and we force that decision to be the same for all the branches of the <code>when</code>.</p>
+
+
+
+<a name="463920240"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463920240" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463920240">(Aug 21 2024 at 02:39)</a>:</h4>
+<p>I'd be interested to try that!</p>
+
+
+
+<a name="463920282"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463920282" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463920282">(Aug 21 2024 at 02:39)</a>:</h4>
+<p>if we could succeed at making it feel helpful across the board, that would be awesome <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<a name="463921084"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/New%20pretty-printing%20formatter/near/463921084" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/New.20pretty-printing.20formatter.html#463921084">(Aug 21 2024 at 02:46)</a>:</h4>
+<p>Ok, cool. So I think the right way to proceed here will be to (1) have as an initial goal that this new formatter must match the current formatter's output (potentially modulo very obscure changes), (2) prove out the improved flexibility/hackability and (hopefully) negligible perf cost, (3) get that reviewed/merged, and (4) then start experimenting with stricter formatting defaults.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

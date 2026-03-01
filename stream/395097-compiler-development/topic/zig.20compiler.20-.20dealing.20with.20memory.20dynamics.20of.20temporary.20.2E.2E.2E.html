@@ -1,0 +1,424 @@
+<html>
+<head><meta charset="utf-8"><title>zig compiler - dealing with memory dynamics of temporary ... · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html">zig compiler - dealing with memory dynamics of temporary ...</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="502268216"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502268216" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502268216">(Feb 27 2025 at 12:14)</a>:</h4>
+<p>I noticed in my last PR some subtle memory issues with how slice fields in typed nodes returned from the NodeStore worked.  I believe there are places where if the <code>scratch</code> array that one of those structs came from resize while you still have a reference to that slice you can get some weird behavior.</p>
+<p>I <em>really</em> would like to avoid creating owned slices over data that is in <code>extra_data</code>.  My idea is to replace the slices with a new data structure called a <code>DataSpan</code> defined like this:</p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="w">    </span><span class="kr">pub</span><span class="w"> </span><span class="kr">const</span><span class="w"> </span><span class="n">DataSpan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">start</span><span class="o">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="w">        </span><span class="n">len</span><span class="o">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="w">    </span><span class="p">};</span>
+</code></pre></div>
+<p>This would be created by separately sending the slice (on typed node creation) to a method that would return a <em>typed</em> instance of this DataSpan type - which would just have information about where the nodes were stored in extra_data.</p>
+<p>When you want to get the items from the Store, you would call a method on the Store that take the <em>typed</em> DataSpan and return a <em>typed</em> Iterator that you can use:</p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="w">    </span><span class="kr">pub</span><span class="w"> </span><span class="kr">const</span><span class="w"> </span><span class="n">ExprSpan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">span</span><span class="o">:</span><span class="w"> </span><span class="n">DataSpan</span><span class="w"> </span><span class="p">};</span>
+
+<span class="w">    </span><span class="kr">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">IdIter</span><span class="p">(</span><span class="kr">comptime</span><span class="w"> </span><span class="n">T</span><span class="o">:</span><span class="w"> </span><span class="n">anytype</span><span class="p">)</span><span class="w"> </span><span class="kt">type</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">iter</span><span class="o">:</span><span class="w"> </span><span class="n">Iterator</span><span class="p">,</span>
+<span class="w">            </span><span class="kr">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">next</span><span class="p">(</span><span class="n">self</span><span class="o">:</span><span class="w"> </span><span class="o">*</span><span class="nb">@This</span><span class="p">())</span><span class="w"> </span><span class="o">?</span><span class="n">T</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">self</span><span class="p">.</span><span class="n">iter</span><span class="p">.</span><span class="n">next</span><span class="p">())</span><span class="w"> </span><span class="o">|</span><span class="n">n</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="p">.{</span><span class="w"> </span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="p">};</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kr">pub</span><span class="w"> </span><span class="kr">const</span><span class="w"> </span><span class="n">ExprIter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">IdIter</span><span class="p">(</span><span class="n">ExprIdx</span><span class="p">);</span>
+
+<span class="w">    </span><span class="kr">const</span><span class="w"> </span><span class="n">Iterator</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">start</span><span class="o">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">        </span><span class="n">end</span><span class="o">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">        </span><span class="n">pos</span><span class="o">:</span><span class="w"> </span><span class="kt">usize</span><span class="p">,</span>
+<span class="w">        </span><span class="n">data</span><span class="o">:</span><span class="w"> </span><span class="o">*</span><span class="n">std</span><span class="p">.</span><span class="n">ArrayList</span><span class="p">(</span><span class="kt">u32</span><span class="p">),</span>
+
+<span class="w">        </span><span class="kr">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">new</span><span class="p">(</span><span class="n">span</span><span class="o">:</span><span class="w"> </span><span class="n">DataSpan</span><span class="p">,</span><span class="w"> </span><span class="n">data</span><span class="o">:</span><span class="w"> </span><span class="o">*</span><span class="n">std</span><span class="p">.</span><span class="n">ArrayList</span><span class="p">(</span><span class="kt">u32</span><span class="p">))</span><span class="w"> </span><span class="nb">@This</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kr">const</span><span class="w"> </span><span class="n">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">@as</span><span class="p">(</span><span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="nb">@intCast</span><span class="p">(</span><span class="n">span</span><span class="p">.</span><span class="n">start</span><span class="p">));</span>
+<span class="w">            </span><span class="kr">const</span><span class="w"> </span><span class="n">end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">start</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">@as</span><span class="p">(</span><span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="nb">@intCast</span><span class="p">(</span><span class="n">span</span><span class="p">.</span><span class="n">len</span><span class="p">));</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="p">.{</span>
+<span class="w">                </span><span class="p">.</span><span class="n">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">start</span><span class="p">,</span>
+<span class="w">                </span><span class="p">.</span><span class="n">end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">end</span><span class="p">,</span>
+<span class="w">                </span><span class="p">.</span><span class="n">pos</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">start</span><span class="p">,</span>
+<span class="w">                </span><span class="p">.</span><span class="n">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">data</span><span class="p">,</span>
+<span class="w">            </span><span class="p">};</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="kr">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">next</span><span class="p">(</span><span class="n">self</span><span class="o">:</span><span class="w"> </span><span class="o">*</span><span class="nb">@This</span><span class="p">())</span><span class="w"> </span><span class="o">?</span><span class="kt">u32</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">self</span><span class="p">.</span><span class="n">pos</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">end</span><span class="w"> </span><span class="k">or</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">data</span><span class="p">.</span><span class="n">items</span><span class="p">.</span><span class="n">len</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">pos</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="kc">null</span><span class="p">;</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="kr">const</span><span class="w"> </span><span class="n">curr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">data</span><span class="p">.</span><span class="n">items</span><span class="p">[</span><span class="n">self</span><span class="p">.</span><span class="n">pos</span><span class="p">];</span>
+<span class="w">            </span><span class="n">self</span><span class="p">.</span><span class="n">pos</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="n">curr</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">};</span>
+</code></pre></div>
+<p>The advantage is we are not allocating a bunch of short-lived slices that we have to manage their lifetimes or worry about pointers being invalidated (or memory regions being overwritten).  And working with these Spans and Iterators are relatively straightforward.</p>
+
+
+
+<a name="502270463"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502270463" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502270463">(Feb 27 2025 at 12:26)</a>:</h4>
+<p>So today, instead of this when creating a <code>Expr.list</code>:</p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="w">            </span><span class="c1">// ... collect the list items in scratch_exprs</span>
+<span class="w">            </span><span class="kr">const</span><span class="w"> </span><span class="n">items</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">store</span><span class="p">.</span><span class="n">scratch_exprs</span><span class="p">.</span><span class="n">items</span><span class="p">[</span><span class="n">scratch_top</span><span class="p">..];</span>
+<span class="w">            </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">store</span><span class="p">.</span><span class="n">addExpr</span><span class="p">(.{</span><span class="w"> </span><span class="p">.</span><span class="n">list</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">.{</span>
+<span class="w">                </span><span class="p">.</span><span class="n">items</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">items</span><span class="p">,</span>
+<span class="w">                </span><span class="p">.</span><span class="n">region</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">.{</span><span class="w"> </span><span class="p">.</span><span class="n">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">start</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">pos</span><span class="w"> </span><span class="p">},</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="p">});</span>
+</code></pre></div>
+<p>you would have one additional step (really function call):</p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="w">            </span><span class="kr">const</span><span class="w"> </span><span class="n">items</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">store</span><span class="p">.</span><span class="n">addExprSpan</span><span class="p">(</span><span class="n">self</span><span class="p">.</span><span class="n">store</span><span class="p">.</span><span class="n">scratch_exprs</span><span class="p">.</span><span class="n">items</span><span class="p">[</span><span class="n">scratch_top</span><span class="p">..]);</span>
+<span class="w">            </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">store</span><span class="p">.</span><span class="n">addExpr</span><span class="p">(.{</span><span class="w"> </span><span class="p">.</span><span class="n">list</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">.{</span>
+<span class="w">                </span><span class="p">.</span><span class="n">items</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">items</span><span class="p">,</span>
+<span class="w">                </span><span class="p">.</span><span class="n">region</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">.{</span><span class="w"> </span><span class="p">.</span><span class="n">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">start</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">pos</span><span class="w"> </span><span class="p">},</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="p">});</span>
+</code></pre></div>
+<p>The pattern above is common enough it may instead be</p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="w">            </span><span class="kr">const</span><span class="w"> </span><span class="n">items</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">store</span><span class="p">.</span><span class="n">addExprSpan</span><span class="p">(</span><span class="n">scratch_top</span><span class="p">);</span><span class="w"> </span><span class="c1">// addExprSpan will make the span from scratch_top until the end of the ArrayList's items</span>
+<span class="w">            </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">store</span><span class="p">.</span><span class="n">addExpr</span><span class="p">(.{</span><span class="w"> </span><span class="p">.</span><span class="n">list</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">.{</span>
+<span class="w">                </span><span class="p">.</span><span class="n">items</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">items</span><span class="p">,</span>
+<span class="w">                </span><span class="p">.</span><span class="n">region</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">.{</span><span class="w"> </span><span class="p">.</span><span class="n">start</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">start</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">end</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">self</span><span class="p">.</span><span class="n">pos</span><span class="w"> </span><span class="p">},</span>
+<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="p">});</span>
+</code></pre></div>
+
+
+
+<a name="502272060"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502272060" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502272060">(Feb 27 2025 at 12:33)</a>:</h4>
+<p>And getting it for things like formatting (or reading to move to next IR) is very simple as well, this:</p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="w">        </span><span class="p">.</span><span class="n">list</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="o">|</span><span class="n">l</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">fmt</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="s">'['</span><span class="p">);</span>
+<span class="w">            </span><span class="kr">var</span><span class="w"> </span><span class="n">i</span><span class="o">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">l</span><span class="p">.</span><span class="n">items</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="n">item</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">fmt</span><span class="p">.</span><span class="n">formatExpr</span><span class="p">(</span><span class="n">item</span><span class="p">);</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="p">(</span><span class="n">l</span><span class="p">.</span><span class="n">items</span><span class="p">.</span><span class="n">len</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">fmt</span><span class="p">.</span><span class="n">pushAll</span><span class="p">(</span><span class="s">", "</span><span class="p">);</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="n">i</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">fmt</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="s">']'</span><span class="p">);</span>
+<span class="w">        </span><span class="p">},</span>
+</code></pre></div>
+<p>Becomes:</p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="w">        </span><span class="p">.</span><span class="n">list</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="o">|</span><span class="n">l</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">fmt</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="s">'['</span><span class="p">);</span>
+<span class="w">            </span><span class="kr">var</span><span class="w"> </span><span class="n">i</span><span class="o">:</span><span class="w"> </span><span class="kt">usize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">            </span><span class="kr">const</span><span class="w"> </span><span class="n">iter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">fmt</span><span class="p">.</span><span class="n">ast</span><span class="p">.</span><span class="n">store</span><span class="p">.</span><span class="n">getExprIter</span><span class="p">(</span><span class="n">l</span><span class="p">.</span><span class="n">items</span><span class="p">);</span><span class="w"> </span><span class="c1">// Get the IdIterator</span>
+<span class="w">            </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">iter</span><span class="p">.</span><span class="n">next</span><span class="p">())</span><span class="w"> </span><span class="o">|</span><span class="n">item</span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="c1">// Consume items while next() returns a value</span>
+<span class="w">                </span><span class="n">fmt</span><span class="p">.</span><span class="n">formatExpr</span><span class="p">(</span><span class="n">item</span><span class="p">);</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="p">(</span><span class="n">l</span><span class="p">.</span><span class="n">items</span><span class="p">.</span><span class="n">len</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="n">fmt</span><span class="p">.</span><span class="n">pushAll</span><span class="p">(</span><span class="s">", "</span><span class="p">);</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">                </span><span class="n">i</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="n">fmt</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="s">']'</span><span class="p">);</span>
+<span class="w">        </span><span class="p">},</span>
+</code></pre></div>
+<p><code>DataSpan</code> still has a len field, so the if condition there can remain the way it is!</p>
+
+
+
+<a name="502283045"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502283045" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502283045">(Feb 27 2025 at 13:25)</a>:</h4>
+<p>The other thing that you could do is guarantee that the child nodes for a given node are all contiguous, by returning and buffering the full node struct rather than using a list of node ids. That means that each node only needs a begin and end index into the primary node store - no need for an unbounded-size “extra” data.</p>
+
+
+
+<a name="502287529"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502287529" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502287529">(Feb 27 2025 at 13:44)</a>:</h4>
+<p>Not really possible due to recursion</p>
+
+
+
+<a name="502288073"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502288073" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502288073">(Feb 27 2025 at 13:47)</a>:</h4>
+<p>I'm very interested in feedback here from <span class="user-mention" data-user-id="461444">@Sam Mohr</span> and others working downstream from Parse IR</p>
+
+
+
+<a name="502298195"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502298195" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502298195">(Feb 27 2025 at 14:29)</a>:</h4>
+<p>Hmm I don’t follow why recursion would cause problems?</p>
+
+
+
+<a name="502298337"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502298337" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502298337">(Feb 27 2025 at 14:30)</a>:</h4>
+<p>This is exactly what I’ve done for some IRs in the past</p>
+
+
+
+<a name="502300617"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502300617" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502300617">(Feb 27 2025 at 14:39)</a>:</h4>
+<p>What do you use to track the nested nodes?</p>
+
+
+
+<a name="502301072"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502301072" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502301072">(Feb 27 2025 at 14:40)</a>:</h4>
+<p>Let's say you have this list expression:</p>
+<div class="codehilite"><pre><span></span><code>[
+  [1, 2, 3],
+  [4, 5, 6],
+  [7, 8, 9],
+]
+</code></pre></div>
+<p>if you store the top level list's items - what would that look like?</p>
+
+
+
+<a name="502302185"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502302185" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502302185">(Feb 27 2025 at 14:45)</a>:</h4>
+<p>I guess the more relevant question is, have you implemented those IRs using SOA before?</p>
+
+
+
+<a name="502302254"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502302254" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502302254">(Feb 27 2025 at 14:45)</a>:</h4>
+<p>If so, maybe there is a technique you know that I'm not thinking of!</p>
+
+
+
+<a name="502309016"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502309016" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502309016">(Feb 27 2025 at 15:13)</a>:</h4>
+<p>You can use a stack of scratch nodes, just like you're using now.<br>
+In your example, the parser would:</p>
+<ul>
+<li>Start a list, track the stack location of the beginning of the list (stack location 0)</li>
+<li>Start the second list (stack location 0)</li>
+<li>Push nodes for 1, 2, and 3 to the stack</li>
+<li>Close that list, which we know started at stack loctaion 0. Pop off three items and copy them to the permanent node store. We know they're contiguous in the permanent node store, so just use a range to represent them.</li>
+<li>Push a node for that list to the stack</li>
+<li>Start a list (stack location 1), push 4, 5, 6, then close that list, copy those three items to the permanent node store</li>
+<li>etc</li>
+</ul>
+
+
+
+<a name="502316942"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502316942" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502316942">(Feb 27 2025 at 15:45)</a>:</h4>
+<p>So slices are just stored as u32 length?  And then we have to load each of them to know how far to backtrack to build up the slice of items?</p>
+
+
+
+<a name="502317855"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502317855" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502317855">(Feb 27 2025 at 15:48)</a>:</h4>
+<p>So <a href="https://github.com/roc-lang/roc/issues/13">#13</a> (the parent list) is requested, it has a length for items of 3. I have to load <a href="https://github.com/roc-lang/roc/issues/12">#12</a> recursively to see where it ends (the index of the first descendant recursively), then do the same for the other two?</p>
+
+
+
+<a name="502318145"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502318145" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502318145">(Feb 27 2025 at 15:50)</a>:</h4>
+<p>Seems like I have to load all of the nodes from the one requested to the first one added while it was added to just get the list of node idxs for its children</p>
+
+
+
+<a name="502318182"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502318182" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502318182">(Feb 27 2025 at 15:50)</a>:</h4>
+<p>And will have to do that each time</p>
+
+
+
+<a name="502318345"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502318345" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502318345">(Feb 27 2025 at 15:51)</a>:</h4>
+<p>Slices are a begin and end NodeIdx</p>
+
+
+
+<a name="502318437"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502318437" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502318437">(Feb 27 2025 at 15:51)</a>:</h4>
+<p>But I still have to load each child to get it</p>
+
+
+
+<a name="502318604"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502318604" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502318604">(Feb 27 2025 at 15:52)</a>:</h4>
+<p>Not sure I follow? When is this is load happening?</p>
+
+
+
+<a name="502318708"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502318708" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502318708">(Feb 27 2025 at 15:52)</a>:</h4>
+<p>To get the slice info</p>
+
+
+
+<a name="502318743"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502318743" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502318743">(Feb 27 2025 at 15:52)</a>:</h4>
+<p>Which is the data field on the node</p>
+
+
+
+<a name="502318773"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502318773" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502318773">(Feb 27 2025 at 15:52)</a>:</h4>
+<p>Today</p>
+
+
+
+<a name="502318929"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502318929" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502318929">(Feb 27 2025 at 15:53)</a>:</h4>
+<p>The begin/end are the lhs and rhs</p>
+
+
+
+<a name="502318963"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502318963" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502318963">(Feb 27 2025 at 15:53)</a>:</h4>
+<p>We should chat about this later. Hard to illustrate on my phone while in a meeting</p>
+
+
+
+<a name="502319026"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502319026" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502319026">(Feb 27 2025 at 15:54)</a>:</h4>
+<p>And I want to make sure I understand your approach</p>
+
+
+
+<a name="502319114"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502319114" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502319114">(Feb 27 2025 at 15:54)</a>:</h4>
+<p>Haha yeah I’m trying to type on the train and not fall over</p>
+
+
+
+<a name="502319221"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502319221" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502319221">(Feb 27 2025 at 15:54)</a>:</h4>
+<p><span aria-label="grinning" class="emoji emoji-1f600" role="img" title="grinning">:grinning:</span>. Been there, used to be everyday on the Muni</p>
+
+
+
+<a name="502319225"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502319225" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502319225">(Feb 27 2025 at 15:54)</a>:</h4>
+<p>Later is probs better</p>
+
+
+
+<a name="502357962"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502357962" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502357962">(Feb 27 2025 at 19:06)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="781658">Anthony Bullard</span> <a href="#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E/near/502268216">said</a>:</p>
+<blockquote>
+<p>I noticed in my last PR some subtle memory issues with how slice fields in typed nodes returned from the NodeStore worked.  I believe there are places where if the <code>scratch</code> array that one of those structs came from resize while you still have a reference to that slice you can get some weird behavior.</p>
+<p>I <em>really</em> would like to avoid creating owned slices over data that is in <code>extra_data</code>.  My idea is to replace the slices with a new data structure called a <code>DataSpan</code> defined like this:</p>
+<p><div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="w">    </span><span class="kr">pub</span><span class="w"> </span><span class="kr">const</span><span class="w"> </span><span class="n">DataSpan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">start</span><span class="o">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="w">        </span><span class="n">len</span><span class="o">:</span><span class="w"> </span><span class="kt">u32</span><span class="p">,</span>
+<span class="w">    </span><span class="p">};</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>Just to quickly note, this is a totally reasonable alternative to slices when you are working with data with unstable pointers. Fundamentally, you can't keep a slice to a growing container. When the containers grow, all pointers will become invalid.</p>
+<p>As long as we link the data span to the original container, that is fundamentally reasonable.</p>
+<p>Also, I don't think arraylists have this feature yet but zig has a feature to lock pointers and ensure stability (at least on hashmaps). It doesn't solve this issue, but it does make it easier to catch these kinds of issues.</p>
+<hr>
+<p>That said, having the slices in the first place that outlive growth might be a sign of an issue in how we are designing this.</p>
+<p>Slices never own data. They are at the whims of the owning container and must be used carefully.</p>
+
+
+
+<a name="502456982"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502456982" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502456982">(Feb 27 2025 at 22:56)</a>:</h4>
+<p>I don't think the canonicalization would have any problem ingesting data with this interface, and I expect that a small proportion of the canonicalization work is actually "talking" to the parse AST, and most of the work is elsewhere</p>
+
+
+
+<a name="502456994"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502456994" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502456994">(Feb 27 2025 at 22:56)</a>:</h4>
+<p>So this seems fine to me</p>
+
+
+
+<a name="502458611"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502458611" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502458611">(Feb 27 2025 at 23:09)</a>:</h4>
+<p>Oh previously the list expression was storing a slice of sub expression</p>
+
+
+
+<a name="502458712"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502458712" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502458712">(Feb 27 2025 at 23:10)</a>:</h4>
+<p>If we plan to serialize list expression, they would need the integer based spans anyway</p>
+
+
+
+<a name="502458751"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502458751" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502458751">(Feb 27 2025 at 23:10)</a>:</h4>
+<p>That said, this is parse ast and caching just requires serializing the can ast. So not sure that is important.</p>
+
+
+
+<a name="502458847"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502458847" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502458847">(Feb 27 2025 at 23:11)</a>:</h4>
+<p>What actually owns the scratch expressions? If they are stored in the other expression nodes, it seems that they need proper ownership and are not just scratch.</p>
+
+
+
+<a name="502465715"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502465715" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502465715">(Feb 28 2025 at 00:15)</a>:</h4>
+<p>The scratch is just that, temporary bits of memory to go from raw u32s to typed ids and back</p>
+
+
+
+<a name="502465844"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502465844" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502465844">(Feb 28 2025 at 00:16)</a>:</h4>
+<p>This change will ensure that they are always temporary - data added will never outlive the function scope</p>
+
+
+
+<a name="502465910"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502465910" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502465910">(Feb 28 2025 at 00:17)</a>:</h4>
+<p>The span will just describe where the extra data for the node lives if any</p>
+
+
+
+<a name="502466628"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502466628" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502466628">(Feb 28 2025 at 00:23)</a>:</h4>
+<p>And Brendan scratch is a stack so it helps us keep related extra data contiguous in the array list</p>
+
+
+
+<a name="502466823"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502466823" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502466823">(Feb 28 2025 at 00:25)</a>:</h4>
+<p>And a serialzation scheme could easily consume this and I believe should be able to recreate the exact same layout deterministically</p>
+
+
+
+<a name="502771129"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502771129" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502771129">(Mar 01 2025 at 18:01)</a>:</h4>
+<p>Here's my first PR towards implementing this.  It was pretty painless: <a href="https://github.com/roc-lang/roc/pull/7649">https://github.com/roc-lang/roc/pull/7649</a></p>
+
+
+
+<a name="502795414"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502795414" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502795414">(Mar 01 2025 at 22:41)</a>:</h4>
+<p>I hadn’t considered just making the scratch stack a stack of ids rather than full nodes. It looks pretty clean tho!</p>
+
+
+
+<a name="502795531"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502795531" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502795531">(Mar 01 2025 at 22:42)</a>:</h4>
+<p>Doing nodes instead would trade off a bit of extra data movement during parsing for better data locality later.</p>
+
+
+
+<a name="502795552"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502795552" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502795552">(Mar 01 2025 at 22:43)</a>:</h4>
+<p>We might be able to selectively remove that data shuffling during parsing <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="502795572"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20dealing%20with%20memory%20dynamics%20of%20temporary%20.../near/502795572" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20dealing.20with.20memory.20dynamics.20of.20temporary.20.2E.2E.2E.html#502795572">(Mar 01 2025 at 22:43)</a>:</h4>
+<p>Anyway, this looks like a clear improvement as is.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

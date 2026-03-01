@@ -1,0 +1,655 @@
+<html>
+<head><meta charset="utf-8"><title>Canonicalization overhaul - overview · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html">Canonicalization overhaul - overview</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="493464022"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493464022" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493464022">(Jan 13 2025 at 22:32)</a>:</h4>
+<p>For those of you that don't know, I am working on reworking the canonicalization code in <code>roc_can</code> for a few reasons:</p>
+<ul>
+<li>We have lots of language changes that need to be implemented, and it'll be faster to just implement those all in one go instead of incrementally. I'm talking:<ul>
+<li>static dispatch</li>
+<li>removing tracking of lambda sets/captures (this will be done later)</li>
+<li>setting up for the rest of the new compiler pipeline</li>
+<li>and more...</li>
+</ul>
+</li>
+<li>We want to support caching by making canonicalization deterministic</li>
+<li>It's some of the oldest code in the compiler. It generally works pretty well, but it could use some love</li>
+</ul>
+<p>In order to achieve these goals, the plan is to break <code>roc_can</code> into two new crates:</p>
+<ul>
+<li><code>roc_can_solo</code>: Canonicalize a module pretending that no other modules exist. Imports are treated as things that might or might not exist, stuff like that. This will be doing the majority of the work in canonicalization. When this is finished, its output will be 100% determined by the source code, independent of where it is in the filesystem. That way, we can cache this output keyed by a hash of the files contents, very simple and performant.</li>
+<li><code>roc_can_combine</code>: Take the outputs of the <code>roc_can_solo</code> crate and stitch them together, including:<ul>
+<li>resolving imports</li>
+<li>resolving ingested files (e.g. <code>import "path/to/file.json" as data : List U8</code>)</li>
+<li>resolving aliases</li>
+<li>etc.</li>
+</ul>
+</li>
+</ul>
+<p>Once <code>roc_can_combine</code> is finished, we can pass the results to the type checker as before. In the future, we can even do partial typechecking on the values in each solo module, which should not even require that many changes to <code>roc_constrain</code>, but I don't know how feasible that is.</p>
+<p>Some nice things that will come out of this change:</p>
+<ul>
+<li>This new pair of cans should be much more robust, as I plan to never crash. As was suggested by Richard and used by Agus in the new monomorphization code, we can make a new type of problem be a <code>CompilerProblem</code>, and all places where we "need to crash" can just use one of those as a runtime error-generating AST node. This is more threading in the compiler than before, but it's way safer.</li>
+<li>We are now putting everything into bump allocators, and will eventually ensure we don't do global allocations by making these crates <code>#![no_std]</code>, which makes that impossible. By having all canonicalization info under the same bump allocator, we get caching for free, not to mention a good performance improvement!</li>
+<li>I'm trying to put all work post-parsing into these crates, meaning that much less of the work is in <code>load_internal</code>. This should make canonicalization more modular than before.</li>
+</ul>
+<p>The plan for implementing this change comes down to me understanding the final outcome's shape well enough to implement it in small, peer-reviewable chunks. To that end, I'm working in <a href="https://github.com/smores56/roc/tree/can-two">this branch of my fork</a> with a machete to roughly shape a copy of <code>roc_can</code> into the right shape. At the same time, I have a markdown document on my machine where I'm writing down what the "plain English" recipe for a solo module canonicalization, and then a combined one, will look like. Once I have those together, I'll start making PRs!</p>
+<p>Feel free to ask any questions.</p>
+
+
+
+<a name="493464494"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493464494" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493464494">(Jan 13 2025 at 22:35)</a>:</h4>
+<p>Awesome!!!</p>
+
+
+
+<a name="493464533"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493464533" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493464533">(Jan 13 2025 at 22:35)</a>:</h4>
+<p>Think I'll take a pause on trying to resolve <code>can</code> panics for the moment then</p>
+
+
+
+<a name="493465491"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493465491" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493465491">(Jan 13 2025 at 22:40)</a>:</h4>
+<p>This is really my main focus when working on Roc at the moment, but I am just one person. If anyone is concerned by the likely slowdown to implementing static dispatch in a big bundle with all of these other changes, I understand and partly share your concern. Since this doesn't immediately slot into the rest of the compiler plan, it might be a couple months for us to have static dispatch available. So if someone really wants it now, I'd be happy to talk about how we can parallelize this work</p>
+
+
+
+<a name="493465577"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493465577" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493465577">(Jan 13 2025 at 22:41)</a>:</h4>
+<p>Otherwise, I'm happy to do this myself. It's really so enriching to get to put blood, sweat, and tears into what will be the best language someday</p>
+
+
+
+<a name="493466715"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493466715" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493466715">(Jan 13 2025 at 22:48)</a>:</h4>
+<p>Ah man, you're taking all the fun jobs <span aria-label="smiling face" class="emoji emoji-263a" role="img" title="smiling face">:smiling_face:</span></p>
+
+
+
+<a name="493466833"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493466833" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493466833">(Jan 13 2025 at 22:49)</a>:</h4>
+<p>I volunteer to help find all the bugs you leave behind</p>
+
+
+
+<a name="493467060"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493467060" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493467060">(Jan 13 2025 at 22:51)</a>:</h4>
+<p>Oh yeah, I forgot lmao. When I was writing the <code>snake_case</code> conversion, I wanted to break a test intentionally and write <code>panic!("Luke, you're my only hope")</code> or something.</p>
+
+
+
+<a name="493467085"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493467085" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493467085">(Jan 13 2025 at 22:51)</a>:</h4>
+<p>I'll make sure to do that for this next set of PRs just for you</p>
+
+
+
+<a name="493552040"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493552040" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493552040">(Jan 14 2025 at 10:15)</a>:</h4>
+<blockquote>
+<p>We have lots of language changes that need to be implemented, and it'll be faster to just implement those all in one go instead of incrementally. I'm talking:</p>
+<ul>
+<li>static dispatch</li>
+<li>removing tracking of lambda sets/captures (this will be done later)</li>
+<li>setting up for the rest of the new compiler pipeline</li>
+<li>and more...</li>
+</ul>
+</blockquote>
+<p>These are not like the syntax changes, it seems like difficult bugs are a real possibility here. For debugging it can help a lot if you only need to consider a small set of changes. Are you sure this will be faster if you include potential debug time for issues that may pop up from the entire Roc ecosystem?</p>
+
+
+
+<a name="493552519"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493552519" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493552519">(Jan 14 2025 at 10:19)</a>:</h4>
+<p>The plan is not to make one giant PR with all changes included, but to make the changes incrementally on a new canonicalization code</p>
+
+
+
+<a name="493552634"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493552634" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493552634">(Jan 14 2025 at 10:19)</a>:</h4>
+<p>I just have no idea what it'll look like yet. What change do I make first?</p>
+
+
+
+<a name="493552872"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493552872" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493552872">(Jan 14 2025 at 10:21)</a>:</h4>
+<p>I don't know how to make these changes in steps. One benefit to this approach is that I get to ignore a lot of features to begin with. I'm starting without tracking lambda sets, without module params, etc.</p>
+
+
+
+<a name="493552962"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493552962" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493552962">(Jan 14 2025 at 10:21)</a>:</h4>
+<blockquote>
+<p>changes incrementally on a new canonicalization code</p>
+</blockquote>
+<p>Can you explain this in more detail?</p>
+
+
+
+<a name="493552970"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493552970" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493552970">(Jan 14 2025 at 10:22)</a>:</h4>
+<p>If someone would know how to do this without such a nuclear option that wouldnt take 6 months, it'd be great to hear</p>
+
+
+
+<a name="493553133"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493553133" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493553133">(Jan 14 2025 at 10:22)</a>:</h4>
+<p>I'm planning on modelling my changes on the strategy Agus has been taking with the new monomorphization code, more or less</p>
+
+
+
+<a name="493553215"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493553215" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493553215">(Jan 14 2025 at 10:23)</a>:</h4>
+<p>Start by outlining the end shape, and leaving a whole lot of "implement this and TODO" in places where it's obvious what needs to happen</p>
+
+
+
+<a name="493553323"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493553323" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493553323">(Jan 14 2025 at 10:24)</a>:</h4>
+<p>That can help us start with PRs that other people can understand</p>
+
+
+
+<a name="493553383"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493553383" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493553383">(Jan 14 2025 at 10:24)</a>:</h4>
+<p>To help with the robustness of this, I think a very important step will also be defining a testing strategy for all of these features</p>
+
+
+
+<a name="493553500"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493553500" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493553500">(Jan 14 2025 at 10:25)</a>:</h4>
+<p>Makes sense!</p>
+
+
+
+<a name="493553679"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493553679" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493553679">(Jan 14 2025 at 10:26)</a>:</h4>
+<p>I've not dug too deeply into that side of things, but the canonicalization testing today is mostly testing individual warnings here or there, and a lot of desugaring testing.</p>
+
+
+
+<a name="493553804"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493553804" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493553804">(Jan 14 2025 at 10:27)</a>:</h4>
+<p>We'll need to figure that out as well. My hope is that we can do more unit testing on "just canonicalize this alias", not "create a whole module with aliases and check the problems that arise"</p>
+
+
+
+<a name="493553829"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493553829" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493553829">(Jan 14 2025 at 10:27)</a>:</h4>
+<p>That should make it more readable, and more modular</p>
+
+
+
+<a name="493553982"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493553982" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493553982">(Jan 14 2025 at 10:28)</a>:</h4>
+<p>Probably once I figure out the overall plan, I'll try to write it up in more detail and jump on a call with someone. That will give me an opportunity to make sure that there isn't a big hole in it somewhere.</p>
+
+
+
+<a name="493554734"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493554734" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493554734">(Jan 14 2025 at 10:32)</a>:</h4>
+<p>I think the main steps before I can start drafting an outline for PR are:</p>
+<ul>
+<li>make sure that <code>var</code> and shadowing works with the new scope plan</li>
+<li>make sure that type checking for methods (and *.func's, what should we call these?) will work</li>
+<li>Figure out if we should have a separate IR for <code>roc_can_solo</code> and <code>roc_can_combine</code></li>
+<li>Figure out if we can/should do typechecking after solo canonicalization, or if we can only do it with the combined and canonicalized modules</li>
+<li>And maybe check the plan for handling builtins in a solo context, but that's not really blocking</li>
+</ul>
+
+
+
+<a name="493684213"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684213" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684213">(Jan 14 2025 at 22:49)</a>:</h4>
+<blockquote>
+<p>If someone would know how to do this without such a nuclear option that wouldnt take 6 months, it'd be great to hear</p>
+</blockquote>
+<p>I've been thinking about this.</p>
+<p>We will be in a position with two Can stages, the current (legacy) one, and the (new) one being developed. Both of these take the same input, Parser AST... and eventually produce the same output, Mono IR?? right? </p>
+<p>Can we wire up a test harness that can feed the same input in, and confirm it's getting the same output? </p>
+<p>Starting with the most basic of expressions, but over time as the new Can implementation matures we can add tests and eventually be in a position where we have feature parity.</p>
+
+
+
+<a name="493684355"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684355" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684355">(Jan 14 2025 at 22:50)</a>:</h4>
+<p>Or maybe there is a way to use the fuzzer, and incrementally add supported AST nodes</p>
+
+
+
+<a name="493684415"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684415" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684415">(Jan 14 2025 at 22:51)</a>:</h4>
+<p>The same output won't come out because of a number of changes. Static dispatch for instance</p>
+
+
+
+<a name="493684437"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684437" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684437">(Jan 14 2025 at 22:51)</a>:</h4>
+<p>This won't catch all the new features... but maybe it helps get us something we can use sooner</p>
+
+
+
+<a name="493684446"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684446" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684446">(Jan 14 2025 at 22:51)</a>:</h4>
+<p>And I'm avoiding supporting abilities</p>
+
+
+
+<a name="493684449"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684449" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684449">(Jan 14 2025 at 22:51)</a>:</h4>
+<p>But yes</p>
+
+
+
+<a name="493684519"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684519" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684519">(Jan 14 2025 at 22:52)</a>:</h4>
+<p>For those things in common, it should output the same Mono IR</p>
+
+
+
+<a name="493684535"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684535" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684535">(Jan 14 2025 at 22:52)</a>:</h4>
+<p>Well...</p>
+
+
+
+<a name="493684550"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684550" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684550">(Jan 14 2025 at 22:52)</a>:</h4>
+<p>Lambda sets are getting built differently as well</p>
+
+
+
+<a name="493684593"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684593" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684593">(Jan 14 2025 at 22:53)</a>:</h4>
+<p>In that they're supposed to be built later in the compiler</p>
+
+
+
+<a name="493684604"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684604" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684604">(Jan 14 2025 at 22:53)</a>:</h4>
+<p>Even without Abilities and Lambda sets... we could still cover a lot of the AST though</p>
+
+
+
+<a name="493684625"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684625" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684625">(Jan 14 2025 at 22:53)</a>:</h4>
+<p>Probably</p>
+
+
+
+<a name="493684644"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684644" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684644">(Jan 14 2025 at 22:53)</a>:</h4>
+<p>Worth a try to make sure we're on the right track</p>
+
+
+
+<a name="493684903"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684903" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684903">(Jan 14 2025 at 22:56)</a>:</h4>
+<p>If we had the new Can module (even just stubbed out) <span class="user-mention" data-user-id="453336">@Joshua Warner</span> might be able to help with the test harness</p>
+
+
+
+<a name="493684991"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493684991" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493684991">(Jan 14 2025 at 22:56)</a>:</h4>
+<p>Sure!</p>
+
+
+
+<a name="493685016"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493685016" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493685016">(Jan 14 2025 at 22:56)</a>:</h4>
+<p>I think I'd be able to get something in the next few weeks as a stub</p>
+
+
+
+<a name="493685649"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493685649" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493685649">(Jan 14 2025 at 23:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="461444">Sam Mohr</span> <a href="#narrow/channel/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview/near/493684446">said</a>:</p>
+<blockquote>
+<p>And I'm avoiding supporting abilities</p>
+</blockquote>
+<p>Is there a way we could rip this out of current Can, and make it another pass to the side, or move it to the end or something? Basically... could we do something now so we can keep the current impl and then it could be compatible with the new Can? </p>
+<p>And I guess lambda sets are in the same boat</p>
+
+
+
+<a name="493685831"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493685831" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493685831">(Jan 14 2025 at 23:04)</a>:</h4>
+<p>In my professional experience, it can be very very tempting to do a rewrite _and_ make significant functionality changes at the same time, but it's almost always a terrible idea</p>
+
+
+
+<a name="493685942"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493685942" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493685942">(Jan 14 2025 at 23:05)</a>:</h4>
+<p>Yeah, I'm trying to find ways we can keep everything online and enable an incremental approach.</p>
+
+
+
+<a name="493686082"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686082" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686082">(Jan 14 2025 at 23:06)</a>:</h4>
+<p>That's why I think the first step is to try to understand the end state, and then write down a plan that outlines what things should look like at the end state, and then break that into incremental changes as much as is feasible</p>
+
+
+
+<a name="493686202"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686202" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686202">(Jan 14 2025 at 23:07)</a>:</h4>
+<p>It's also ok to start and change course along the way. More of a discovery or R&amp;D type approach than an up front engineering effort</p>
+
+
+
+<a name="493686259"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686259" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686259">(Jan 14 2025 at 23:08)</a>:</h4>
+<p>Yes, I'd call this the R&amp;D stage for sure</p>
+
+
+
+<a name="493686289"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686289" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686289">(Jan 14 2025 at 23:08)</a>:</h4>
+<p>An idea: between <code>roc_can_solo</code> and <code>roc_can_combine</code>, the latter is basically what we do today, but separated. We can maybe start by making a very small <code>roc_can_solo</code> that only does a little bit of work, and then passes everything else to the old <code>roc_can</code></p>
+
+
+
+<a name="493686337"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686337" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686337">(Jan 14 2025 at 23:09)</a>:</h4>
+<p>And eventually we move as much as possible to <code>roc_can_solo</code> until it all works</p>
+
+
+
+<a name="493686369"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686369" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686369">(Jan 14 2025 at 23:09)</a>:</h4>
+<p>So step two would be to figure out the caching mechanism and roughly set that up</p>
+
+
+
+<a name="493686400"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686400" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686400">(Jan 14 2025 at 23:09)</a>:</h4>
+<p>And step one is to do the prep work of making <code>roc_can</code> ready for this work</p>
+
+
+
+<a name="493686490"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686490" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686490">(Jan 14 2025 at 23:10)</a>:</h4>
+<p>Meaning moving to use arenas as much as possible, changing names of things, using <code>CompilerProblem</code>s where possible</p>
+
+
+
+<a name="493686493"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686493" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686493">(Jan 14 2025 at 23:10)</a>:</h4>
+<p>What if we did something like:</p>
+<ul>
+<li>Introduce a new "desugared AST" type, which initially looks a lot like the current AST</li>
+<li>Start caching that</li>
+<li>Incrementally evolve from there as necessary</li>
+</ul>
+
+
+
+<a name="493686511"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686511" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686511">(Jan 14 2025 at 23:10)</a>:</h4>
+<p>Yeah, so for anything low technical maturity/R&amp;D I would highly recommend taking a more agile/incremental approach -- keeping everything online and running ops normal. </p>
+<p>I think the biggest risk here is the unkown-unkowns (sorry for the cliche's).</p>
+
+
+
+<a name="493686556"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686556" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686556">(Jan 14 2025 at 23:11)</a>:</h4>
+<p>Yeah, Josh's suggestion is basically what I was expecting. I can try it</p>
+
+
+
+<a name="493686670"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686670" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686670">(Jan 14 2025 at 23:12)</a>:</h4>
+<p>The subtle difference is that I think that <code>roc_can_solo</code> and <code>roc_can_combine</code> will use the same IR</p>
+
+
+
+<a name="493686864"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686864" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686864">(Jan 14 2025 at 23:14)</a>:</h4>
+<p>There's no reason that can't be the case eventually</p>
+
+
+
+<a name="493686874"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686874" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686874">(Jan 14 2025 at 23:14)</a>:</h4>
+<p>Well, one option is for the new <code>desugared</code> IR to be a <code>roc_can_solo::Expr</code> that looks just like desugared IR to start with, but over time we change it bit by bit, and once <code>roc_can_solo::Expr</code> and <code>roc_can_combine::Expr</code> are the same thing, we can use <code>roc_can_solo::Expr</code></p>
+
+
+
+<a name="493686876"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/493686876" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#493686876">(Jan 14 2025 at 23:14)</a>:</h4>
+<p>I would try to get there incrementally tho</p>
+
+
+
+<a name="511704956"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511704956" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511704956">(Apr 11 2025 at 17:48)</a>:</h4>
+<p>so now that the Frontend Masters stuff is wrapped up, I have a backlog of things I should be doing...but what I'm fired up to do instead is to write some Zig canonicalization code <span aria-label="grinning face with smiling eyes" class="emoji emoji-1f601" role="img" title="grinning face with smiling eyes">:grinning_face_with_smiling_eyes:</span></p>
+
+
+
+<a name="511704995"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511704995" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511704995">(Apr 11 2025 at 17:48)</a>:</h4>
+<p>what's the current status of that? I have no idea how far along things are!</p>
+
+
+
+<a name="511705031"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511705031" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511705031">(Apr 11 2025 at 17:48)</a>:</h4>
+<p>I'm assuming <span class="user-mention" data-user-id="461444">@Sam Mohr</span> might know?</p>
+
+
+
+<a name="511707761"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511707761" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511707761">(Apr 11 2025 at 18:04)</a>:</h4>
+<p>I have some local changes to implement sexprs for the can ir, planning on submitting a pr “soon”</p>
+
+
+
+<a name="511715172"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511715172" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511715172">(Apr 11 2025 at 18:52)</a>:</h4>
+<p>I'd love to see Richard working on it! I don't have that much work done, but I can put it in a branch and see what comes out.</p>
+<p>If it's not already obvious, I've been burned out on Roc development for like a month and I don't know how to fix it. I was hoping taking time to play games and not think about it would work, but nothing seems to be working... Life outside has been tough. I'll give an update soon when I have the energy to come back.</p>
+
+
+
+<a name="511715198"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511715198" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511715198">(Apr 11 2025 at 18:53)</a>:</h4>
+<p>So yes, thank you Richard for picking up my slack!</p>
+
+
+
+<a name="511719620"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511719620" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511719620">(Apr 11 2025 at 19:20)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="461444">Sam Mohr</span> <a href="#narrow/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview/near/511715172">said</a>:</p>
+<blockquote>
+<p>If it's not already obvious, I've been burned out on Roc development for like a month and I don't know how to fix it. I was hoping taking time to play games and not think about it would work, but nothing seems to be working... Life outside has been tough.</p>
+</blockquote>
+<p>This is normal and something that might just take time or the right break/inspiration. My time invest in roc significantly varies month by month. Often times, it just takes a while to revive. Generally, certain things re-energize and inspire (like community events and longer vacations eg holidays).</p>
+
+
+
+<a name="511719747"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511719747" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511719747">(Apr 11 2025 at 19:21)</a>:</h4>
+<p>Take the time you need and don't worry about roc. It will keep moving and it will still be here when you get back.</p>
+
+
+
+<a name="511720871"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511720871" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511720871">(Apr 11 2025 at 19:29)</a>:</h4>
+<p>We will miss your presence in the chat, hope to see talk to you soon buddy</p>
+
+
+
+<a name="511720892"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511720892" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511720892">(Apr 11 2025 at 19:29)</a>:</h4>
+<p>Thanks Brendan</p>
+
+
+
+<a name="511720992"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511720992" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511720992">(Apr 11 2025 at 19:30)</a>:</h4>
+<p>Yeah, maybe when work chills out</p>
+
+
+
+<a name="511739761"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511739761" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511739761">(Apr 11 2025 at 21:42)</a>:</h4>
+<p>yeah super normal feeling... please don't feel bad about it! You're welcome whenever you're feeling it, just drop in and we'll catch you up on whatever's been happening <span aria-label="heart" class="emoji emoji-2764" role="img" title="heart">:heart:</span></p>
+
+
+
+<a name="511739777"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511739777" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511739777">(Apr 11 2025 at 21:42)</a>:</h4>
+<p>and thanks for all your awesome contributions so far!</p>
+
+
+
+<a name="511742707"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511742707" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511742707">(Apr 11 2025 at 22:11)</a>:</h4>
+<p>also <span class="user-mention" data-user-id="461444">@Sam Mohr</span> I'm happy to start from a blank slate, so no need to push a WIP branch unless you really want to <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="511789624"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511789624" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511789624">(Apr 12 2025 at 08:11)</a>:</h4>
+<blockquote>
+<p>Life outside has been tough.</p>
+</blockquote>
+<p>It pains me to hear that, I hope things get better <span aria-label="hugging" class="emoji emoji-1fac2" role="img" title="hugging">:hugging:</span></p>
+
+
+
+<a name="511854490"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511854490" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511854490">(Apr 12 2025 at 23:48)</a>:</h4>
+<p>Adding sexpr formatting to the can IR: <a href="https://github.com/roc-lang/roc/pull/7737">https://github.com/roc-lang/roc/pull/7737</a><br>
+Note that this is largely untested &amp; doesn't get hit (yet)</p>
+
+
+
+<a name="511860132"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511860132" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Isaac Van Doren <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511860132">(Apr 13 2025 at 01:14)</a>:</h4>
+<p>I’m constantly impressed by how mature and emotionally healthy the Roc community is <span aria-label="heart" class="emoji emoji-2764" role="img" title="heart">:heart:</span></p>
+
+
+
+<a name="511945562"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511945562" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511945562">(Apr 13 2025 at 21:47)</a>:</h4>
+<p>Yeah, it's really nice to see</p>
+
+
+
+<a name="511945643"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511945643" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511945643">(Apr 13 2025 at 21:48)</a>:</h4>
+<p>There's a selection bias in this group for people that are willing to give their free time for no pay to improve the state of programming</p>
+
+
+
+<a name="511945651"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/511945651" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#511945651">(Apr 13 2025 at 21:48)</a>:</h4>
+<p>So how surprised can we be?</p>
+
+
+
+<a name="518844428"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/518844428" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#518844428">(May 17 2025 at 18:51)</a>:</h4>
+<p>I wonder if anyone has made any progress here?</p>
+
+
+
+<a name="518844503"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/518844503" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#518844503">(May 17 2025 at 18:52)</a>:</h4>
+<p>I'd really love to do enough to get a Hello World program to be able to run (in an interpreter)</p>
+
+
+
+<a name="518844647"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/518844647" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#518844647">(May 17 2025 at 18:54)</a>:</h4>
+<p>I know this PR is moving, but not sure how much else has moved: <a href="https://github.com/roc-lang/roc/pull/7772">https://github.com/roc-lang/roc/pull/7772</a></p>
+
+
+
+<a name="518844831"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/518844831" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#518844831">(May 17 2025 at 18:57)</a>:</h4>
+<p>I'd love to sit with someone as they review this and learn how to even make it through it.  It's just too much code in an area I am not an expert in for me to review with any sort of authority at the moment</p>
+
+
+
+<a name="518844879"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/518844879" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#518844879">(May 17 2025 at 18:57)</a>:</h4>
+<p>I've implemented a few simple type checkers, and unification once before (but not to completion).  But this is a LOT</p>
+
+
+
+<a name="518845079"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/518845079" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#518845079">(May 17 2025 at 19:00)</a>:</h4>
+<p>Haha, this is an area of the compiler I tend to avoid. I don't feel like it is that complicated, but I have never felt like groking all the type checking pieces.</p>
+
+
+
+<a name="518846361"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/518846361" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#518846361">(May 17 2025 at 19:15)</a>:</h4>
+<p>yeah I took a bunch of notes about that PR on the plane (no wifi, couldn't comment) - overall looks good, I just want to leave some comments</p>
+
+
+
+<a name="518846372"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/518846372" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#518846372">(May 17 2025 at 19:15)</a>:</h4>
+<p>but yeah I'm planning to merge it this weekend!</p>
+
+
+
+<a name="518846462"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/518846462" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#518846462">(May 17 2025 at 19:16)</a>:</h4>
+<p>I also have some cache serialization stuff that's close but needs some more work</p>
+
+
+
+<a name="518966811"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/518966811" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#518966811">(May 18 2025 at 23:14)</a>:</h4>
+<p>I've been following along with all the commits. But I also don't feel qualified to really comment on it.</p>
+
+
+
+<a name="519185278"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/519185278" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#519185278">(May 19 2025 at 18:03)</a>:</h4>
+<p>Yeah, sorry the PR is so huge — I know it makes it really hard to digest. I debate breaking it up, just didn’t have time. I’ll make sure to chunk things up better in the future for ease of review.</p>
+<p>Planning on looking at Richard’s comments in detail later today, but probably will merge as-is then open a follow up PR addressing comments this week.</p>
+<p>And I’m happy to find a time with whoever is interested (<span class="user-mention" data-user-id="781658">@Anthony Bullard</span> ?) and talk through it to share the knowledge!</p>
+
+
+
+<a name="519218058"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/519218058" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#519218058">(May 19 2025 at 20:35)</a>:</h4>
+<p>heck yeah!  thanks Jared!</p>
+
+
+
+<a name="519244019"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/519244019" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#519244019">(May 19 2025 at 23:04)</a>:</h4>
+<p>I'd love to join that discussion too</p>
+
+
+
+<a name="519377195"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/519377195" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#519377195">(May 20 2025 at 12:53)</a>:</h4>
+<p>I think if no one else is working on it, I'd like to try to set up desugaring.  Should I start a new topic on that?</p>
+
+
+
+<a name="519377259"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Canonicalization%20overhaul%20-%20overview/near/519377259" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview.html#519377259">(May 20 2025 at 12:53)</a>:</h4>
+<p>I'm going to assume so :-)</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

@@ -1,0 +1,350 @@
+<html>
+<head><meta charset="utf-8"><title>Opaque type compiler bug · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html">Opaque type compiler bug</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="430182927"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430182927" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430182927">(Mar 29 2024 at 00:29)</a>:</h4>
+<p>I am trying to write a custom type to parse nulls in JSON, and the following code crashes when <code>roc test</code>:</p>
+<div class="codehilite"><pre><span></span><code>interface Nullable
+    exposes [Nullable, null, full, nullableDecode, nullableEncode]
+    imports [
+        json.Core.{ json },
+    ]
+
+Nullable val := [Null, Full val] implements [
+        Decoding { decoder: nullableDecode },
+        Encoding { toEncoder: nullableEncode },
+        Inspect, # auto derive
+        Eq, # auto derive
+    ]
+
+null = @Nullable Null
+full = \a -&gt; @Nullable (Full a)
+
+nullBytes = [110, 117, 108, 108]
+
+nullableDecode : Decoder (Nullable val) fmt where val implements Decoding, fmt implements DecoderFormatting
+nullableDecode = Decode.custom \bytes, fmt -&gt;
+    if bytes |&gt; List.startsWith nullBytes then
+        { result: Ok (@Nullable (Null)), rest: List.dropFirst bytes 4 }
+    else
+        when bytes |&gt; Decode.decodeWith (Decode.decoder) fmt is
+            { result: Ok res, rest } -&gt; { result: Ok (@Nullable (Full res)), rest }
+            { result: Err a, rest } -&gt; { result: Err a, rest }
+
+nullableEncode : Nullable val -&gt; Encoder fmt where val implements Encoding, fmt implements EncoderFormatting
+nullableEncode = \val -&gt;
+    Encode.custom
+        (\bytes, fmt -&gt; List.concat
+                bytes
+                (
+                    when val is
+                        @Nullable Null -&gt; nullBytes
+                        @Nullable (Full a) -&gt; Encode.toBytes a fmt
+                )
+        )
+
+TestType : {
+    a : Nullable I32,
+}
+
+expect
+    actual : DecodeResult TestType
+    actual = &quot;{\&quot;a\&quot;:null}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json
+    expected = Ok ({ a: @Nullable Null })
+    actual.result == expected
+
+expect
+    actual : DecodeResult TestType
+    actual = &quot;{\&quot;a\&quot;:3}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json
+    expected = Ok ({ a: full 3 })
+    actual.result == expected
+
+expect
+    actual = { a: @Nullable Null } |&gt; Encode.toBytes json |&gt; Str.fromUtf8
+    expected = Ok (&quot;{\&quot;a\&quot;:null}&quot;)
+    actual == expected
+
+expect
+    actual = { a: full 3 } |&gt; Encode.toBytes json |&gt; Str.fromUtf8
+    expected = Ok (&quot;{\&quot;a\&quot;:3}&quot;)
+    actual == expected
+</code></pre></div>
+<p>The culprit is test 3: when encoding a null value, the branch <code>@Nullable (Some a) -&gt;</code> is chosen. And the crash only happens when <code>val</code> or matched <code>a</code> are accessed in any way anywhere in the body of <code>nullableEncode</code> during test 3, even with <code>dbg</code>.</p>
+
+
+
+<a name="430183300"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430183300" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430183300">(Mar 29 2024 at 00:34)</a>:</h4>
+<p>The crash:</p>
+<div class="codehilite"><pre><span></span><code>thread &#39;&lt;unnamed&gt;&#39; panicked at &#39;called `Option::unwrap()` on a `None` value&#39;, crates/compiler/mono/src/ir.rs:6143:56
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+There was an unrecoverable error in the Roc compiler. The `roc check` command can sometimes give a more helpful error report than other commands.
+</code></pre></div>
+<p><code>roc check</code> doesn't find errors</p>
+
+
+
+<a name="430187188"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430187188" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430187188">(Mar 29 2024 at 01:22)</a>:</h4>
+<p>does <code>roc check</code> pass?</p>
+
+
+
+<a name="430187309"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430187309" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430187309">(Mar 29 2024 at 01:24)</a>:</h4>
+<p>It does, 0 errors and the warnings only relate to no usage of some declarations</p>
+
+
+
+<a name="430254073"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430254073" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430254073">(Mar 29 2024 at 13:11)</a>:</h4>
+<p>huh, interesting! I'm seeing <code>roc check</code> errors when I copy/paste that source locally <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span> </p>
+<div class="codehilite"><pre><span></span><code>── UNRECOGNIZED NAME in Lib/Nullable.roc ───────────────────────────────────────
+
+Nothing is named `json` in this scope.
+
+50│      actual = &quot;{\&quot;a\&quot;: null}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json
+                                                                           ^^^^
+
+Did you mean one of these?
+
+    Box
+    Bool
+    U8
+    F64
+
+
+── UNRECOGNIZED NAME in Lib/Nullable.roc ───────────────────────────────────────
+
+Nothing is named `json` in this scope.
+
+56│      actual = &quot;{\&quot;a\&quot;: 3}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json
+                                                                        ^^^^
+
+Did you mean one of these?
+
+    Box
+    Bool
+    U8
+    F64
+
+
+── UNRECOGNIZED NAME in Lib/Nullable.roc ───────────────────────────────────────
+
+Nothing is named `json` in this scope.
+
+61│      actual = { a: @Nullable Null } |&gt; Encode.toBytes json |&gt; Str.fromUtf8
+                                                          ^^^^
+
+Did you mean one of these?
+
+    Box
+    Bool
+    U8
+    F64
+
+
+── UNRECOGNIZED NAME in Lib/Nullable.roc ───────────────────────────────────────
+
+Nothing is named `json` in this scope.
+
+66│      actual = { a: nonNull 3 } |&gt; Encode.toBytes json |&gt; Str.fromUtf8
+                                                     ^^^^
+
+Did you mean one of these?
+
+    Box
+    Bool
+    U8
+    F64
+
+────────────────────────────────────────────────────────────────────────────────
+
+4 errors and 1 warning found in 16 ms
+</code></pre></div>
+
+
+
+<a name="430254089"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430254089" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430254089">(Mar 29 2024 at 13:11)</a>:</h4>
+<p>if you do <code>roc --version</code> what does it print?</p>
+
+
+
+<a name="430255071"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430255071" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430255071">(Mar 29 2024 at 13:19)</a>:</h4>
+<p>Ah, I am just using roc-json library, did not mention that</p>
+
+
+
+<a name="430255272"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430255272" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430255272">(Mar 29 2024 at 13:21)</a>:</h4>
+<p>The latest 0.6.3, and yesterday's roc nightly (will print version a bit later)</p>
+
+
+
+<a name="430255479"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430255479" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430255479">(Mar 29 2024 at 13:22)</a>:</h4>
+<p>Json.Core.{ json }</p>
+
+
+
+<a name="430257027"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430257027" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430257027">(Mar 29 2024 at 13:34)</a>:</h4>
+<p>ah, can you maybe share a link to the full repo? Looks like this needs more than one file to reproduce <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="430258604"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430258604" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430258604">(Mar 29 2024 at 13:47)</a>:</h4>
+<p>Not  a link but the complete file to try as-is:<br>
+main.roc</p>
+<div class="codehilite"><pre><span></span><code>app &quot;simple-json&quot;
+    packages {
+        pf: &quot;https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br&quot;,
+        json: &quot;https://github.com/lukewilliamboswell/roc-json/releases/download/0.6.3/_2Dh4Eju2v_tFtZeMq8aZ9qw2outG04NbkmKpFhXS_4.tar.br&quot;,
+    }
+    imports [
+        pf.Stdout,
+        json.Core.{ json },
+    ]
+    provides [main] to pf
+
+main =
+    Stdout.line &quot;Hello Richard!&quot;
+
+Nullable val := [Null, Full val] implements [
+        Decoding { decoder: nullableDecode },
+        Encoding { toEncoder: nullableEncode },
+        Inspect, # auto derive
+        Eq, # auto derive
+    ]
+
+null = @Nullable Null
+full = \a -&gt; @Nullable (Full a)
+
+nullBytes = [110, 117, 108, 108]
+
+nullableDecode : Decoder (Nullable val) fmt where val implements Decoding, fmt implements DecoderFormatting
+nullableDecode = Decode.custom \bytes, fmt -&gt;
+    if bytes |&gt; List.startsWith nullBytes then
+        { result: Ok (@Nullable (Null)), rest: List.dropFirst bytes 4 }
+    else
+        when bytes |&gt; Decode.decodeWith (Decode.decoder) fmt is
+            { result: Ok res, rest } -&gt; { result: Ok (@Nullable (Full res)), rest }
+            { result: Err a, rest } -&gt; { result: Err a, rest }
+
+nullableEncode : Nullable val -&gt; Encoder fmt where val implements Encoding, fmt implements EncoderFormatting
+nullableEncode = \val -&gt;
+    Encode.custom
+        (\bytes, fmt -&gt; List.concat
+                bytes
+                (
+                    when val is
+                        @Nullable Null -&gt; nullBytes
+                        @Nullable (Full a) -&gt; Encode.toBytes a fmt
+                )
+        )
+
+TestType : {
+    a : Nullable I32,
+}
+
+expect
+    actual : DecodeResult TestType
+    actual = &quot;{\&quot;a\&quot;:null}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json
+    expected = Ok ({ a: null })
+    actual.result == expected
+
+expect
+    actual : DecodeResult TestType
+    actual = &quot;{\&quot;a\&quot;:3}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json
+    expected = Ok ({ a: full 3 })
+    actual.result == expected
+
+expect
+    actual = { a: @Nullable Null } |&gt; Encode.toBytes json |&gt; Str.fromUtf8
+    expected = Ok (&quot;{\&quot;a\&quot;:null}&quot;)
+    actual == expected
+
+expect
+    actual = { a: full 3 } |&gt; Encode.toBytes json |&gt; Str.fromUtf8
+    expected = Ok (&quot;{\&quot;a\&quot;:3}&quot;)
+    actual == expected
+</code></pre></div>
+
+
+
+<a name="430261199"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430261199" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430261199">(Mar 29 2024 at 14:05)</a>:</h4>
+<p>Ok wow, this is definitely a bug, but I just found a workaround<br>
+Crashes:</p>
+<div class="codehilite"><pre><span></span><code>expect
+    actual = { a: @Nullable Null } |&gt; Encode.toBytes json |&gt; Str.fromUtf8
+    expected = Ok (&quot;{\&quot;a\&quot;:null}&quot;)
+    actual == expected
+</code></pre></div>
+<p>Passes:</p>
+<div class="codehilite"><pre><span></span><code>expect
+    actual = { a: null } |&gt; Encode.toBytes json |&gt; Str.fromUtf8
+    expected = Ok (&quot;{\&quot;a\&quot;:null}&quot;)
+    actual == expected
+</code></pre></div>
+
+
+
+<a name="430261636"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430261636" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430261636">(Mar 29 2024 at 14:08)</a>:</h4>
+<p>To help debugging, copying again the bug behavior:<br>
+The culprit is test 3: when encoding a null value, the branch <code>@Nullable (Some a) -&gt;</code> is chosen. And the crash only happens when <code>val</code> or matched <code>a</code> are accessed in any way anywhere in the body of <code>nullableEncode</code> during test 3, even with <code>dbg</code>.</p>
+
+
+
+<a name="430263999"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430263999" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430263999">(Mar 29 2024 at 14:27)</a>:</h4>
+<p>huh! Might be a scoping issue involving <code>expect</code> that we haven't encountered before</p>
+
+
+
+<a name="430264108"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430264108" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430264108">(Mar 29 2024 at 14:28)</a>:</h4>
+<p>do you think you could minimize that and open an issue for it? I bet you don't need to get JSON involved at all, seems like the issue is with the opaque wrapper</p>
+
+
+
+<a name="430264232"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430264232" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430264232">(Mar 29 2024 at 14:29)</a>:</h4>
+<p>Weird thing is the first test worked with</p>
+<div class="codehilite"><pre><span></span><code>expect
+    actual : DecodeResult TestType
+    actual = &quot;{\&quot;a\&quot;:null}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json
+    expected = Ok ({ a: @Nullable Null })
+    actual.result == expected
+</code></pre></div>
+
+
+
+<a name="430264338"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430264338" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430264338">(Mar 29 2024 at 14:29)</a>:</h4>
+<p>I'll try to minimize the repro today</p>
+
+
+
+<a name="430276022"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Opaque%20type%20compiler%20bug/near/430276022" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Opaque.20type.20compiler.20bug.html#430276022">(Mar 29 2024 at 15:48)</a>:</h4>
+<p>appreciate it, thank you!</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

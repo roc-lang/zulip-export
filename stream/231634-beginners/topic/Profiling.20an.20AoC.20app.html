@@ -1,0 +1,512 @@
+<html>
+<head><meta charset="utf-8"><title>Profiling an AoC app · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html">Profiling an AoC app</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="406875515"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406875515" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406875515">(Dec 09 2023 at 02:49)</a>:</h4>
+<h1>Spoiler: this contains an answer to part 1 of day 8 of AoC 2023.</h1>
+<p>I feel like I'm missing something. Does anyone see anything obviously wrong with this code? (Forget about the parsing bit, it is immaterial in performance)</p>
+<div class="codehilite"><pre><span></span><code>app &quot;AoC&quot;
+    packages {
+        pf: &quot;https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br&quot;,
+        parser: &quot;https://github.com/lukewilliamboswell/roc-parser/releases/download/0.2.0/dJQSsSmorujhiPNIvJKlQoI92RFIG_JQwUfIxZsCSwE.tar.br&quot;,
+    }
+    imports [
+        pf.Stdout,
+        pf.Task.{ Task },
+        parser.Core.{
+            Parser,
+            const,
+            keep,
+            skip,
+            oneOf,
+            many,
+            sepBy1,
+        },
+        parser.String.{
+            string,
+            parseStr,
+            codeunitSatisfies,
+        },
+        &quot;day-8-input.txt&quot; as input : Str,
+    ]
+    provides [main] to pf
+
+main : Task {} *
+main =
+    Stdout.line part1
+    |&gt; Task.await \_ -&gt; Stdout.line &quot;&quot;
+
+part1 : Str
+part1 =
+    input
+    |&gt; Str.trim
+    |&gt; parseMap
+    |&gt; stepsAAAToZZZ
+    |&gt; Num.toStr
+
+Direction : [Left, Right]
+Node : { left : Str, right : Str }
+Network : Dict Str Node
+Map : { directions : List Direction, network : Network }
+
+findNode : Network, Str -&gt; Node
+findNode = \network, node -&gt;
+    when Dict.get network node is
+        Ok n -&gt; n
+        Err _ -&gt; crash &quot;bad input: node \(node) not found&quot;
+
+stepsAAAToZZZ : Map -&gt; Nat
+stepsAAAToZZZ = \{ directions, network } -&gt;
+    go = \steps, ds, d, cur -&gt;
+        if cur == &quot;ZZZ&quot; then
+            steps
+        else
+            when List.get ds (Num.rem d (List.len ds)) is
+                Ok Left -&gt; go (steps + 1) directions (d + 1) (findNode network cur).left
+                Ok Right -&gt; go (steps + 1) directions (d + 1) (findNode network cur).right
+                Err _ -&gt; crash &quot;bad input&quot;
+
+    go 0 directions 0 &quot;AAA&quot;
+
+parseMap : Str -&gt; Map
+parseMap = \str -&gt;
+    pDirection : Parser _ Direction
+    pDirection = oneOf [
+        const Left |&gt; skip (string &quot;L&quot;),
+        const Right |&gt; skip (string &quot;R&quot;),
+    ]
+
+    pDirections = many pDirection
+
+    pLabel : Parser _ Str
+    pLabel =
+        const \c -&gt;
+            when Str.fromUtf8 c is
+                Ok s -&gt; s
+                Err _ -&gt; crash &quot;bad input: non-utf8 character&quot;
+        |&gt; keep (many (codeunitSatisfies \b -&gt; b &gt;= &#39;A&#39; &amp;&amp; b &lt;= &#39;Z&#39;))
+
+    pNode : Parser _ (Str, Node)
+    pNode =
+        const (\node -&gt; \left -&gt; \right -&gt; (node, { left, right }))
+        |&gt; keep pLabel
+        |&gt; skip (string &quot; = (&quot;)
+        |&gt; keep pLabel
+        |&gt; skip (string &quot;, &quot;)
+        |&gt; keep pLabel
+        |&gt; skip (string &quot;)&quot;)
+
+    pNetwork : Parser _ Network
+    pNetwork =
+        const Dict.fromList
+        |&gt; keep (sepBy1 pNode (string &quot;\n&quot;))
+
+    pMap : Parser _ Map
+    pMap =
+        const (\directions -&gt; \network -&gt; { directions, network })
+        |&gt; keep pDirections
+        |&gt; skip (string &quot;\n\n&quot;)
+        |&gt; keep pNetwork
+
+    when parseStr pMap str is
+        Ok g -&gt; g
+        Err (ParsingFailure e) | Err (ParsingIncomplete e) -&gt; crash &quot;bad input: &#39;\(e)&#39;&quot;
+</code></pre></div>
+<p>If I run this as-is, without opt or <a href="https://github.com/roc-lang/roc/issues/6216">#6216</a>, it takes ~9 seconds. <code>stepsAAAToZZZ#go</code> makes 22K iterations.</p>
+<p>If I compile with opt and <a href="https://github.com/roc-lang/roc/issues/6216">#6216</a> it's at 860ms. But this is still paltry compared to a simple Node.js version:</p>
+<div class="codehilite"><pre><span></span><code>❯ hyperfine --warmup 2 ./day8 &#39;node day8.js&#39;
+Benchmark 1: ./day8
+  Time (mean ± σ):     867.2 ms ±  17.8 ms    [User: 856.2 ms, System: 5.4 ms]
+  Range (min … max):   848.4 ms … 895.3 ms    10 runs
+
+Benchmark 2: node day8.js
+  Time (mean ± σ):      35.0 ms ±   1.5 ms    [User: 29.7 ms, System: 5.3 ms]
+  Range (min … max):    31.5 ms …  38.6 ms    74 runs
+
+Summary
+  &#39;node day8.js&#39; ran
+   24.77 ± 1.18 times faster than &#39;./day8&#39;
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>const fs = require(&#39;fs&#39;);
+const path = require(&#39;path&#39;);
+
+const input = fs.readFileSync(path.resolve(__dirname, &#39;./day-8-input.txt&#39;), &#39;utf8&#39;);
+
+const dir = {left: 0, right: 1};
+
+function parseInput(input) {
+  const [directions, nodes] = input.trim().split(&#39;\n\n&#39;);
+  const dirs = directions.split(&#39;&#39;).map(d =&gt; d === &#39;L&#39; ? dir.left : dir.right);
+  const network = {};
+  const parsedNodes = nodes.split(&#39;\n&#39;).forEach(n =&gt; {
+    const [name, lrs] = n.split(&#39; = (&#39;);
+    const left = lrs.substring(0, 3);
+    const right = lrs.substring(3 + &#39;, &#39;.length, 3 + &#39;, &#39;.length + 3);
+    network[name] = {left, right};
+  });
+  return {dirs, network};
+}
+
+const {dirs, network} = parseInput(input);
+
+function stepsAAAToZZZ(dirs, network) {
+  let steps = 0;
+  let cur = &quot;AAA&quot;;
+  while (cur !== &quot;ZZZ&quot;) {
+    const {left, right} = network[cur];
+    const dir = dirs[steps % dirs.length];
+    cur = dir === 0 ? left : right;
+    steps++;
+  }
+  return steps;
+}
+
+console.log(stepsAAAToZZZ(dirs, network));
+</code></pre></div>
+<p>I ran a profile and all the time is spent in Dict and doing str refcounts. But 800ms for 22K iterations of that loop feels insane to me. The input file has ~700 nodes. So in the absolute worst case, where each node must be scanned, this Roc program amortizes to 800ms/22K/700~=5ns per scan. While that might be reasonable, it seems super unlikely in practice.</p>
+
+
+
+<a name="406876374"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406876374" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406876374">(Dec 09 2023 at 02:59)</a>:</h4>
+<p>Dicts with refcounts keys or values are currently a pathological case</p>
+
+
+
+<a name="406876470"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406876470" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406876470">(Dec 09 2023 at 03:00)</a>:</h4>
+<p>Cause we don't have any sort of smarter refcounting or borrowing, each call to dict.get will increment the refcount and then decrement it.</p>
+<p>This will be recursive</p>
+
+
+
+<a name="406876523"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406876523" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406876523">(Dec 09 2023 at 03:00)</a>:</h4>
+<p>So it will spend all the time traversing all elements of the dict incrementing and decrementing refcounts</p>
+
+
+
+<a name="406876552"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406876552" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406876552">(Dec 09 2023 at 03:00)</a>:</h4>
+<p>This is why I want automatic borrowing</p>
+
+
+
+<a name="406876991"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406876991" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406876991">(Dec 09 2023 at 03:04)</a>:</h4>
+<p>If the strings are small and you write a when to convert them to a static sized tuple, it would run way way faster</p>
+
+
+
+<a name="406877052"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406877052" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406877052">(Dec 09 2023 at 03:05)</a>:</h4>
+<p>Oh, also, it will chase the node and increment those two strings as well.</p>
+
+
+
+<a name="406877674"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406877674" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406877674">(Dec 09 2023 at 03:12)</a>:</h4>
+<p>I tried it with a assoc list too and it was just as slow</p>
+
+
+
+<a name="406877910"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406877910" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406877910">(Dec 09 2023 at 03:15)</a>:</h4>
+<p>Did you make a get method? If so it took ownership of the list, requiring a recursive increment when called and a recursive decrement in the function when the list is dropped. Has to be manually inlined to avoid this</p>
+
+
+
+<a name="406878022"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406878022" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406878022">(Dec 09 2023 at 03:16)</a>:</h4>
+<p>It's a huge perf problem for anything wrapping <code>list.get</code>in another function when the list contains recounted types</p>
+
+
+
+<a name="406878764"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406878764" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406878764">(Dec 09 2023 at 03:25)</a>:</h4>
+<p>Also, before we fix add the borrowing, probably fixing this recounting worst case it's more important. I think I'll work on that next. Shouldn't be too hard</p>
+
+
+
+<a name="406887430"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406887430" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ryan Bates <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406887430">(Dec 09 2023 at 04:55)</a>:</h4>
+<p><span class="user-mention" data-user-id="454654">@Ayaz Hafiz</span> </p>
+<div class="spoiler-block"><div class="spoiler-header">
+<p>AoC Day 8 spoiler</p>
+</div><div class="spoiler-content" aria-hidden="true">
+<p>I ended up using U16 for the dictionary key and it was much faster. Runs in less than a second on my machine for both parts.<br>
+<a href="https://github.com/ryanb/advent-2023-roc/blob/main/day08/main.roc">https://github.com/ryanb/advent-2023-roc/blob/main/day08/main.roc</a></p>
+</div></div>
+
+
+
+<a name="406891003"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406891003" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406891003">(Dec 09 2023 at 05:21)</a>:</h4>
+<p>Just to clearly show how fast this should be. Just took Ayaz's code and changed from a <code>Str</code> to a <code>(U8, U8, U8)</code>:</p>
+<div class="codehilite"><pre><span></span><code>Benchmark 1: /tmp/aoc
+  Time (mean ± σ):     861.2 ms ±  24.9 ms    [User: 855.8 ms, System: 1.5 ms]
+  Range (min … max):   828.2 ms … 894.9 ms    10 runs
+
+Benchmark 2: /tmp/aoc-u8
+  Time (mean ± σ):       7.9 ms ±   0.2 ms    [User: 6.4 ms, System: 0.9 ms]
+  Range (min … max):     7.5 ms …   8.5 ms    270 runs
+
+Summary
+  &#39;/tmp/aoc-u8&#39; ran
+  109.63 ± 4.14 times faster than &#39;/tmp/aoc&#39;
+</code></pre></div>
+<div class="spoiler-block"><div class="spoiler-header">
+<p>New version of the code</p>
+</div><div class="spoiler-content" aria-hidden="true">
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nx">app</span><span class="w"> </span><span class="s">"AoC"</span>
+<span class="w">    </span><span class="nx">packages</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nv">pf</span><span class="o">:</span><span class="w"> </span><span class="s">"https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br"</span><span class="p">,</span>
+<span class="w">        </span><span class="nv">parser</span><span class="o">:</span><span class="w"> </span><span class="s">"https://github.com/lukewilliamboswell/roc-parser/releases/download/0.2.0/dJQSsSmorujhiPNIvJKlQoI92RFIG_JQwUfIxZsCSwE.tar.br"</span><span class="p">,</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="nx">imports</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="nx">pf</span><span class="p">.</span><span class="nx">Stdout</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">pf</span><span class="p">.</span><span class="nx">Task</span><span class="p">.{</span><span class="w"> </span><span class="nx">Task</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="nx">parser</span><span class="p">.</span><span class="nx">Core</span><span class="p">.{</span>
+<span class="w">            </span><span class="nx">Parser</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">const</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">keep</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">skip</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">oneOf</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">many</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">sepBy1</span><span class="p">,</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="nx">parser</span><span class="p">.</span><span class="nb">String</span><span class="p">.{</span>
+<span class="w">            </span><span class="nx">string</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">parseStr</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">codeunitSatisfies</span><span class="p">,</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="s">"day-8-input.txt"</span><span class="w"> </span><span class="nx">as</span><span class="w"> </span><span class="nv">input</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Str</span><span class="p">,</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="w">    </span><span class="nx">provides</span><span class="w"> </span><span class="p">[</span><span class="nx">main</span><span class="p">]</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">pf</span>
+
+<span class="nv">main</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Task</span><span class="w"> </span><span class="p">{}</span><span class="w"> </span><span class="o">*</span>
+<span class="nv">main</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="nx">Stdout</span><span class="p">.</span><span class="nx">line</span><span class="w"> </span><span class="nx">part1</span>
+<span class="w">    </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">Task</span><span class="p">.</span><span class="nx">await</span><span class="w"> </span><span class="err">\</span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Stdout</span><span class="p">.</span><span class="nx">line</span><span class="w"> </span><span class="s">""</span>
+
+<span class="nv">part1</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Str</span>
+<span class="nv">part1</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="nx">input</span>
+<span class="w">    </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">Str</span><span class="p">.</span><span class="nx">trim</span>
+<span class="w">    </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">parseMap</span>
+<span class="w">    </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">stepsAAAToZZZ</span>
+<span class="w">    </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">Num</span><span class="p">.</span><span class="nx">toStr</span>
+
+<span class="nv">Direction</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">Left</span><span class="p">,</span><span class="w"> </span><span class="nx">Right</span><span class="p">]</span>
+<span class="nv">Node</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">left</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">U8</span><span class="p">,</span><span class="w"> </span><span class="nx">U8</span><span class="p">,</span><span class="w"> </span><span class="nx">U8</span><span class="p">),</span><span class="w"> </span><span class="nv">right</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">U8</span><span class="p">,</span><span class="w"> </span><span class="nx">U8</span><span class="p">,</span><span class="w"> </span><span class="nx">U8</span><span class="p">)}</span>
+<span class="nv">Network</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Dict</span><span class="w"> </span><span class="p">(</span><span class="nx">U8</span><span class="p">,</span><span class="w"> </span><span class="nx">U8</span><span class="p">,</span><span class="w"> </span><span class="nx">U8</span><span class="p">)</span><span class="w"> </span><span class="nx">Node</span>
+<span class="nv">Map</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">directions</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">List</span><span class="w"> </span><span class="nx">Direction</span><span class="p">,</span><span class="w"> </span><span class="nv">network</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Network</span><span class="w"> </span><span class="p">}</span>
+
+<span class="nv">findNode</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Network</span><span class="p">,</span><span class="w"> </span><span class="nf">(U8, U8, U8)-&gt;</span><span class="w"> </span><span class="nx">Node</span>
+<span class="nv">findNode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">network</span><span class="p">,</span><span class="w"> </span><span class="nx">node</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">Dict</span><span class="p">.</span><span class="nx">get</span><span class="w"> </span><span class="nx">network</span><span class="w"> </span><span class="nx">node</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="nx">Ok</span><span class="w"> </span><span class="nx">n</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">n</span>
+<span class="w">        </span><span class="nx">Err</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">crash</span><span class="w"> </span><span class="s">"bad input: node \(node |&gt; Inspect.toStr) not found"</span>
+
+<span class="nv">stepsAAAToZZZ</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Map</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Nat</span>
+<span class="nv">stepsAAAToZZZ</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="p">{</span><span class="w"> </span><span class="nx">directions</span><span class="p">,</span><span class="w"> </span><span class="nx">network</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">go</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">steps</span><span class="p">,</span><span class="w"> </span><span class="nx">ds</span><span class="p">,</span><span class="w"> </span><span class="nx">d</span><span class="p">,</span><span class="w"> </span><span class="nx">cur</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">cur</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="p">(</span><span class="s">'Z'</span><span class="p">,</span><span class="w"> </span><span class="s">'Z'</span><span class="p">,</span><span class="w"> </span><span class="s">'Z'</span><span class="p">)</span><span class="w"> </span><span class="k">then</span>
+<span class="w">            </span><span class="nx">steps</span>
+<span class="w">        </span><span class="k">else</span>
+<span class="w">            </span><span class="k">when</span><span class="w"> </span><span class="nx">List</span><span class="p">.</span><span class="nx">get</span><span class="w"> </span><span class="nx">ds</span><span class="w"> </span><span class="p">(</span><span class="nx">Num</span><span class="p">.</span><span class="nx">rem</span><span class="w"> </span><span class="nx">d</span><span class="w"> </span><span class="p">(</span><span class="nx">List</span><span class="p">.</span><span class="nx">len</span><span class="w"> </span><span class="nx">ds</span><span class="p">))</span><span class="w"> </span><span class="o">is</span>
+<span class="w">                </span><span class="nx">Ok</span><span class="w"> </span><span class="nx">Left</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">go</span><span class="w"> </span><span class="p">(</span><span class="nx">steps</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="nx">directions</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">findNode</span><span class="w"> </span><span class="nx">network</span><span class="w"> </span><span class="nx">cur</span><span class="p">).</span><span class="nx">left</span>
+<span class="w">                </span><span class="nx">Ok</span><span class="w"> </span><span class="nx">Right</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">go</span><span class="w"> </span><span class="p">(</span><span class="nx">steps</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="nx">directions</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">findNode</span><span class="w"> </span><span class="nx">network</span><span class="w"> </span><span class="nx">cur</span><span class="p">).</span><span class="nx">right</span>
+<span class="w">                </span><span class="nx">Err</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">crash</span><span class="w"> </span><span class="s">"bad input"</span>
+
+<span class="w">    </span><span class="nx">go</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="nx">directions</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">(</span><span class="s">'A'</span><span class="p">,</span><span class="w"> </span><span class="s">'A'</span><span class="p">,</span><span class="w"> </span><span class="s">'A'</span><span class="p">)</span>
+
+<span class="nv">parseMap</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Map</span>
+<span class="nv">parseMap</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">str</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">pDirection</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Parser</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nx">Direction</span>
+<span class="w">    </span><span class="nv">pDirection</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">oneOf</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="nx">const</span><span class="w"> </span><span class="nx">Left</span><span class="w"> </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">skip</span><span class="w"> </span><span class="p">(</span><span class="nx">string</span><span class="w"> </span><span class="s">"L"</span><span class="p">),</span>
+<span class="w">        </span><span class="nx">const</span><span class="w"> </span><span class="nx">Right</span><span class="w"> </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">skip</span><span class="w"> </span><span class="p">(</span><span class="nx">string</span><span class="w"> </span><span class="s">"R"</span><span class="p">),</span>
+<span class="w">    </span><span class="p">]</span>
+
+<span class="w">    </span><span class="nv">pDirections</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">many</span><span class="w"> </span><span class="nx">pDirection</span>
+
+<span class="w">    </span><span class="nv">pLabel</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Parser</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nx">Str</span>
+<span class="w">    </span><span class="nv">pLabel</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="nx">const</span><span class="w"> </span><span class="err">\</span><span class="nx">c</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="k">when</span><span class="w"> </span><span class="nx">Str</span><span class="p">.</span><span class="nx">fromUtf8</span><span class="w"> </span><span class="nx">c</span><span class="w"> </span><span class="o">is</span>
+<span class="w">                </span><span class="nx">Ok</span><span class="w"> </span><span class="nx">s</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">s</span>
+<span class="w">                </span><span class="nx">Err</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">crash</span><span class="w"> </span><span class="s">"bad input: non-utf8 character"</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">keep</span><span class="w"> </span><span class="p">(</span><span class="nx">many</span><span class="w"> </span><span class="p">(</span><span class="nx">codeunitSatisfies</span><span class="w"> </span><span class="err">\</span><span class="nx">b</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">b</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="s">'A'</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">b</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="s">'Z'</span><span class="p">))</span>
+
+<span class="w">    </span><span class="nv">pNode</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Parser</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">((</span><span class="nx">U8</span><span class="p">,</span><span class="w"> </span><span class="nx">U8</span><span class="p">,</span><span class="w"> </span><span class="nx">U8</span><span class="p">),</span><span class="w"> </span><span class="nx">Node</span><span class="p">)</span>
+<span class="w">    </span><span class="nv">pNode</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="nx">const</span><span class="w"> </span><span class="p">(</span><span class="err">\</span><span class="nx">node</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="err">\</span><span class="nx">left</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="err">\</span><span class="nx">right</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="k">when</span><span class="w"> </span><span class="p">(</span><span class="nx">Str</span><span class="p">.</span><span class="nx">toUtf8</span><span class="w"> </span><span class="nx">node</span><span class="p">,</span><span class="w"> </span><span class="nx">Str</span><span class="p">.</span><span class="nx">toUtf8</span><span class="w"> </span><span class="nx">left</span><span class="p">,</span><span class="w"> </span><span class="nx">Str</span><span class="p">.</span><span class="nx">toUtf8</span><span class="w"> </span><span class="nx">right</span><span class="p">)</span><span class="w"> </span><span class="o">is</span>
+<span class="w">                </span><span class="nf">([n1, n2, n3], [l1, l2, l3], [r1, r2, r3]) -&gt;</span>
+<span class="w">                    </span><span class="p">((</span><span class="nx">n1</span><span class="p">,</span><span class="nx">n2</span><span class="p">,</span><span class="nx">n3</span><span class="p">),</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">left</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">l1</span><span class="p">,</span><span class="nx">l2</span><span class="p">,</span><span class="nx">l3</span><span class="p">),</span><span class="w"> </span><span class="nv">right</span><span class="o">:</span><span class="w"> </span><span class="p">(</span><span class="nx">r1</span><span class="p">,</span><span class="nx">r2</span><span class="p">,</span><span class="nx">r3</span><span class="p">)</span><span class="w"> </span><span class="p">})</span>
+<span class="w">                </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">                    </span><span class="nx">crash</span><span class="w"> </span><span class="s">"bad input: \(node)-\(left)-\(right)"</span>
+<span class="w">            </span><span class="p">)</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">keep</span><span class="w"> </span><span class="nx">pLabel</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">skip</span><span class="w"> </span><span class="p">(</span><span class="nx">string</span><span class="w"> </span><span class="s">" = ("</span><span class="p">)</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">keep</span><span class="w"> </span><span class="nx">pLabel</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">skip</span><span class="w"> </span><span class="p">(</span><span class="nx">string</span><span class="w"> </span><span class="s">", "</span><span class="p">)</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">keep</span><span class="w"> </span><span class="nx">pLabel</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">skip</span><span class="w"> </span><span class="p">(</span><span class="nx">string</span><span class="w"> </span><span class="s">")"</span><span class="p">)</span>
+
+<span class="w">    </span><span class="nv">pNetwork</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Parser</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nx">Network</span>
+<span class="w">    </span><span class="nv">pNetwork</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="nx">const</span><span class="w"> </span><span class="nx">Dict</span><span class="p">.</span><span class="nx">fromList</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">keep</span><span class="w"> </span><span class="p">(</span><span class="nx">sepBy1</span><span class="w"> </span><span class="nx">pNode</span><span class="w"> </span><span class="p">(</span><span class="nx">string</span><span class="w"> </span><span class="s">"\n"</span><span class="p">))</span>
+
+<span class="w">    </span><span class="nv">pMap</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Parser</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nx">Map</span>
+<span class="w">    </span><span class="nv">pMap</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="nx">const</span><span class="w"> </span><span class="p">(</span><span class="err">\</span><span class="nx">directions</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="err">\</span><span class="nx">network</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">directions</span><span class="p">,</span><span class="w"> </span><span class="nx">network</span><span class="w"> </span><span class="p">})</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">keep</span><span class="w"> </span><span class="nx">pDirections</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">skip</span><span class="w"> </span><span class="p">(</span><span class="nx">string</span><span class="w"> </span><span class="s">"\n\n"</span><span class="p">)</span>
+<span class="w">        </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">keep</span><span class="w"> </span><span class="nx">pNetwork</span>
+
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">parseStr</span><span class="w"> </span><span class="nx">pMap</span><span class="w"> </span><span class="nx">str</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="nx">Ok</span><span class="w"> </span><span class="nx">g</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">g</span>
+<span class="w">        </span><span class="nx">Err</span><span class="w"> </span><span class="p">(</span><span class="nx">ParsingFailure</span><span class="w"> </span><span class="nx">e</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="nx">Err</span><span class="w"> </span><span class="nf">(ParsingIncomplete e) -&gt;</span><span class="w"> </span><span class="nx">crash</span><span class="w"> </span><span class="s">"bad input: '\(e)'"</span>
+</code></pre></div>
+</div></div>
+
+
+
+<a name="406891266"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406891266" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406891266">(Dec 09 2023 at 05:22)</a>:</h4>
+<p>Once we fix the recursive list refcounting, these two should run at essentially the same speed</p>
+
+
+
+<a name="406892868"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406892868" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406892868">(Dec 09 2023 at 05:40)</a>:</h4>
+<p>Nice work Brendan, this is really cool so see how performance can be impacted like this, and that there are solutions.</p>
+
+
+
+<a name="406893053"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406893053" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406893053">(Dec 09 2023 at 05:43)</a>:</h4>
+<p>Haha, now I just need to fix the underlying issue in  the compiler</p>
+
+
+
+<a name="406893162"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406893162" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Declan Joseph Maguire <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406893162">(Dec 09 2023 at 05:44)</a>:</h4>
+<p>I have no contributions to this little optimisation saga, I just want to say that I'm loving it. There's something hypnotic about watching something get optimised.</p>
+
+
+
+<a name="406893894"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406893894" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406893894">(Dec 09 2023 at 05:51)</a>:</h4>
+<p>Should be roughly:</p>
+<ol>
+<li>List and Str store their full size on the heap (only needs to be updated when the list refcount goes from 1 to 2).</li>
+<li>Using this, seamless slices can free all elements of an underlying list</li>
+<li>All lists to the same allocation only keep a single reference to each inserted element. As such list will inc the refcount on insert, but will never touch the refcount recursively when passing the list around.</li>
+<li>When deallocating a list or slice, this is when we have to do all the recursive deallocations.</li>
+<li>Also, if we actually clone a list, we will still have to recursively increment the recount.</li>
+</ol>
+<p>Hmm, though on the heap I have to think about capacity vs size. Cause ideally we want to know the full capacity for in the future when <code>roc_dealloc</code> is passed the full allocation size. But for recount purposes, we want to know the full size such that the slice can just decrease the refcounts of real elements, not old junk elements. I'll have to think about this a bit more, but something along those lines should free us from this problem (though will keep some refcounted objects alive for longer)</p>
+
+
+
+<a name="406905338"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406905338" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406905338">(Dec 09 2023 at 07:58)</a>:</h4>
+<p><span class="user-mention" data-user-id="281543">@Folkert de Vries</span> do my comments here sound roughly right to you? Anything I am missing? I know you have thought about this recursive refcounting issue before.</p>
+
+
+
+<a name="406933790"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406933790" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406933790">(Dec 09 2023 at 13:17)</a>:</h4>
+<p>well fundamentally this is a simple change. But there are many places now where the assumption is made that an inc/dec on a list is recursive, and we have to track them all down and fix them</p>
+
+
+
+<a name="406954849"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406954849" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406954849">(Dec 09 2023 at 16:52)</a>:</h4>
+<p>For sure, there will be memory leaks and double frees for a while as I do this. Hopefully due to tests and valgrind I'll be able to dig through those</p>
+
+
+
+<a name="406960779"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406960779" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406960779">(Dec 09 2023 at 18:17)</a>:</h4>
+<p>Im not sure that refcounting is enough to explain the problem here. In a trace I ran, refcounts of the inner strings as 70ms/300ms of the profile. So I'm not sure that automatically translates to a 100x improvement</p>
+
+
+
+<a name="406960831"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406960831" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406960831">(Dec 09 2023 at 18:18)</a>:</h4>
+<p>I also wrote this program in Koka, and it ran in about the same time as the JS</p>
+
+
+
+<a name="406961437"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406961437" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406961437">(Dec 09 2023 at 18:27)</a>:</h4>
+<p>the refcounts also mess with the cache though</p>
+
+
+
+<a name="406961449"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406961449" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406961449">(Dec 09 2023 at 18:27)</a>:</h4>
+<p>I'd try running it with refcounts disabled (like they're a no-op) and see how that compares</p>
+
+
+
+<a name="406961712"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406961712" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406961712">(Dec 09 2023 at 18:30)</a>:</h4>
+<p>Does koka have the recursive refcount issue where if you pass a <code>List Str</code> to a function, it will end up recursively incrementing the refcount of all strings in the list? Or in this case <code>Dict Str {Str, Str}</code> so 3x as many strings to increment. Then at the end of the function it will recursively decrement the refcount of all the strings. (in this case, technically it is just traversing all the strings and realizing they are small then moving to the next one.)</p>
+<p>You need full debug info from dwarf and perf using it to see the inlined functions. Almost all of the refcounted functions are inlined</p>
+<p>Purple is refcounting. It is 98.6% of the program execution: <br>
+<a href="/user_uploads/22008/I1tRBIHi3RfmhPQ2GMDFdpwj/Screenshot-2023-12-09-at-10.30.06AM.png">Screenshot-2023-12-09-at-10.30.06AM.png</a></p>
+<div class="message_inline_image"><a href="/user_uploads/22008/I1tRBIHi3RfmhPQ2GMDFdpwj/Screenshot-2023-12-09-at-10.30.06AM.png" title="Screenshot-2023-12-09-at-10.30.06AM.png"><img src="/user_uploads/22008/I1tRBIHi3RfmhPQ2GMDFdpwj/Screenshot-2023-12-09-at-10.30.06AM.png"></a></div>
+
+
+
+<a name="406962206"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406962206" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406962206">(Dec 09 2023 at 18:38)</a>:</h4>
+<p>Flamegraph of my faster version with <code>U8</code>s Purple is still refcounting. Essentially all of the time is spent in the parser:<br>
+<a href="/user_uploads/22008/ceNtIpznL6FysTrsl8I1hp7q/Screenshot-2023-12-09-at-10.37.10AM.png">Screenshot-2023-12-09-at-10.37.10AM.png</a></p>
+<div class="message_inline_image"><a href="/user_uploads/22008/ceNtIpznL6FysTrsl8I1hp7q/Screenshot-2023-12-09-at-10.37.10AM.png" title="Screenshot-2023-12-09-at-10.37.10AM.png"><img src="/user_uploads/22008/ceNtIpznL6FysTrsl8I1hp7q/Screenshot-2023-12-09-at-10.37.10AM.png"></a></div><p>~5% of the 109x faster version of the application is spent in refcounting</p>
+
+
+
+<a name="406962228"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/406962228" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#406962228">(Dec 09 2023 at 18:39)</a>:</h4>
+<p>Also, wow, the parser has a deep call stack.</p>
+
+
+
+<a name="440118892"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/440118892" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Musab Nazir <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#440118892">(May 22 2024 at 15:22)</a>:</h4>
+<blockquote>
+<p>Dicts with refcounts keys or values are currently a pathological case</p>
+</blockquote>
+<p>Is this still a WIP issue? I ran into a problem where my roc code was running almost a 1000x slower than similar go code. Playing around with it a bit more I realized most of this overhead is coming from using <code>Str</code> key values for my <code>Dict</code>. Using a num type puts me back in go ballpark numbers</p>
+
+
+
+<a name="440297181"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/440297181" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#440297181">(May 23 2024 at 10:54)</a>:</h4>
+<p>Yeah, I have a PR that is mostly done and I need to circle back to.</p>
+
+
+
+<a name="440297260"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Profiling%20an%20AoC%20app/near/440297260" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Profiling.20an.20AoC.20app.html#440297260">(May 23 2024 at 10:55)</a>:</h4>
+<p>That said, may be slow to finish. I think most remaining failing tests are segfaults. (Probably also have a number of memory leaks)</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

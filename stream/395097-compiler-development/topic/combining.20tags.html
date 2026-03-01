@@ -1,0 +1,180 @@
+<html>
+<head><meta charset="utf-8"><title>combining tags · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html">combining tags</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="456079737"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456079737" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456079737">(Aug 03 2024 at 02:39)</a>:</h4>
+<p>So, I'm not fully sure what is going wrong, but I feel like my mental model for combining tags isn't working. Currently, <a href="https://github.com/roc-lang/basic-webserver/pull/61">my sqlite PR</a> isn't working due to breaking during compilation and it seems to be due to tag combining. Fundamentally, I have some errors that are innate to interacting with sql in various ways and some that would be user defined. I am trying to use them together in a flat union instead of adding extra unnecessary layers.</p>
+<p>So for the sqlite result decoder, we have the base error:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">SqlDecodeErr</span><span class="w"> </span><span class="nv">err</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="p">[</span><span class="kt">FieldNotFound</span><span class="w"> </span><span class="kt">Str</span><span class="p">,</span><span class="w"> </span><span class="kt">SqlError</span><span class="w"> </span><span class="kt">Code</span><span class="w"> </span><span class="kt">Str</span><span class="p">]</span><span class="nv">err</span>
+<span class="kt">SqlDecode</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="nv">err</span><span class="w"> </span><span class="nf">:=</span><span class="w"> </span><span class="kt">List</span><span class="w"> </span><span class="kt">Str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">(</span><span class="kt">Stmt</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Task</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="p">(</span><span class="kt">SqlDecodeErr</span><span class="w"> </span><span class="nv">err</span><span class="p">))</span>
+</code></pre></div>
+<p>Then it is used with various other error types and attempted to be merged together.<br>
+For example, if you query for exactly 1 result, it adds two more possible errors:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">RowCountErr</span><span class="w"> </span><span class="nv">err</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="p">[</span><span class="kt">NoRowsReturned</span><span class="p">,</span><span class="w"> </span><span class="kt">TooManyRowsReturned</span><span class="p">]</span><span class="nv">err</span>
+</code></pre></div>
+<p>So then in the full function call, we add some layers of nesting to build of the full tag as <code>SqlDecodeErr (RowCountErr err)</code>.</p>
+<p>This leads to the function type I would want to write:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">decodeExactlyOneRow</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">Stmt</span><span class="p">,</span><span class="w"> </span><span class="kt">SqlDecode</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="nv">err</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Task</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="p">(</span><span class="kt">SqlDecodeErr</span><span class="w"> </span><span class="p">(</span><span class="kt">RowCountErr</span><span class="w"> </span><span class="nv">err</span><span class="p">))</span>
+</code></pre></div>
+<p>Sadly, this fails to check. Cause the input <code>err</code> type does not know about the <code>RowCountErr</code>s. Roc will not expand the tag. So it is a type mismatch with unexpected types:</p>
+<div class="codehilite"><pre><span></span><code>The argument is an anonymous function of type:
+
+    a -&gt; Task a [
+        SqlError InternalSql.SqliteErrCode …,
+        TooManyRowsReturned,
+    ]
+
+But this function needs its 2nd argument to be:
+
+    a -&gt; Task a [SqlError Code …, …]err
+</code></pre></div>
+<p>So I have to type the input error type the same as the output error type to force roc to allow them to unify happily:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">decodeExactlyOneRow</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">Stmt</span><span class="p">,</span><span class="w"> </span><span class="kt">SqlDecode</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="p">(</span><span class="kt">RowCountErr</span><span class="w"> </span><span class="nv">err</span><span class="p">)</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Task</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="p">(</span><span class="kt">SqlDecodeErr</span><span class="w"> </span><span class="p">(</span><span class="kt">RowCountErr</span><span class="w"> </span><span class="nv">err</span><span class="p">))</span>
+</code></pre></div>
+<p>This now passes roc check, but fails to compile:</p>
+<div class="codehilite"><pre><span></span><code>thread &#39;&lt;unnamed&gt;&#39; panicked at crates/compiler/mono/src/ir.rs:6124:9:
+assertion failed: unspecialized.is_empty()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</code></pre></div>
+<hr>
+<p>My general questions are:</p>
+<ol>
+<li>should this work?</li>
+<li>If not, is there a similar solution that would enable this sort of error merging/propagation? I am trying to make this work like <code>Task</code> usually does where all of the various error types just merge.</li>
+<li>If no to both of the above, how would we expect and api like this to be written.</li>
+</ol>
+
+
+
+<a name="456109449"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456109449" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456109449">(Aug 03 2024 at 05:56)</a>:</h4>
+<p>Have you tried making the error tag union here an open union?</p>
+<div class="codehilite"><pre><span></span><code>    a -&gt; Task a [
+        SqlError InternalSql.SqliteErrCode …,
+        TooManyRowsReturned,
+    ]*
+</code></pre></div>
+<p>I don't think it should be necessary, but that could be a type bug</p>
+
+
+
+<a name="456115613"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456115613" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456115613">(Aug 03 2024 at 07:09)</a>:</h4>
+<p>I'm not sure how to make it open given it is generated from merging tags.</p>
+<p>It is a <code>SqlDecodeErr (RowCountErr err)</code></p>
+<p>If I substitute types, that is a <code>[FieldNotFound Str, SqlError Code Str]([NoRowsReturned, TooManyRowsReturned]err)</code></p>
+
+
+
+<a name="456142371"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456142371" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456142371">(Aug 03 2024 at 12:01)</a>:</h4>
+<p>I think </p>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/395097-compiler-development/topic/combining.20tags/near/456079737">said</a>:</p>
+<blockquote>
+<p>This leads to the function type I would want to write:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">decodeExactlyOneRow</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">Stmt</span><span class="p">,</span><span class="w"> </span><span class="kt">SqlDecode</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="nv">err</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Task</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="p">(</span><span class="kt">SqlDecodeErr</span><span class="w"> </span><span class="p">(</span><span class="kt">RowCountErr</span><span class="w"> </span><span class="nv">err</span><span class="p">))</span>
+</code></pre></div>
+<p>Sadly, this fails to check. [...] So I have to type the input error type the same as the output error type to force roc to allow them to unify happily:</p>
+<p><div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">decodeExactlyOneRow</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">Stmt</span><span class="p">,</span><span class="w"> </span><span class="kt">SqlDecode</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="p">(</span><span class="kt">RowCountErr</span><span class="w"> </span><span class="nv">err</span><span class="p">)</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Task</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="p">(</span><span class="kt">SqlDecodeErr</span><span class="w"> </span><span class="p">(</span><span class="kt">RowCountErr</span><span class="w"> </span><span class="nv">err</span><span class="p">))</span>
+</code></pre></div><br>
+</p>
+</blockquote>
+<p>I think the compiler is correct here; in general, a type alias means essentially "inline this type wherever you see the alias," and looking at the type signatures after inlining reveals the problem:</p>
+<div class="codehilite" data-code-language="Perl"><pre><span></span><code><span class="n">Stmt</span><span class="p">,</span><span class="w"> </span><span class="n">SqlDecode</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="nn">err</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Task</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="p">(</span><span class="n">SqlDecodeErr</span><span class="w"> </span><span class="p">(</span><span class="n">RowCountErr</span><span class="w"> </span><span class="n">err</span><span class="p">))</span>
+<span class="c1"># after inlining the type aliases:</span>
+<span class="n">Stmt</span><span class="p">,</span><span class="w"> </span><span class="n">SqlDecode</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="nn">err</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Task</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="p">[</span><span class="n">FieldNotFound</span><span class="w"> </span><span class="n">Str</span><span class="p">,</span><span class="w"> </span><span class="n">SqlError</span><span class="w"> </span><span class="n">Code</span><span class="w"> </span><span class="n">Str</span><span class="p">][</span><span class="n">NoRowsReturned</span><span class="p">,</span><span class="w"> </span><span class="n">TooManyRowsReturned</span><span class="p">]</span><span class="n">err</span>
+</code></pre></div>
+<p>so after inlining, we can see that in <code>SqlDecode a err</code> the <code>err</code> is referring to "all the other tags in the error union <em>except</em> <code>[FieldNotFound Str, SqlError Code Str][NoRowsReturned, TooManyRowsReturned]</code>" because that's what <code>[...]err</code> means.</p>
+
+
+
+<a name="456142408"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456142408" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456142408">(Aug 03 2024 at 12:01)</a>:</h4>
+<p>Here's inlining the other one:</p>
+<div class="codehilite" data-code-language="Perl"><pre><span></span><code><span class="n">Stmt</span><span class="p">,</span><span class="w"> </span><span class="n">SqlDecode</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="p">(</span><span class="n">RowCountErr</span><span class="w"> </span><span class="n">err</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Task</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="p">(</span><span class="n">SqlDecodeErr</span><span class="w"> </span><span class="p">(</span><span class="n">RowCountErr</span><span class="w"> </span><span class="n">err</span><span class="p">))</span>
+<span class="c1"># after inlining the type aliases:</span>
+<span class="n">Stmt</span><span class="p">,</span><span class="w"> </span><span class="n">SqlDecode</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="p">[</span><span class="n">NoRowsReturned</span><span class="p">,</span><span class="w"> </span><span class="n">TooManyRowsReturned</span><span class="p">]</span><span class="nn">err</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Task</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="p">[</span><span class="n">FieldNotFound</span><span class="w"> </span><span class="n">Str</span><span class="p">,</span><span class="w"> </span><span class="n">SqlError</span><span class="w"> </span><span class="n">Code</span><span class="w"> </span><span class="n">Str</span><span class="p">][</span><span class="n">NoRowsReturned</span><span class="p">,</span><span class="w"> </span><span class="n">TooManyRowsReturned</span><span class="p">]</span><span class="n">err</span>
+</code></pre></div>
+
+
+
+<a name="456142535"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456142535" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456142535">(Aug 03 2024 at 12:03)</a>:</h4>
+<p>I'm a little surprised that one type-checks; I'd expect it to have to be:</p>
+<div class="codehilite" data-code-language="Perl"><pre><span></span><code><span class="n">Stmt</span><span class="p">,</span><span class="w"> </span><span class="n">SqlDecode</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="p">(</span><span class="n">SqlDecodeErr</span><span class="w"> </span><span class="p">(</span><span class="n">RowCountErr</span><span class="w"> </span><span class="n">err</span><span class="p">))</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Task</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="p">(</span><span class="n">SqlDecodeErr</span><span class="w"> </span><span class="p">(</span><span class="n">RowCountErr</span><span class="w"> </span><span class="n">err</span><span class="p">))</span>
+</code></pre></div>
+
+
+
+<a name="456142819"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456142819" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456142819">(Aug 03 2024 at 12:07)</a>:</h4>
+<p><span class="user-mention" data-user-id="281543">@Folkert de Vries</span> and <span class="user-mention" data-user-id="454654">@Ayaz Hafiz</span> probably have a more accurate mental model than I do of how these are unifying though <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="456184195"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456184195" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456184195">(Aug 03 2024 at 16:16)</a>:</h4>
+<p>The second one checks. <code>SqlDecode</code> adds a <code>SqlDecodeErr</code> internally</p>
+
+
+
+<a name="456184232"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456184232" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456184232">(Aug 03 2024 at 16:17)</a>:</h4>
+<p>That said, even though it type checks it crashes the compiler.</p>
+
+
+
+<a name="456186813"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456186813" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456186813">(Aug 03 2024 at 16:36)</a>:</h4>
+<p>I think this is a bug</p>
+
+
+
+<a name="456186843"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456186843" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456186843">(Aug 03 2024 at 16:36)</a>:</h4>
+<p>pretty sure the first version should work</p>
+
+
+
+<a name="456192221"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456192221" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456192221">(Aug 03 2024 at 17:20)</a>:</h4>
+<p>are type variable for tags open or closed? Is there anyway to control that?</p>
+<p>Also, Richard, I think the original type should work cause <code>SqlDecode a err</code> is a lambda with the final lambda doing: <code>(Stmt -&gt; Task a (SqlDecodeErr err))</code>. Since output tags are supposed to be open. This should return Task with an open tag output.</p>
+<p>Oh, does the open tag in return types work if the tag is nested in another type. Like <code>I32 -&gt; [Even, Odd]</code> will return an open tag. Will <code>I32 -&gt; Task [Even, Odd] ...</code> return an open tag?</p>
+
+
+
+<a name="456363165"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456363165" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456363165">(Aug 04 2024 at 17:38)</a>:</h4>
+<p>A little update on this. The crash is due to an error with an empty tag in it. Apparently roc requires that to be typed or crash:</p>
+<p>Builder func:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">intDecoder</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="p">(</span><span class="kt">I64</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Result</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="nv">err</span><span class="p">)</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">(</span><span class="kt">Str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">SqlDecode</span><span class="w"> </span><span class="nv">a</span><span class="w"> </span><span class="p">[</span><span class="kt">FailedToDecodeInteger</span><span class="w"> </span><span class="nv">err</span><span class="p">]</span><span class="kt">UnexpectedTypeErr</span><span class="p">)</span>
+<span class="nv">intDecoder</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">cast</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">decoder</span><span class="w"> </span><span class="nf">\</span><span class="nv">val</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">        </span><span class="nv">when</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">            </span><span class="kt">Integer</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nv">cast</span><span class="w"> </span><span class="nv">i</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Result</span><span class="nf">.</span><span class="nv">mapErr</span><span class="w"> </span><span class="kt">FailedToDecodeInteger</span>
+<span class="w">            </span><span class="nv">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nv">toUnexpectedTypeErr</span><span class="w"> </span><span class="nv">val</span>
+</code></pre></div>
+<p>I64 case. This crashes if the type isn't specified. I think it is due to <code>[]</code>.</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">i64</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">Str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">SqlDecode</span><span class="w"> </span><span class="kt">I64</span><span class="w"> </span><span class="p">[</span><span class="kt">FailedToDecodeInteger</span><span class="w"> </span><span class="p">[]]</span><span class="kt">UnexpectedTypeErr</span>
+<span class="nv">i64</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nv">intDecoder</span><span class="w"> </span><span class="kt">Ok</span>
+</code></pre></div>
+
+
+
+<a name="456363344"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/combining%20tags/near/456363344" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/combining.20tags.html#456363344">(Aug 04 2024 at 17:39)</a>:</h4>
+<p>I guess I am calling <code>mapErr</code> on a <code>Result I64 []</code>. Not sure what that is expected to do.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

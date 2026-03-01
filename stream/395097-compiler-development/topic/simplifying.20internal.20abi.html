@@ -1,0 +1,202 @@
+<html>
+<head><meta charset="utf-8"><title>simplifying internal abi · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html">simplifying internal abi</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="489110412"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489110412" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489110412">(Dec 15 2024 at 19:57)</a>:</h4>
+<p>As part of planned changes for our llvm c abi, I think I want to first simplify some of our llvm internal abi.</p>
+<p>Currently, we sometimes pass values in registers and sometimes pass them by pointer. When we pass them by pointer, we never pass them <code>byval</code> or <code>byref</code>. Our heuristic for passing in registers is simply based on the size in bytes. This actually leads to some pretty bad code gen. It also is extra work for us that llvm will already do during optimization.</p>
+<p>To break it down...</p>
+<h3>Sometimes passing as aggregate and sometimes passing by pointer</h3>
+<p>This makes it so that we have tons of split code paths. One path to handle the aggregate and one to handle the pointers. We can not simply load the pointer and then handle it like an aggregate. It is <a href="https://llvm.org/docs/Frontend/PerformanceTips.html#avoid-creating-values-of-aggregate-type">considered a bad idea to load aggregates into registers (especially large aggregates)</a>. As such, for the pointer path we use pointer offsets and small loads while for the register version, we just directly extract values.</p>
+<p>This is simply extra code paths and complexity. It also is for ~0 gain. While this does give us finer grain control, llvm passes already have solutions for this that are reasonable.</p>
+<h3>Our heuristic for passing in registers is simply based on the size in bytes</h3>
+<p>This is simply a really naive heuristic and probably ends up hurting pointers very often. When llvm sees an aggregate struct, it will put every single field in its own registers. This means that our naive heuristic can lead to really bad results.</p>
+<p>Consider this roc type:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">RGB</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">r</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">U8</span><span class="p">,</span><span class="w"> </span><span class="nv">g</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">U8</span><span class="p">,</span><span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">U8</span><span class="w"> </span><span class="p">}</span>
+<span class="kt">PairRGB</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="p">(</span><span class="kt">RGB</span><span class="p">,</span><span class="w"> </span><span class="kt">RGB</span><span class="p">)</span>
+</code></pre></div>
+<p>Both RGB and PairRGB our under our threshold. As such, we will pass them as aggregate values. This means that on x86_64, a <a href="https://llvm.godbolt.org/z/K5TY9Gc9f">single PairRGB value will immediately consume all registers</a> and everything else will have to be passed on the stack.</p>
+<p>This means that lots of small data that just happens to be many fields can quickly consume tons of registers and really hurt performance.</p>
+<h3>When we pass them by pointer, we never pass them <code>byval</code> or <code>byref</code></h3>
+<p>Simply put, <code>byval</code> pointers are the pointers that are meant to be implicitly passed on the stack. In general, llvm understands how to optimize <code>byval</code> pointers. If they are reasonable to pass in registers, llvm will do that. If a function uses it in a read only way, llvm will avoid copying it over and over again (which should always be the case in roc).</p>
+<p><code>byref</code> pointers are similar to <code>byval</code> but do not make a copy to put them into the next stack frame.</p>
+<p>Given everything is immutable in roc, I think we can pass everything as <code>ptr readonly byref(%type) align(%align)</code>. llvm will then automatically promote to registers if it see fit to do so. On top of that, being <code>byref</code> instead of <code>byval</code> avoids the duplication on the stack required for potential mutation (can still mutate something nested in a pointer like a list).</p>
+<hr>
+<p>Bonus: defining everything as pointers means that we can specify alignment correctly everywhere instead of depending on nesting types like <code>[i128 * 0]</code> to get 16 byte alignment. You can directly specify alignment of pointers and allocas.</p>
+<hr>
+<p>One annoyance. The argpromotion pass is currently set to only promote to pass in registers if the struct is 2 values or less. I want to set that to at least 3 (so string and list can pass as multiple scalars if reasonable for a function call). This is an argument when generating the c++ pass, but I'm not sure if we can set it from inkwell. Especially given we now create our pass pipeline via a giant string of pass names. Need to look into this more. Even If I can't set this now, I would rather simplify everything and figure out setting it later. As a note, it is smart enough to recognize unused fields. So a list where only the pointer and length are accessed is considered only 2 elements.</p>
+
+
+
+<a name="489112353"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489112353" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489112353">(Dec 15 2024 at 20:28)</a>:</h4>
+<p>Hmmm....just realized a problem with my idea. Argpromotion does not deal with return by pointer. So all aggregates would always be returned by pointer instead of being return in registers.....</p>
+
+
+
+<a name="489112443"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489112443" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489112443">(Dec 15 2024 at 20:29)</a>:</h4>
+<p>So unless we don our own packing, this will still be suboptimal</p>
+
+
+
+<a name="489112638"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489112638" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489112638">(Dec 15 2024 at 20:31)</a>:</h4>
+<p>Maybe we just need to consider all function args and returns no matter what as special. Shape them into exactly what we want. Then inside a function always convert to pointers to allocas for structured types so that we can access everything in a uniform way. llvm definitely is good a removing write once and then read only allocas like could be used for arguments..... Then at least all the struct/pointer conversion code can just be for function arguments and returns and everything else can uniformly be pointers.</p>
+
+
+
+<a name="489112708"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489112708" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489112708">(Dec 15 2024 at 20:32)</a>:</h4>
+<p>cc <span class="user-mention" data-user-id="281543">@Folkert de Vries</span> and <span class="user-mention" data-user-id="454654">@Ayaz Hafiz</span> for opinions and ideas</p>
+<p>Since I want to fully revamp and fix up c abi, might as well think about cleaning up the fully system.</p>
+
+
+
+<a name="489113004"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489113004" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489113004">(Dec 15 2024 at 20:37)</a>:</h4>
+<p>Also, I was looking at rust and their heuristic seems to be overly simple. 2 items struct: pass as separate args. 3+ arg structs: pass as pointer</p>
+
+
+
+<a name="489114567"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489114567" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489114567">(Dec 15 2024 at 21:02)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/395097-compiler-development/topic/simplifying.20internal.20abi/near/489110412">said</a>:</p>
+<blockquote>
+<p>Given everything is immutable in roc, I think we can pass everything as <code>ptr readonly byref(%type) align(%align)</code>.</p>
+</blockquote>
+<p>hm, but they can be mutated if the refcount is 1, yeah?</p>
+
+
+
+<a name="489114908"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489114908" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489114908">(Dec 15 2024 at 21:08)</a>:</h4>
+<p>readonly is only top level, not recursive. We pass the list as a readonly pointer. We then read the underlying allocation pointer from the list. That pointer is not read only. We can write to that.</p>
+
+
+
+<a name="489116599"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489116599" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489116599">(Dec 15 2024 at 21:33)</a>:</h4>
+<p>ahh right!</p>
+
+
+
+<a name="489131626"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489131626" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489131626">(Dec 16 2024 at 01:22)</a>:</h4>
+<p>+1 to reducing code paths, whatever form it takes. This seems reasonable. We have to pass large structs by pointer though, there was a huge regression that was the impetus for that</p>
+
+
+
+<a name="489135749"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489135749" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489135749">(Dec 16 2024 at 02:17)</a>:</h4>
+<p>Yeah, and the plan here would be to pass all struct by pointer and then leave llvm to change them to by value as an optimization.</p>
+
+
+
+<a name="489137729"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489137729" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489137729">(Dec 16 2024 at 02:45)</a>:</h4>
+<p>makes sense to me.</p>
+
+
+
+<a name="489265081"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489265081" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> jan kili <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489265081">(Dec 16 2024 at 15:21)</a>:</h4>
+<p>By delegating value-ification to llvm, would we avoid the classes of mis-mappings that result in platforms reading non-pointer registers incorrectly? Does that address alignment+packing and solve register selection? Would platform <code>roc_fx_</code> functions still need to choose whether to expect a value or pointer?</p>
+
+
+
+<a name="489287502"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489287502" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489287502">(Dec 16 2024 at 16:50)</a>:</h4>
+<p>Not at all sadly</p>
+
+
+
+<a name="489287555"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489287555" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489287555">(Dec 16 2024 at 16:50)</a>:</h4>
+<p>Llvm does not know how to speak c abi</p>
+
+
+
+<a name="489287617"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489287617" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489287617">(Dec 16 2024 at 16:51)</a>:</h4>
+<p>So for c abi, we still have to do something special</p>
+
+
+
+<a name="489287866"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489287866" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489287866">(Dec 16 2024 at 16:52)</a>:</h4>
+<p>As mentioned above, we could still choose to speak a limited subset of c abi to make our lives a lot easier.</p>
+
+
+
+<a name="489289458"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489289458" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489289458">(Dec 16 2024 at 16:58)</a>:</h4>
+<p>Actually, if we force all structs and unions (minus enums) to be by pointer and all other types to be by value, that would make for very simple valid c abi......I might do that, at least as a starting point. It would be very similar to our <code>_generic</code> function today.</p>
+<p>Compared to proper c abi, this minorly hurts perf for any record or union under 16 bytes. All other primitives would be unchanged.</p>
+
+
+
+<a name="489290386"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489290386" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489290386">(Dec 16 2024 at 17:03)</a>:</h4>
+<p>That said, if we use this restricted API, and let llvm do promotion to values (which is only a little sad due to cutting off at 2 registers instead of 3, without us being able to tune the arg to my knowledge), I think we could actually have the same internal llvm call conv as our external c call conv and that sounds worth it.</p>
+
+
+
+<a name="489303382"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489303382" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> jan kili <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489303382">(Dec 16 2024 at 18:06)</a>:</h4>
+<p>Sweet!</p>
+
+
+
+<a name="489303586"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489303586" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> jan kili <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489303586">(Dec 16 2024 at 18:06)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/395097-compiler-development/topic/simplifying.20internal.20abi/near/489289458">said</a>:</p>
+<blockquote>
+<p>Compared to proper c abi, this minorly hurts perf for any record or union under 16 bytes.</p>
+</blockquote>
+<p>I imagine that if a platform cared strongly about perf, it could likely pass a single U* value instead, for low cost in app side bit math.</p>
+
+
+
+<a name="489316057"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489316057" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489316057">(Dec 16 2024 at 18:47)</a>:</h4>
+<p>They could try. May not work in a lot of cases due to roc having no sort of unsafe cast.</p>
+
+
+
+<a name="489316279"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489316279" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489316279">(Dec 16 2024 at 18:48)</a>:</h4>
+<p>But also, if we get to the point where a well design platform is hitting perf issues due to this, we can work on a fix then (and if we ever allow platform + app lto, it would likely fix all these issues anyway)</p>
+
+
+
+<a name="489316366"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489316366" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489316366">(Dec 16 2024 at 18:48)</a>:</h4>
+<p>Overall not much of a concern especially given roc never mutates anything</p>
+
+
+
+<a name="489317324"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489317324" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489317324">(Dec 16 2024 at 18:53)</a>:</h4>
+<p>yeah this feels like another case (lambda sets being another) where the volume of bugs has been so high for so long that it definitely feels like intentionally sacrificing some performance for the sake of correctness is the right move, especially when the performance delta we're talking about is this small</p>
+
+
+
+<a name="489319114"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/simplifying%20internal%20abi/near/489319114" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/simplifying.20internal.20abi.html#489319114">(Dec 16 2024 at 19:02)</a>:</h4>
+<p>Yeah, the main cost here is a small amount of extra indirection (still highly likely in L1 cache) when calling to/from the host.</p>
+<p>Then internally, if we can't tune the llvm arg promotion pass, passing/returning lists and strings by pointer instead of in registers. I would guess this is actually more likely to be a perf hit than the c abi stuff. That said, I still would bet it is an exceptionally small cost.</p>
+<p>To be even more clear here, in other languages, they have to pass by reference most of the time due to allowing mutation. So this would be no worse than c or rust from the call conv side. It will waste more stack space on stale versions of lists/strings that no longer matter. (Due to us always making a new list/str struct instead of mutating in place).</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

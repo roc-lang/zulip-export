@@ -1,0 +1,1274 @@
+<html>
+<head><meta charset="utf-8"><title>Caching strategy for Roc (including canonicalization) · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html">Caching strategy for Roc (including canonicalization)</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="493709392"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493709392" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493709392">(Jan 15 2025 at 03:02)</a>:</h4>
+<p>So, if we're gonna want to save module results in a cache, how should we lay it out, and where should it be? I expect we <em>might</em> have multiple cache stages per module, for example:</p>
+<ul>
+<li>canonicalization</li>
+<li>partial typechecking</li>
+<li>partial mono</li>
+<li>etc.</li>
+</ul>
+<p>Ideally we'd cache only the artifacts from the latest stage in the pipeline, but who knows? For now, let's assume there's only one build artifact per file, but this design is expandable if there are multiple files.</p>
+<p>The main thing I want to do is figure out a way to prevent out-of-control cache growth by limiting each "file" to only hold one cache entry at a time. "File" is in quotes because the compiler ideally doesn't have to remember the path to a file, only the hash of its contents. The best way I can think to do that is to scan the list of Roc files every compilation and hash their contents, and then:</p>
+<ul>
+<li>For those that are already in the cache, reuse their assets</li>
+<li>For those files that don't have their artifacts cached, compile and save their artifacts</li>
+<li>Every other artifact in the cache gets deleted</li>
+</ul>
+<p>That means that we don't need to remember a relationship between filenames and their cached artifacts for user code. Unfortunately,this couldn't work with a global cache representing multiple user projects only work for single project caches, since we'd otherwise be clobbering all other user cached code on every compilation run. I can think of two solutions:</p>
+<ol>
+<li>Every package gets its own Rust-like <code>target/</code> equivalent called <code>build/</code>. Build contains all cache data per directory, as well as a <code>build.lock</code> file that gets created per run of a Roc compiler, and stores project cache artifacts in there. Package artifacts get compiled/saved/loaded on-demand from the global cache.</li>
+<li>In the global cache, we take a hash of the main file for each package/app and create a folder for it. All files are stored in that folder. Each folder has a <code>build.lock</code> like the first option, and we only check that folder for reading/saving/deleting build artifacts.</li>
+</ol>
+<p>I'd love to hear opinions on this, but I think the second option seems better because then all Roc artifacts can be stored in a single folder in the $HOME directory for a single machine: packages, build artifacts, and compiler versions. We'd definitely want a supplementary <code>roc cache ...</code> set of subcommands, with something like <code>roc cache clean</code> to remove old files.</p>
+<p>For external packages, we'd definitely save everything in a global cache, both the source and the build artifacts. Since they'd be deterministically built given the same Roc version, we can just partition them per Roc version, and there's no need for a lock file since there's no deletion and compilation is idempotent. All in all, the second option would have this folder structure under <code>~/.roc/</code>:</p>
+<div class="codehilite"><pre><span></span><code>compiler/
+  v0.1.0 (executable)
+  v0.2.0
+  &lt;git hash for nightlies&gt;
+packages/
+  github.com/
+    lukewilliamboswell/
+      roc-json/
+        0.11.0/
+          z45Wzc-J39TLNweQUoLw3IGZtkQiEN3lTBv3BXErRjQ.tar.br/
+            src/
+              &lt;source files&gt;
+            build/
+              &lt;roc version&gt;/
+                &lt;build artifacts by file hash&gt;
+    smores56/
+      weaver/
+        0.5.1/
+          nqyqbOkpECWgDUMbY-rG9ug883TVbOimHZFHek-bQeI.tar.br/
+            src/
+              &lt;source files&gt;
+            build/
+              &lt;roc version&gt;/
+                &lt;build artifacts by file hash&gt;
+build/
+  &lt;hash of main.roc absolute file path&gt;/
+    build.lock
+    &lt;build artifacts by file hash&gt;
+</code></pre></div>
+<p>Thoughts?</p>
+
+
+
+<a name="493711908"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493711908" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493711908">(Jan 15 2025 at 03:33)</a>:</h4>
+<blockquote>
+<p>scan the list of Roc files every compilation and hash their contents</p>
+</blockquote>
+<p>How fast is this? would it be beneficial if you could just ask the OS for some metadata like "last edited" or something and use that to skip reading the file?</p>
+
+
+
+<a name="493718482"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493718482" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493718482">(Jan 15 2025 at 04:48)</a>:</h4>
+<p>I think tools like edit time can be used to avoid some recomputations, but hashing is likely required to cut out a lot of work and skip a lot of invalidation.</p>
+
+
+
+<a name="493718516"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493718516" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493718516">(Jan 15 2025 at 04:49)</a>:</h4>
+<p>The theory is that hashing the file and looking up the key in the cache is a lot faster the rerunning parsing and canonicalization.</p>
+
+
+
+<a name="493718527"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493718527" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493718527">(Jan 15 2025 at 04:49)</a>:</h4>
+<p>and constraint gen!</p>
+
+
+
+<a name="493718536"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493718536" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493718536">(Jan 15 2025 at 04:49)</a>:</h4>
+<p>constraint gen can also be done as a pure function of source bytes</p>
+
+
+
+<a name="493718693"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493718693" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493718693">(Jan 15 2025 at 04:51)</a>:</h4>
+<p>I definitely think we should only ever cache things in the home dir</p>
+
+
+
+<a name="493718702"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493718702" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493718702">(Jan 15 2025 at 04:51)</a>:</h4>
+<p>no project-local cache dir ever</p>
+
+
+
+<a name="493718727"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493718727" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493718727">(Jan 15 2025 at 04:51)</a>:</h4>
+<p>one reason for this is switching branches</p>
+
+
+
+<a name="493718781"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493718781" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493718781">(Jan 15 2025 at 04:52)</a>:</h4>
+<p>if I'm switching back and forth between a few different branches, my cache shouldn't be invalidated</p>
+
+
+
+<a name="493718817"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493718817" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493718817">(Jan 15 2025 at 04:52)</a>:</h4>
+<p>also if I'm switching between different projects, we should be able to reuse cache from their shared dependencies</p>
+
+
+
+<a name="493718883"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493718883" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493718883">(Jan 15 2025 at 04:53)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/channel/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493718516">said</a>:</p>
+<blockquote>
+<p>The theory is that hashing the file and looking up the key in the cache is a lot faster the rerunning parsing and canonicalization.</p>
+</blockquote>
+<p>Yes, but is reading the contents of the file to recompute the hash, faster then looking up the hash previously computed (and unchanged as the file hasn't been edited) and then using that to get the correct cached data</p>
+
+
+
+<a name="493719090"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493719090" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493719090">(Jan 15 2025 at 04:56)</a>:</h4>
+<p>I think we can think about speeding up the cache key determination separately</p>
+
+
+
+<a name="493719264"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493719264" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493719264">(Jan 15 2025 at 04:58)</a>:</h4>
+<p>at some level we need a cache key, and source bytes are the ultimate source of truth for what we're caching here</p>
+
+
+
+<a name="493719412"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493719412" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493719412">(Jan 15 2025 at 05:00)</a>:</h4>
+<blockquote>
+<p>The main thing I want to do is figure out a way to prevent out-of-control cache growth by limiting each "file" to only hold one cache entry at a time.</p>
+</blockquote>
+<p>I guess this was the part I was thinking about... exploring ways to connect the hash and the files in a way that doesn't duplicate the cache artifacts each time the source changes (and it gets a new hash)</p>
+
+
+
+<a name="493719568"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493719568" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493719568">(Jan 15 2025 at 05:01)</a>:</h4>
+<p>Though I admittedly haven't really explained any of the things I was thinking...</p>
+
+
+
+<a name="493719658"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493719658" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493719658">(Jan 15 2025 at 05:01)</a>:</h4>
+<p>I think we can limit cache growth by having a "background job" that goes and deletes old cache files based on last access time</p>
+
+
+
+<a name="493719862"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493719862" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493719862">(Jan 15 2025 at 05:02)</a>:</h4>
+<p>there are points where compilation gets bottlenecked and we can't productively use all the cores just because things are blocked, and during those times we can put all the idle cores on garbage-collecting old cache files until they're unblocked again</p>
+
+
+
+<a name="493719931"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493719931" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493719931">(Jan 15 2025 at 05:03)</a>:</h4>
+<p>that shouldn't slow down builds anyway because the cores would have been idle anyway, and since all it has to do is to go through and look at access times (not even read any of the contents of the files) to decide if they should be deleted, it can probably get through a lot of them very quickly</p>
+
+
+
+<a name="493786003"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493786003" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493786003">(Jan 15 2025 at 05:22)</a>:</h4>
+<p>going back to the original question, we can definitely cache typechecked modules too</p>
+
+
+
+<a name="493786018"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493786018" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493786018">(Jan 15 2025 at 05:23)</a>:</h4>
+<p>basically just write down their exposed type annotations</p>
+
+
+
+<a name="493786053"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493786053" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493786053">(Jan 15 2025 at 05:23)</a>:</h4>
+<p>their caches get invalidated more easily though, because if any of their dependencies' cached exposed types change, we have to recompute them</p>
+
+
+
+<a name="493786136"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493786136" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493786136">(Jan 15 2025 at 05:24)</a>:</h4>
+<p>caching mono is potentially super valuable but also tricky because it's nonobvious where to cache the specializations</p>
+
+
+
+<a name="493786142"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493786142" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493786142">(Jan 15 2025 at 05:24)</a>:</h4>
+<p>Ayaz and I have talked about this in the past</p>
+
+
+
+<a name="493787181"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787181" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787181">(Jan 15 2025 at 05:38)</a>:</h4>
+<p>Unless we do two passes of type checking</p>
+
+
+
+<a name="493787204"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787204" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787204">(Jan 15 2025 at 05:38)</a>:</h4>
+<p>Partially typecheck solo modules, then finish after combining the modules</p>
+
+
+
+<a name="493787261"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787261" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787261">(Jan 15 2025 at 05:39)</a>:</h4>
+<p>The current plan for <code>roc_can_solo</code> and <code>roc_can_combine</code> to use the same AST should make that relatively easy</p>
+
+
+
+<a name="493787288"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787288" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787288">(Jan 15 2025 at 05:39)</a>:</h4>
+<p>could be!</p>
+
+
+
+<a name="493787292"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787292" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787292">(Jan 15 2025 at 05:39)</a>:</h4>
+<p>Compared to two different constraints modules</p>
+
+
+
+<a name="493787300"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787300" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787300">(Jan 15 2025 at 05:39)</a>:</h4>
+<blockquote>
+<p>The main thing I want to do is figure out a way to prevent out-of-control cache growth by limiting each "file" to only hold one cache entry at a time.</p>
+</blockquote>
+<p>Mutiple copies in the cache likely is a good thing. It is common to work on multiple git branches that may have the same file in different states. So I don't think limiting to one entry per file is the right call</p>
+
+
+
+<a name="493787301"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787301" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787301">(Jan 15 2025 at 05:40)</a>:</h4>
+<p>We'll have to try to know</p>
+
+
+
+<a name="493787654"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787654" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787654">(Jan 15 2025 at 05:43)</a>:</h4>
+<p>Ideally the thing we're caching is really easy to serialize and deserialize. Prefering flat data structures to pointer-chasing, etc.</p>
+
+
+
+<a name="493787719"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787719" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787719">(Jan 15 2025 at 05:44)</a>:</h4>
+<p>We prefer that today, it's the plan as far as I know going forward</p>
+
+
+
+<a name="493787746"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787746" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787746">(Jan 15 2025 at 05:44)</a>:</h4>
+<p>The AST right now is very pointer-chase'y for sure.</p>
+
+
+
+<a name="493787769"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787769" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787769">(Jan 15 2025 at 05:45)</a>:</h4>
+<p>I've also seen lots of things from deeper in the compiler that take ownership of things, etc</p>
+
+
+
+<a name="493787788"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787788" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787788">(Jan 15 2025 at 05:45)</a>:</h4>
+<p>Oh yeah, I'm thinking about how constrain looks</p>
+
+
+
+<a name="493787800"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787800" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787800">(Jan 15 2025 at 05:45)</a>:</h4>
+<p>Which is roughly where caching would happen</p>
+
+
+
+<a name="493787801"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787801" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787801">(Jan 15 2025 at 05:45)</a>:</h4>
+<p>But you're right</p>
+
+
+
+<a name="493787809"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787809" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787809">(Jan 15 2025 at 05:45)</a>:</h4>
+<p>How to cache the AST is a different question</p>
+
+
+
+<a name="493787829"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787829" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787829">(Jan 15 2025 at 05:45)</a>:</h4>
+<p>I'm not actually sure we should, I was just using that as the example I'm most familiar with</p>
+
+
+
+<a name="493787832"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787832" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787832">(Jan 15 2025 at 05:46)</a>:</h4>
+<p>Richard had a suggestion surrounding everything being in one big array</p>
+
+
+
+<a name="493787902"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787902" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787902">(Jan 15 2025 at 05:46)</a>:</h4>
+<p>yeah if we're doing everything with indices into arenas (e.g. that's the idea in canonicalization) and we have 1 of those per arena, there is no deserialization step</p>
+
+
+
+<a name="493787919"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787919" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787919">(Jan 15 2025 at 05:47)</a>:</h4>
+<p>you just read the bytes from the file into memory and you're done</p>
+
+
+
+<a name="493787939"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787939" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787939">(Jan 15 2025 at 05:47)</a>:</h4>
+<p>it's essentially what Zig does</p>
+
+
+
+<a name="493787955"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787955" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787955">(Jan 15 2025 at 05:47)</a>:</h4>
+<p>the downside is that everything has to be done in that one arena and with indices into it <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="493787959"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787959" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787959">(Jan 15 2025 at 05:47)</a>:</h4>
+<p>Ahh interesting, so not even doing an SOA with a few types of arrays for different things</p>
+
+
+
+<a name="493787966"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493787966" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493787966">(Jan 15 2025 at 05:47)</a>:</h4>
+<p>you can do that, but they all need to be SoA in the same arena</p>
+
+
+
+<a name="493788019"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788019" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788019">(Jan 15 2025 at 05:48)</a>:</h4>
+<p>and then also all the metadata needs to be in the arena too, at the beginning</p>
+
+
+
+<a name="493788022"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788022" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788022">(Jan 15 2025 at 05:48)</a>:</h4>
+<p>instead of e.g. on the stack</p>
+
+
+
+<a name="493788023"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788023" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788023">(Jan 15 2025 at 05:48)</a>:</h4>
+<p>so it goes to disk too</p>
+
+
+
+<a name="493788043"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788043" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788043">(Jan 15 2025 at 05:48)</a>:</h4>
+<p>ehe, reading 10 separate arrays is minimally different from reading 1 arena blob (or at least, that'd be my hypothesis)</p>
+
+
+
+<a name="493788074"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788074" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788074">(Jan 15 2025 at 05:49)</a>:</h4>
+<p>If data can be organized more cleanly in a small number of SOA-style arrays, that might be a win</p>
+
+
+
+<a name="493788077"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788077" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788077">(Jan 15 2025 at 05:49)</a>:</h4>
+<p>yeah but the hard part is making everything be all indices</p>
+
+
+
+<a name="493788091"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788091" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788091">(Jan 15 2025 at 05:49)</a>:</h4>
+<p>and no pointers</p>
+
+
+
+<a name="493788110"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788110" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788110">(Jan 15 2025 at 05:49)</a>:</h4>
+<p>means no recursive enums, for example</p>
+
+
+
+<a name="493788183"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788183" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788183">(Jan 15 2025 at 05:50)</a>:</h4>
+<p>Nah, you have one top-level array per enum type (not enum variant - enum type)</p>
+
+
+
+<a name="493788223"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788223" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788223">(Jan 15 2025 at 05:51)</a>:</h4>
+<p>You do end up doing indices then, but it's a more structured form of indices</p>
+
+
+
+<a name="493788248"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788248" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788248">(Jan 15 2025 at 05:51)</a>:</h4>
+<p>Also I'm interested in exploring what SIMD-ification could be done when you have data in that sort of form</p>
+
+
+
+<a name="493788325"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788325" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788325">(Jan 15 2025 at 05:52)</a>:</h4>
+<p>unfortunately the most expensive parts of the compilation are in the backend of the compiler, and they're also the most challenging to cache</p>
+
+
+
+<a name="493788372"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788372" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788372">(Jan 15 2025 at 05:53)</a>:</h4>
+<p>I imagine if you ignore inlining, it's a relatively simple problem</p>
+
+
+
+<a name="493788382"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788382" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788382">(Jan 15 2025 at 05:53)</a>:</h4>
+<p>(e.g. for a dev backend)</p>
+
+
+
+<a name="493788400"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788400" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788400">(Jan 15 2025 at 05:53)</a>:</h4>
+<p>"relatively" is doing a fair mount of work there ;)</p>
+
+
+
+<a name="493788478"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788478" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788478">(Jan 15 2025 at 05:54)</a>:</h4>
+<p>the specializations are the hard part</p>
+
+
+
+<a name="493788493"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788493" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788493">(Jan 15 2025 at 05:54)</a>:</h4>
+<p>Ahhh</p>
+
+
+
+<a name="493788620"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788620" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788620">(Jan 15 2025 at 05:56)</a>:</h4>
+<p>I was thinking of:<br>
+(1) make caching work for cases where specialization is not required<br>
+(2) where strategically possible, reduce the need for specialization by masking types - e.g. a data structure that only ever deals in pointers of a generic data type, that code doesn't actually need to be specialized on the generic type; just have a GenericPointer that you compile for</p>
+
+
+
+<a name="493788645"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788645" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788645">(Jan 15 2025 at 05:56)</a>:</h4>
+<p>But yes, that does remove the ability to effectively cache a lot of interesting code</p>
+
+
+
+<a name="493788794"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788794" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788794">(Jan 15 2025 at 05:58)</a>:</h4>
+<p>The sort of thing Swift does when compiling generic code into a binary</p>
+
+
+
+<a name="493788852"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493788852" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493788852">(Jan 15 2025 at 05:59)</a>:</h4>
+<p>IIRC .NET will also do some even fancier things like pre-compiling a version of some machine code that's agnostic to things like field offsets, and then do "late patching" in the real offsets after those are resolved</p>
+
+
+
+<a name="493789028"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493789028" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493789028">(Jan 15 2025 at 06:00)</a>:</h4>
+<p>yeah the thing I've heard about what Swift does (which I don't know the details of) is that it's good for caching and ABI stability but very technically thorny</p>
+
+
+
+<a name="493789849"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493789849" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493789849">(Jan 15 2025 at 06:09)</a>:</h4>
+<p>It also doesn't allow inlining across module boundaries, which isn't ideal</p>
+
+
+
+<a name="493790360"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493790360" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493790360">(Jan 15 2025 at 06:15)</a>:</h4>
+<p>Any problems with the cache structure I laid out above? This seems orthogonal enough that someone else could work on this in parallel if they wanted to.</p>
+
+
+
+<a name="493790492"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493790492" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493790492">(Jan 15 2025 at 06:17)</a>:</h4>
+<p>I can say in the issue that whoever picks it up should expect discussion when they make a PR</p>
+
+
+
+<a name="493790686"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493790686" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493790686">(Jan 15 2025 at 06:19)</a>:</h4>
+<p>I'm a little wary of the build.lock (I feel like I pretty regularly ran into issues with cargo's version of that for a _long_ time before they polished it up)</p>
+
+
+
+<a name="493790797"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493790797" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493790797">(Jan 15 2025 at 06:20)</a>:</h4>
+<p>One thing you may have to be careful of is windows compat issues with path length</p>
+
+
+
+<a name="493790813"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493790813" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493790813">(Jan 15 2025 at 06:20)</a>:</h4>
+<p>It looks like those paths can get pretty long</p>
+
+
+
+<a name="493790859"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493790859" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493790859">(Jan 15 2025 at 06:21)</a>:</h4>
+<p>One thing that crossed my mind is instead of caching on the filesystem, you could use something like sqlite</p>
+
+
+
+<a name="493790960"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493790960" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493790960">(Jan 15 2025 at 06:22)</a>:</h4>
+<p>If you do that on the right scope, you could make <code>roc build --clear-cache</code> or whatever be really fast (just deleting a handful of db files), rather than thousands of build artifacts</p>
+
+
+
+<a name="493791066"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493791066" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493791066">(Jan 15 2025 at 06:23)</a>:</h4>
+<p>yeah I don't think we should need a build.lock-type thing</p>
+
+
+
+<a name="493791923"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493791923" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493791923">(Jan 15 2025 at 06:33)</a>:</h4>
+<p>Should be deterministic for file output, just have to make sure that two processes don't write to the same file at the same time. Is that a problem? Seems like writing to a random file in <code>/tmp/</code> would mean that we only have to move a file to the cache dir</p>
+
+
+
+<a name="493791942"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493791942" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493791942">(Jan 15 2025 at 06:33)</a>:</h4>
+<p>But that's extra work that we might not have to do</p>
+
+
+
+<a name="493800403"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493800403" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493800403">(Jan 15 2025 at 07:49)</a>:</h4>
+<blockquote>
+<p>Mutiple copies in the cache likely is a good thing. It is common to work on multiple git branches that may have the same file in different states. So I don't think limiting to one entry per file is the right call</p>
+</blockquote>
+<p><span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span> this is tricky, since it'd be nice to have a deterministic and "close to pure" (meaning using few parameters) means for caching. So making something that doesn't need a coordinated strategy where we read from a file that lists the last N files would be great</p>
+
+
+
+<a name="493800547"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493800547" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493800547">(Jan 15 2025 at 07:50)</a>:</h4>
+<p>I agree that I am suggesting that we trade off performance for cache size here, but I think the performance improvement isn't that important here since the cached artifacts are for the fast part of the compiler anyway</p>
+
+
+
+<a name="493800622"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493800622" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493800622">(Jan 15 2025 at 07:51)</a>:</h4>
+<p>So we should start with something that is easy to implement correctly (which I believe the above strategy would be), and then we can try to make this cache more files in the future</p>
+
+
+
+<a name="493805995"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493805995" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493805995">(Jan 15 2025 at 08:27)</a>:</h4>
+<p>Do we want to trust that packages on the host system have not been modified? For example, if I download the code for the latest version of Weaver to a folder named <code>~/.roc/packages/github.com/smores56/weaver/0.5.1/nqyqbOkpECWgDUMbY-rG9ug883TVbOimHZFHek-bQeI.tar.br/src/...</code>, I'd ideally want to keep it unarchived in our system to avoid the need to decompress the archive every time. But what if someone edited the hash in their Roc app for the package and also the hash in the global Roc cache?</p>
+
+
+
+<a name="493806039"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493806039" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493806039">(Jan 15 2025 at 08:27)</a>:</h4>
+<p>This seems most likely to be self-inflicted</p>
+
+
+
+<a name="493806236"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493806236" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493806236">(Jan 15 2025 at 08:28)</a>:</h4>
+<p>But the safe bet is to just save the full archive and decompress it for now, and then try to avoid the decompression cost down the road</p>
+
+
+
+<a name="493806293"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493806293" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493806293">(Jan 15 2025 at 08:29)</a>:</h4>
+<p>Unless we don't care about this security concern, which would likely be because we don't think it's a real concern</p>
+
+
+
+<a name="493810127"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493810127" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493810127">(Jan 15 2025 at 08:51)</a>:</h4>
+<p>Created a detailed issue for this, would appreciate a review if someone gets a chance: <a href="https://github.com/roc-lang/roc/issues/7517">https://github.com/roc-lang/roc/issues/7517</a></p>
+
+
+
+<a name="493810272"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493810272" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493810272">(Jan 15 2025 at 08:52)</a>:</h4>
+<p>I wrote it based on my current understanding of the plan, but I am happy to change the details based on the results of this discussion</p>
+
+
+
+<a name="493810319"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493810319" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493810319">(Jan 15 2025 at 08:52)</a>:</h4>
+<p>I just thought it'd be good to get everything written down while it was fresh in my mind.</p>
+
+
+
+<a name="493917810"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493917810" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493917810">(Jan 15 2025 at 12:45)</a>:</h4>
+<p>hm, why would we have the project directory structure in the cache dir instead of just a flat, un-namsespaced collection of hashes?</p>
+
+
+
+<a name="493918058"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493918058" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493918058">(Jan 15 2025 at 12:46)</a>:</h4>
+<p>in other words, instead of:</p>
+<p><code>build/&lt;project hash&gt;/&lt;roc version&gt;/&lt;file content hash&gt;</code></p>
+<p>why not</p>
+<p><code>build/&lt;roc version&gt;/&lt;file content hash&gt;</code></p>
+
+
+
+<a name="493918467"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493918467" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493918467">(Jan 15 2025 at 12:48)</a>:</h4>
+<p>also I do think we should do the "write to tmpdir and then move afterwards" thing - otherwise if multiple roc compiler processes are running at the same time, there can be race conditions around partially-written files in the cache <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="493918689"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493918689" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493918689">(Jan 15 2025 at 12:49)</a>:</h4>
+<blockquote>
+<p>~/.roc/packages/&lt;repository website&gt;/&lt;username&gt;/&lt;project name&gt;/&lt;version&gt;/&lt;archive hash&gt;/...</p>
+</blockquote>
+<p>we already have a format for these, which I think should stay as-is!</p>
+
+
+
+<a name="493919860"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493919860" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493919860">(Jan 15 2025 at 12:54)</a>:</h4>
+<p>regarding decompression, I don't think there's a real security benefit to leaving the files compressed. If an attacker has gotten write access to that directory, they can just write fake cache files directly which do whatever malicious thing they want. I think it's better to leave them decompressed so we don't have to keep redoing that work!</p>
+
+
+
+<a name="493920225"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493920225" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493920225">(Jan 15 2025 at 12:55)</a>:</h4>
+<p>(also regarding the comment on the issue about XDG - we already do that for our cached package downloads! There's a whole algorithm we use to determine where the roc cache dir should go.)</p>
+
+
+
+<a name="493970918"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493970918" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493970918">(Jan 15 2025 at 16:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="461444">Sam Mohr</span> <a href="#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493800622">said</a>:</p>
+<blockquote>
+<p>So we should start with something that is easy to implement correctly (which I believe the above strategy would be), and then we can try to make this cache more files in the future</p>
+</blockquote>
+<p>Yes, but we need to make sure we design in ways that enable more flexibility in the future. Avoid simplify so much that we design ourselves into a corner and need a large rewrite to enable more functionality.</p>
+
+
+
+<a name="493971243"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493971243" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493971243">(Jan 15 2025 at 16:46)</a>:</h4>
+<p>Also, we probably should talk to the zig folks about this. I think they just went through tons of incremental build work. I would guess they can tell us a good bit about pitfalls</p>
+
+
+
+<a name="493972482"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493972482" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493972482">(Jan 15 2025 at 16:49)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493718693">said</a>:</p>
+<blockquote>
+<p>I definitely think we should only ever cache things in the home dir</p>
+</blockquote>
+<p>I really dislike this. It makes it very unclear which projects are eating up diskspace. I much prefer all artifacts from a single project in a single location. That is much easier to cleanup and understand</p>
+
+
+
+<a name="493981457"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493981457" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493981457">(Jan 15 2025 at 17:35)</a>:</h4>
+<p>that's interesting</p>
+
+
+
+<a name="493981469"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493981469" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493981469">(Jan 15 2025 at 17:35)</a>:</h4>
+<p>I  hadn't thought of that</p>
+
+
+
+<a name="493987654"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493987654" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493987654">(Jan 15 2025 at 18:07)</a>:</h4>
+<blockquote>
+<p>hm, why would we have the project directory structure in the cache dir instead of just a flat, un-namespaced collection of hashes?</p>
+</blockquote>
+<p>The goal with this is to know which build artifacts belong to which project on the user's system. If we have them in one big folder, then we can't just cull any build artifacts that don't correspond to current project files, because we'd delete build artifacts for all other projects.</p>
+<p>I preferred a hash of the <code>main.roc</code> file because that shouldn't move much, and it keeps our build cache flatter.</p>
+<p>We should probably offer a <code>roc cache project-path</code> command that would return the path to the current project's <code>~/.roc/build/&lt;hash&gt;/</code> path so you can do "$(roc cache project-path)" for when you want to check the cache dir in scripts.</p>
+
+
+
+<a name="493988628"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493988628" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493988628">(Jan 15 2025 at 18:13)</a>:</h4>
+<p>This could be accompanied by a <code>roc cache project-clean</code> command, pretty easy to clean the project with that</p>
+
+
+
+<a name="493997808"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/493997808" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#493997808">(Jan 15 2025 at 19:08)</a>:</h4>
+<p>Updated the description in the issue:</p>
+<ul>
+<li>Used the current XDG-compliant cache directory discovery mechanism</li>
+<li>Used the current package folder format, which is less deeply nested than the prior suggestion</li>
+<li>Store downloaded package source files uncompressed instead of in an archive</li>
+<li>Write cache artifacts to a temp file first to avoid write conflicts and remove the need for lock files</li>
+</ul>
+
+
+
+<a name="494013986"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494013986" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494013986">(Jan 15 2025 at 20:51)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493972482">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493718693">said</a>:</p>
+<blockquote>
+<p>I definitely think we should only ever cache things in the home dir</p>
+</blockquote>
+<p>I really dislike this. It makes it very unclear which projects are eating up diskspace. I much prefer all artifacts from a single project in a single location. That is much easier to cleanup and understand</p>
+</blockquote>
+<p>the flip side of this is that it's undesirable for Roc scripts to clutter the local directory with a cache dir, but still desirable for them to have caching for repeat run perf.</p>
+<p>I also like the idea of Roc not needing a .gitignore because by default it just doesn't create any local stuff you're supposed to ignore</p>
+
+
+
+<a name="494013993"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494013993" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494013993">(Jan 15 2025 at 20:51)</a>:</h4>
+<p>what about having commands like <code>roc cache clean</code> and <code>roc cache size</code> to give you insight into that?</p>
+
+
+
+<a name="494014377"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494014377" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494014377">(Jan 15 2025 at 20:53)</a>:</h4>
+<p>if you want to get that info across a bunch of projects on disk, it's probably about as much work to ask Claude to write you a shell one-liner to go run that command on all the projects as it would be to get all the sizes of one of their subdirectories (if cache dirs were local to the project)</p>
+
+
+
+<a name="494024156"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494024156" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494024156">(Jan 15 2025 at 21:56)</a>:</h4>
+<p>Yeah, I think the biggest issue comes when you don't realize some old project (potentially otherwise deleted) is wasting a ton of cache space. Cause you don't actually want to just delete the whole cache. And you also don't want to have to manually remember some random old project. It's easy to see a projects directory is wasting space (see this all he time rust). Would be much harder to dig into the same with central caching. Obviously tooling can make it work, but I prefer the file system to just be that tool instead of needing to learn new tooling.</p>
+
+
+
+<a name="494024849"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494024849" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494024849">(Jan 15 2025 at 22:01)</a>:</h4>
+<p>Want to quickly add a +1 to the idea of Roc not putting cache files in the project directory. I think in particular for Roc to be as nice for scripting as a dedicated scripting language, a small part of that is that it doesn't create a bunch of helper files in the project directory.</p>
+
+
+
+<a name="494025865"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494025865" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494025865">(Jan 15 2025 at 22:08)</a>:</h4>
+<p>For cache management, I wonder if there's some nice automated heuristics that would mean that Roc is respectful of disk space without needing active management. Something like:</p>
+<ul>
+<li>Roc will automatically remove caches that are unused for a certain number of days.</li>
+<li>Roc wil evict longest-unused-caches if the total amount of cache space Roc uses exceeds a certain percentage of disk space.</li>
+<li>Same as previous point, but roc will evict the worst effort-to-size-ratio cache objects instead of longest-unused.</li>
+</ul>
+<p>Such heuristics might be easier to implement if the entire cache lives in a single place. If there's bits of Roc cache strewn about the file system, then Roc won't know where all the cache is, and so won't be able to manage the whole either. At that point manually managing the cache will be the user's only option.</p>
+
+
+
+<a name="494025955"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494025955" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494025955">(Jan 15 2025 at 22:09)</a>:</h4>
+<p>If we add strategies like this, we should make them opt in.</p>
+
+
+
+<a name="494025976"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494025976" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494025976">(Jan 15 2025 at 22:09)</a>:</h4>
+<p>Or at a minimum opt out</p>
+
+
+
+<a name="494026016"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494026016" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494026016">(Jan 15 2025 at 22:09)</a>:</h4>
+<p>You think?</p>
+
+
+
+<a name="494026029"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494026029" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494026029">(Jan 15 2025 at 22:09)</a>:</h4>
+<p>Disk space is practically free and I have seen plenty of cases where it is preferable to just eat a ton of it.</p>
+
+
+
+<a name="494026137"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494026137" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494026137">(Jan 15 2025 at 22:10)</a>:</h4>
+<p>Also, doing small deletions on every cache use will be bad for performance.</p>
+
+
+
+<a name="494026256"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494026256" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494026256">(Jan 15 2025 at 22:11)</a>:</h4>
+<p>Obviously some solutions can still be grouped, but I think this is why tools like nix just do a large GC call to cleanup caching. Gives the user control.</p>
+
+
+
+<a name="494026310"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494026310" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494026310">(Jan 15 2025 at 22:11)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/channel/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/494025976">said</a>:</p>
+<blockquote>
+<p>Or at a minimum opt out</p>
+</blockquote>
+<p>I'd vote for this. We can have sensible defaults for the common path and experience.</p>
+
+
+
+<a name="494026354"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494026354" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494026354">(Jan 15 2025 at 22:11)</a>:</h4>
+<p>I imagine that I wouldn't even think about my roc cache size until it is at least 10GB. Depending on the machine, probably closer to 100GB</p>
+
+
+
+<a name="494026611"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494026611" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494026611">(Jan 15 2025 at 22:13)</a>:</h4>
+<p>I think those are important aspects, but wonder if they can be folded into a "sufficiently smart" cache management strategy <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span>.</p>
+<p>For instance, maybe the amount of disk Roc is okay using is not relative to total disk space, but to free disk space. And deletions can happen in a background job, I think Richard mentioned a daemon before.</p>
+<p>Nix is an interesting case. I used to manually run a nix garbage-collect job periodically when it occurred to me or, more likely, when I ran into some disk-full-related errors.</p>
+<p>At some point I enabled a "automatically garbage collect old stuff on every nixos-rebuild" and I've not actively needed to worry about Nix disk space usage since. It's been much nicer!</p>
+
+
+
+<a name="494026798"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494026798" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494026798">(Jan 15 2025 at 22:14)</a>:</h4>
+<p>One idea might be to do the build, and then follow up with the review/cleanup</p>
+
+
+
+<a name="494026802"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494026802" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494026802">(Jan 15 2025 at 22:14)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="477725">Jasper Woudenberg</span> <a href="#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/494026611">said</a>:</p>
+<blockquote>
+<p>I think those are important aspects, but wonder if they can be folded into a "sufficiently smart" cache management strategy <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span>.</p>
+</blockquote>
+<p>Yeah, I totally think this is doable. There can be sane defaults and a config in the cache folder to give more control.</p>
+
+
+
+<a name="494027756"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494027756" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494027756">(Jan 15 2025 at 22:21)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/493719658">said</a>:</p>
+<blockquote>
+<p>I think we can limit cache growth by having a "background job" that goes and deletes old cache files based on last access time</p>
+<p>there are points where compilation gets bottlenecked and we can't productively use all the cores just because things are blocked, and during those times we can put all the idle cores on garbage-collecting old cache files until they're unblocked again</p>
+</blockquote>
+<p>yeah I think this would be the nicest way to do it if it can work - no daemon, just make use of idle cores during every build to quietly go around deleting expired cache entries until either it runs out or the build needs the core again</p>
+
+
+
+<a name="494028968"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494028968" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494028968">(Jan 15 2025 at 22:31)</a>:</h4>
+<p>In that case, we could get away with not needing to stick to a <code>build/&lt;project main.roc hash&gt;/&lt;roc version&gt;/&lt;file hash&gt;</code> strategy and just go for <code>build/&lt;roc version&gt;/&lt;file hash&gt;</code></p>
+
+
+
+<a name="494029112"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494029112" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494029112">(Jan 15 2025 at 22:32)</a>:</h4>
+<p>I still think the former is a very simple strategy that will work until we figure out our cleaning strategy</p>
+
+
+
+<a name="494029144"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494029144" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494029144">(Jan 15 2025 at 22:32)</a>:</h4>
+<p>But this isn't gonna be implemented for a while, so I don't think it matters yet</p>
+
+
+
+<a name="494252590"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494252590" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Isaac Van Doren <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494252590">(Jan 16 2025 at 23:34)</a>:</h4>
+<p>I would also much prefer to have all of the caching in a single directory and avoid a per-project build dir. I think heuristics about cleaning up the cache can probably solve the problem nicely, but even if they can't, deleting the whole cache once in a blue moon if it got too large would not be that big of a deal.</p>
+
+
+
+<a name="494252655"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494252655" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494252655">(Jan 16 2025 at 23:35)</a>:</h4>
+<p>The only thing that deleting the entire <code>~/.cache/roc/</code> folder would break would be the compiler being missing</p>
+
+
+
+<a name="494252668"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494252668" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494252668">(Jan 16 2025 at 23:35)</a>:</h4>
+<p>Everything else would survive</p>
+
+
+
+<a name="494252775"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494252775" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494252775">(Jan 16 2025 at 23:36)</a>:</h4>
+<p>Even then, if we default to storing the current Roc bin in <code>/usr/local/bin/</code> or something, then it wouldn't even break</p>
+
+
+
+<a name="494943988"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494943988" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494943988">(Jan 21 2025 at 01:07)</a>:</h4>
+<p>I think the compiler install should go into <code>~/.local/roc</code> rather than <code>/usr/local/bin/</code> or <code>~/.cache/roc/</code></p>
+
+
+
+<a name="494944116"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494944116" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494944116">(Jan 21 2025 at 01:08)</a>:</h4>
+<p>The semantics of the .cache dir are supposed to be that dropping it won't cause anything to break - but clearly if the roc compiler is stored in there and you drop it, you'll clearly have broken your workflow.</p>
+
+
+
+<a name="494948651"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494948651" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494948651">(Jan 21 2025 at 01:45)</a>:</h4>
+<p>I remember there was some pushback, but this is one of the reasons I think we should not do symlinks for version switching of the <code>roc</code> executable itself, and instead it should update itself in-place</p>
+
+
+
+<a name="494948683"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494948683" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494948683">(Jan 21 2025 at 01:45)</a>:</h4>
+<p>if it does that, then the downloads are actually just cache in case you want to switch back to that version, and there's no problem with deleting the cache dir</p>
+
+
+
+<a name="494948837"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494948837" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494948837">(Jan 21 2025 at 01:46)</a>:</h4>
+<p>I think ~/.local/bin/roc. At least that where I’d move it if it defaults to someplace else</p>
+
+
+
+<a name="494948952"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494948952" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494948952">(Jan 21 2025 at 01:47)</a>:</h4>
+<p>I have my path setup to make anything put there to work right away , or after a hash -r</p>
+
+
+
+<a name="494950123"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494950123" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494950123">(Jan 21 2025 at 01:57)</a>:</h4>
+<p>I think XDG_STATE_DIR is where a <code>rocup</code> like tool would store compiler versions</p>
+
+
+
+<a name="494950128"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494950128" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494950128">(Jan 21 2025 at 01:57)</a>:</h4>
+<p>And symlink from there</p>
+
+
+
+<a name="494954541"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494954541" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494954541">(Jan 21 2025 at 02:38)</a>:</h4>
+<p>yeah <span aria-label="point up" class="emoji emoji-1f446" role="img" title="point up">:point_up:</span> is what I think we shouldn't do <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="494960443"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494960443" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494960443">(Jan 21 2025 at 03:31)</a>:</h4>
+<p>It's unusual to have the compiler also be the install tool, but the idea of having a single binary for literally everything is just MAGICAL</p>
+
+
+
+<a name="494960478"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494960478" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494960478">(Jan 21 2025 at 03:31)</a>:</h4>
+<p>So yeah, symlinks are only needed if we can't get that working</p>
+
+
+
+<a name="494960547"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494960547" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494960547">(Jan 21 2025 at 03:32)</a>:</h4>
+<p>Otherwise, Richard's plan is just objectively better in my eyes</p>
+
+
+
+<a name="494963370"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963370" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963370">(Jan 21 2025 at 03:56)</a>:</h4>
+<p>Would we ever want to allow different projects to pin different versions of roc?</p>
+
+
+
+<a name="494963419"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963419" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963419">(Jan 21 2025 at 03:56)</a>:</h4>
+<p>The plan is to allow configuring the version at the top of your main.roc</p>
+
+
+
+<a name="494963421"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963421" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963421">(Jan 21 2025 at 03:56)</a>:</h4>
+<p>I think that’s something that has happened and literally every other program language community. It’s not obvious to be why roc would not also want to support that.</p>
+
+
+
+<a name="494963447"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963447" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963447">(Jan 21 2025 at 03:57)</a>:</h4>
+<p>The language version and compiler version are two different things though</p>
+
+
+
+<a name="494963462"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963462" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963462">(Jan 21 2025 at 03:57)</a>:</h4>
+<p>Hmmm</p>
+
+
+
+<a name="494963469"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963469" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963469">(Jan 21 2025 at 03:57)</a>:</h4>
+<p>It may be important to pin compiler version.</p>
+
+
+
+<a name="494963488"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963488" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963488">(Jan 21 2025 at 03:57)</a>:</h4>
+<p>(Not sure)</p>
+
+
+
+<a name="494963539"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963539" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963539">(Jan 21 2025 at 03:57)</a>:</h4>
+<p>Could you give an example where a properly semvered language version couldn't do that?</p>
+
+
+
+<a name="494963597"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963597" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963597">(Jan 21 2025 at 03:58)</a>:</h4>
+<p>I'm not sure what the difference is between a compiler and a lang version</p>
+
+
+
+<a name="494963778"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963778" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963778">(Jan 21 2025 at 03:59)</a>:</h4>
+<p>If I were developing a big app I deploy to production, I'd sure as hell want to pin the exact compiler version</p>
+
+
+
+<a name="494963867"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963867" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963867">(Jan 21 2025 at 04:00)</a>:</h4>
+<p>Too much risk of uncontrolled compiler bugs causing havoc</p>
+
+
+
+<a name="494963905"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494963905" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494963905">(Jan 21 2025 at 04:00)</a>:</h4>
+<p>Better to have compiler upgrades be like any other commit that you can revert</p>
+
+
+
+<a name="494964406"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494964406" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494964406">(Jan 21 2025 at 04:05)</a>:</h4>
+<p>Rust only does a semver, seems to work okay for AWS</p>
+
+
+
+<a name="494964436"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494964436" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494964436">(Jan 21 2025 at 04:05)</a>:</h4>
+<p>Because that pins a single compiler version for their release schedule</p>
+
+
+
+<a name="494964479"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494964479" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494964479">(Jan 21 2025 at 04:06)</a>:</h4>
+<p>At my company we pin an exact nightly version</p>
+
+
+
+<a name="494964494"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494964494" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494964494">(Jan 21 2025 at 04:06)</a>:</h4>
+<p>I suppose that may be an artifact of being stuck on nightly</p>
+
+
+
+<a name="494964520"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494964520" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494964520">(Jan 21 2025 at 04:06)</a>:</h4>
+<p>That pins a more specific set of features than would be available with the "every six weeks" release</p>
+
+
+
+<a name="494964603"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494964603" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494964603">(Jan 21 2025 at 04:07)</a>:</h4>
+<p>And also a more specific set of bugs. There have definitely been times when we had to choose a different version to pin because our release pipeline picked up things that turned out to be compiler bugs</p>
+
+
+
+<a name="494964608"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494964608" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494964608">(Jan 21 2025 at 04:07)</a>:</h4>
+<p>But it's not like you could get a different compiler with the same semver</p>
+
+
+
+<a name="494964624"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494964624" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494964624">(Jan 21 2025 at 04:07)</a>:</h4>
+<p>Yeah, that's fair</p>
+
+
+
+<a name="494967406"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494967406" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494967406">(Jan 21 2025 at 04:35)</a>:</h4>
+<p>Even roc pins rust to an exact version despite semver suggesting we could use a newer version</p>
+
+
+
+<a name="494967413"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494967413" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494967413">(Jan 21 2025 at 04:35)</a>:</h4>
+<p>I think it is an exceptionally common use case</p>
+
+
+
+<a name="494967701"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494967701" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494967701">(Jan 21 2025 at 04:38)</a>:</h4>
+<p>Then we can just allow setting a commit hash at the top of the file or something</p>
+
+
+
+<a name="494967740"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494967740" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494967740">(Jan 21 2025 at 04:38)</a>:</h4>
+<p>The version at the top should be pointable at any release we have in GitHub releases</p>
+
+
+
+<a name="494967793"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494967793" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494967793">(Jan 21 2025 at 04:39)</a>:</h4>
+<p>I was assuming that we'd make all of those different semvers (including nighties, somehow)</p>
+
+
+
+<a name="494967804"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494967804" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494967804">(Jan 21 2025 at 04:39)</a>:</h4>
+<p>If that's not the case, then semver doesn't cut it, sure</p>
+
+
+
+<a name="494969132"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494969132" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494969132">(Jan 21 2025 at 04:53)</a>:</h4>
+<p>one of the things in the design doc in <a class="stream-topic" data-stream-id="304641" href="/#narrow/channel/304641-ideas/topic/compiler.20version.20management">#ideas &gt; compiler version management</a> is that you can pass a CLI flag to have <code>roc</code> run a different version of <code>roc</code> from your cached downloads (after downloading it first if necessary)</p>
+
+
+
+<a name="494969144"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494969144" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494969144">(Jan 21 2025 at 04:54)</a>:</h4>
+<p>and also the same thing can be done in a <code>.roc</code> file</p>
+
+
+
+<a name="494969206"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494969206" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494969206">(Jan 21 2025 at 04:54)</a>:</h4>
+<p>so no symlinking needed for that use case either! <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="494970444"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494970444" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494970444">(Jan 21 2025 at 05:06)</a>:</h4>
+<p>Interesting. So roc still auto updates to the lastest version, but it can run old version from the cache.</p>
+
+
+
+<a name="494972197"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/494972197" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#494972197">(Jan 21 2025 at 05:28)</a>:</h4>
+<p>well I'd want the update to be manual/opt-in, but yeah</p>
+
+
+
+<a name="495058074"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495058074" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495058074">(Jan 21 2025 at 14:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29/near/494954541">said</a>:</p>
+<blockquote>
+<p>yeah <span aria-label="point up" class="emoji emoji-1f446" role="img" title="point up">:point_up:</span> is what I think we shouldn't do <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+</blockquote>
+<p>This is a pretty common pattern for tooling.  And I've seen (in my own company) the "we'll defer to a different global version from a local version" fall on it's face pretty terribly.  Now maybe I need to re-read this entire thread top to bottom to see what the fears are with symlinking for this use case (I'm sure if you are making the argument, it's well reasoned)</p>
+
+
+
+<a name="495061048"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495061048" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495061048">(Jan 21 2025 at 14:16)</a>:</h4>
+<p><a class="stream-topic" data-stream-id="304641" href="/#narrow/channel/304641-ideas/topic/compiler.20version.20management">#ideas &gt; compiler version management</a> is the most relevant thread on this topic! <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="495078067"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495078067" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495078067">(Jan 21 2025 at 15:09)</a>:</h4>
+<p>So the argument is "we want Roc to only require a single executable download (directly by the user) for it to run Roc apps targeting any version"?</p>
+
+
+
+<a name="495078674"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495078674" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495078674">(Jan 21 2025 at 15:11)</a>:</h4>
+<p>If so, then I agree that this makes sense.  I've just never seen this work out as well as imagined here.  But maybe because those tools were written in Javascript - and most of the issue have more to do with issues with node module resolution than the concept itself.  As long as args, pipes, and errors are linked up correctly and the user has final discretion over changes to the filesystem, I guess it should be fine.</p>
+
+
+
+<a name="495079093"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495079093" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495079093">(Jan 21 2025 at 15:13)</a>:</h4>
+<p>Do you know of another language toolchain that works like this?  This is like <code>rustup</code>, <code>cargo</code>, and <code>rustc</code> in a single executable.</p>
+
+
+
+<a name="495089022"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495089022" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495089022">(Jan 21 2025 at 15:56)</a>:</h4>
+<p>I don't know of any toolchain that works like this</p>
+
+
+
+<a name="495089137"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495089137" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495089137">(Jan 21 2025 at 15:56)</a>:</h4>
+<p>but I don't think there are any technical barrier to it, just one of those "nobody has done it until someone is the first to do it" things <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="495095022"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495095022" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495095022">(Jan 21 2025 at 16:21)</a>:</h4>
+<p>Awesome. That’s Roc innovation !</p>
+
+
+
+<a name="495095194"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495095194" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495095194">(Jan 21 2025 at 16:22)</a>:</h4>
+<p>Now all we need to have a “version” of Roc <span aria-label="wink" class="emoji emoji-1f609" role="img" title="wink">:wink:</span></p>
+
+
+
+<a name="495098616"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495098616" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495098616">(Jan 21 2025 at 16:37)</a>:</h4>
+<p>yeah, as noted in the doc, I'd like to get this in place before 0.1.0 because that way in the future you can use it to switch your current <code>roc</code> all the way back to 0.1.0 without getting stuck and being able to go forward again</p>
+
+
+
+<a name="495113749"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495113749" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495113749">(Jan 21 2025 at 17:53)</a>:</h4>
+<p>Are we going to have a strategy for compiler commit SHAs/tags as well?  And local dev?  I guess I can just try to read through all of this and the other thread when I’m done with work</p>
+
+
+
+<a name="495114763"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495114763" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495114763">(Jan 21 2025 at 17:59)</a>:</h4>
+<p>I see the former in there, but not the latter.  Obviously that is an edge case for compiler devs mostly</p>
+
+
+
+<a name="495122693"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/495122693" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#495122693">(Jan 21 2025 at 18:46)</a>:</h4>
+<p>I mentioned nightlies in the doc</p>
+
+
+
+<a name="528578646"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/528578646" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#528578646">(Jul 14 2025 at 03:22)</a>:</h4>
+<p>A few comments on caching:</p>
+<ol>
+<li>Why do we default to <code> /Users/bren077s/Library/Caches/roc</code> instead of <code>~/.cache</code>? I don't think I have ever seen cli tools do that. Super weird to me.</li>
+<li>I don't have time to fix this now, but the cache does not clean up resource properly. If we load a file from the cache, we will then still try to deinit like normal This leads to calling free on a pointer that was not allocate. We need to properly cleanup mmaps and what not.</li>
+<li>Even if we fail to compiler a file and it has tons of errors we still cache it. This is maybe fine, but at a minimum, we also need to cache all the errors. Currently the first call to <code>roc check</code> prints all the errors and caches. The second just loads from cache and prints no errors.</li>
+</ol>
+
+
+
+<a name="528582985"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/528582985" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#528582985">(Jul 14 2025 at 04:34)</a>:</h4>
+<p>All good points. The current design needs some love - but it's a good start <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<a name="528668677"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Caching%20strategy%20for%20Roc%20%28including%20canonicalization%29/near/528668677" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Caching.20strategy.20for.20Roc.20.28including.20canonicalization.29.html#528668677">(Jul 14 2025 at 13:56)</a>:</h4>
+<p>Oh yeah, of course....just want to make sure to make sure to share the issues before I forget about them</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

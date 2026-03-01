@@ -1,0 +1,262 @@
+<html>
+<head><meta charset="utf-8"><title>setjmp / longjmp &amp; the dev backend · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html">setjmp / longjmp &amp; the dev backend</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="377638371"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377638371" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377638371">(Jul 22 2023 at 16:11)</a>:</h4>
+<p>it looks like setjmp/longjmp is very simple actually</p>
+<div class="codehilite" data-code-language="C"><pre><span></span><code><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;stdlib.h&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;stdio.h&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;setjmp.h&gt;</span>
+
+<span class="kt">int</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kt">jmp_buf</span><span class="w"> </span><span class="n">env</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="p">;</span>
+
+<span class="w">  </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">setjmp</span><span class="p">(</span><span class="n">env</span><span class="p">);</span>
+<span class="w">  </span><span class="n">printf</span><span class="p">(</span><span class="s">"i = %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">);</span>
+
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="n">exit</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+
+<span class="w">  </span><span class="n">longjmp</span><span class="p">(</span><span class="n">env</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>then we get the following (relevant) assembly </p>
+<div class="codehilite"><pre><span></span><code>0000000000201e20 &lt;main&gt;:
+  201e20:   55                      push   rbp
+  201e21:   48 89 e5                mov    rbp,rsp
+  201e24:   53                      push   rbx
+  201e25:   48 81 ec c8 00 00 00    sub    rsp,0xc8
+  201e2c:   48 8d bd 30 ff ff ff    lea    rdi,[rbp-0xd0]
+  201e33:   e8 48 05 00 00          call   202380 &lt;__setjmp&gt;
+  201e38:   89 c3                   mov    ebx,eax
+  201e3a:   48 8d 3d 8f e3 ff ff    lea    rdi,[rip+0xffffffffffffe38f]        # 2001d0 &lt;xdigits-0xb0&gt;
+  201e41:   31 c0                   xor    eax,eax
+  201e43:   89 de                   mov    esi,ebx
+  201e45:   e8 61 05 00 00          call   2023ab &lt;printf&gt;
+  201e4a:   85 db                   test   ebx,ebx
+  201e4c:   75 16                   jne    201e64 &lt;main+0x44&gt;
+  201e4e:   48 8d bd 30 ff ff ff    lea    rdi,[rbp-0xd0]
+  201e55:   be 02 00 00 00          mov    esi,0x2
+  201e5a:   e8 f9 04 00 00          call   202358 &lt;_longjmp&gt;
+  201e5f:   67 0f b9 40 01          ud1    eax,DWORD PTR [eax+0x1]
+  201e64:   31 ff                   xor    edi,edi
+  201e66:   e8 be 04 00 00          call   202329 &lt;exit&gt;
+  201e6b:   67 0f b9 40 01          ud1    eax,DWORD PTR [eax+0x1]
+
+0000000000202380 &lt;__setjmp&gt;:
+  # note: the stack pointer is not updated here. most functions would do something like
+  # 2023ab:   48 81 ec d8 00 00 00    sub    rsp,0xd8
+
+  # save relevant registers. Apparently r8 ..= r11 are volatile and don&#39;t need to be stored?
+  202380:   48 89 1f                mov    QWORD PTR [rdi],rbx # store the env argument in the rdi register
+  202383:   48 89 6f 08             mov    QWORD PTR [rdi+0x8],rbp # base pointer
+  202387:   4c 89 67 10             mov    QWORD PTR [rdi+0x10],r12
+  20238b:   4c 89 6f 18             mov    QWORD PTR [rdi+0x18],r13
+  20238f:   4c 89 77 20             mov    QWORD PTR [rdi+0x20],r14
+  202393:   4c 89 7f 28             mov    QWORD PTR [rdi+0x28],r15
+  # the stack pointer after the jump. I&#39;m not totally sure yet why the +0x8 is there
+  # (or really why +8, and not +0x10 or anything else).
+  202397:   48 8d 54 24 08          lea    rdx,[rsp+0x8]
+  20239c:   48 89 57 30             mov    QWORD PTR [rdi+0x30],rdx
+  # the actual jump address 
+  2023a0:   48 8b 14 24             mov    rdx,QWORD PTR [rsp]
+  2023a4:   48 89 57 38             mov    QWORD PTR [rdi+0x38],rdx
+  # set the return value (rax register) to 0
+  2023a8:   31 c0                   xor    eax,eax
+  2023aa:   c3                      ret
+
+0000000000202358 &lt;_longjmp&gt;:
+  # again no stack pointer update
+
+  # I believe what this achieves is to always store something nonzero
+  # so that the setjmp call &quot;returns&quot; nonzero when it is jumped to
+  202358:   31 c0                   xor    eax,eax
+  20235a:   83 fe 01                cmp    esi,0x1
+  20235d:   11 f0                   adc    eax,esi
+  # edi stores the env. here we read back all of the registers
+  20235f:   48 8b 1f                mov    rbx,QWORD PTR [rdi]
+  202362:   48 8b 6f 08             mov    rbp,QWORD PTR [rdi+0x8]
+  202366:   4c 8b 67 10             mov    r12,QWORD PTR [rdi+0x10]
+  20236a:   4c 8b 6f 18             mov    r13,QWORD PTR [rdi+0x18]
+  20236e:   4c 8b 77 20             mov    r14,QWORD PTR [rdi+0x20]
+  202372:   4c 8b 7f 28             mov    r15,QWORD PTR [rdi+0x28]
+  202376:   48 8b 67 30             mov    rsp,QWORD PTR [rdi+0x30]
+  # jump to right after the original `setjmp` call.
+  20237a:   ff 67 38                jmp    QWORD PTR [rdi+0x38]
+</code></pre></div>
+
+<p>so, we just need a way to put that <code>jmp_buf env</code> in global memory, and then a way to retrieve that value when a longjmp is needed (i.e. in roc_panic)</p>
+
+
+
+<a name="377640678"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377640678" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377640678">(Jul 22 2023 at 16:23)</a>:</h4>
+<p>nice! <span aria-label="grinning" class="emoji emoji-1f600" role="img" title="grinning">:grinning:</span></p>
+
+
+
+<a name="377640778"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377640778" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377640778">(Jul 22 2023 at 16:24)</a>:</h4>
+<p>that would unblock using the dev backend in <code>roc repl</code> and <code>roc test</code>, right?</p>
+
+
+
+<a name="377640869"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377640869" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377640869">(Jul 22 2023 at 16:24)</a>:</h4>
+<p>it's a big step for sure</p>
+
+
+
+<a name="377640892"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377640892" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377640892">(Jul 22 2023 at 16:24)</a>:</h4>
+<p>we still need <code>map2</code> and some other builtins too</p>
+
+
+
+<a name="377652151"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377652151" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Qqwy / Marten <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377652151">(Jul 22 2023 at 17:28)</a>:</h4>
+<p>What is the plan for using <code>setjmp</code>/<code>longjmp</code>? Recover from a crash at the boundary with a host? <span aria-label="happy" class="emoji emoji-1f600" role="img" title="happy">:happy:</span></p>
+
+
+
+<a name="377657135"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377657135" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377657135">(Jul 22 2023 at 18:01)</a>:</h4>
+<p>basically</p>
+
+
+
+<a name="377657246"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377657246" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377657246">(Jul 22 2023 at 18:02)</a>:</h4>
+<p>for the repl and tests, for the dev backend we need something to return control to the host when a roc_panic happens</p>
+
+
+
+<a name="377685526"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377685526" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Qqwy / Marten <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377685526">(Jul 22 2023 at 21:54)</a>:</h4>
+<p>By the way</p>
+<div class="codehilite"><pre><span></span><code>  i = setjmp(env);
+</code></pre></div>
+<p>Though widely supported, this is undefined behaviour.<br>
+Officially you're only allowed to immediately branch based on the return value (or fully ignore it), but not to store it anywhere. (<a href="https://en.cppreference.com/w/c/program/setjmp">source</a>) So if there is any data we want to keep between the <code>longjump</code> and the <code>setjmp</code> we'd need to set aside one more global variable for it.</p>
+<p>Not sure whether we care, though <span aria-label="angel" class="emoji emoji-1f47c" role="img" title="angel">:angel:</span> . I am not aware of any C targets where this does not work <em>in practice</em>, even though strictly speaking it is UB.</p>
+
+
+
+<a name="377821428"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377821428" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377821428">(Jul 23 2023 at 12:25)</a>:</h4>
+<p>ah, yes. I knew this, but just copied an example from the internet (it was from a university course, too). But luckily, there is no UB in assembly</p>
+
+
+
+<a name="377822485"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/377822485" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Qqwy / Marten <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#377822485">(Jul 23 2023 at 12:30)</a>:</h4>
+<blockquote>
+<p>But luckily, there is no UB in assembly</p>
+</blockquote>
+<p><span aria-label="100" class="emoji emoji-1f4af" role="img" title="100">:100:</span> !!</p>
+
+
+
+<a name="378680789"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/378680789" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#378680789">(Jul 26 2023 at 06:41)</a>:</h4>
+<p>I've been working through the errors to try and get zig builtins tests working on Windows and I've hit a bit of a snag I think with setjmp/longjmp. It's not entirely related to this thread, but posting here as it may be related. </p>
+<p>Basically I'm currently getting the following error and not sure how to resolve this. </p>
+<div class="codehilite"><pre><span></span><code>lld-link: error: undefined symbol: setjmp
+&gt;&gt;&gt; referenced by C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\src\main.zig:242
+&gt;&gt;&gt;               src\zig-cache\o\e65f97141b821227497b14c04e9fd551\test.obj:(__roc_force_setjmp)
+
+lld-link: error: undefined symbol: longjmp
+&gt;&gt;&gt; referenced by C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\src\main.zig:245
+&gt;&gt;&gt;               src\zig-cache\o\e65f97141b821227497b14c04e9fd551\test.obj:(__roc_force_longjmp)
+error: LLDReportedFailure
+</code></pre></div>
+<p>The related code is in <code>crates\compiler\builtins\bitcode\src\main.zig</code> I think with </p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="c1">// Utils continued - SJLJ</span>
+<span class="c1">// For tests (in particular test_gen), roc_panic is implemented in terms of</span>
+<span class="c1">// setjmp/longjmp. LLVM is unable to generate code for longjmp on AArch64 (https://github.com/roc-lang/roc/issues/2965),</span>
+<span class="c1">// so instead we ask Zig to please provide implementations for us, which is does</span>
+<span class="c1">// (seemingly via musl).</span>
+<span class="kr">pub</span><span class="w"> </span><span class="kr">extern</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">setjmp</span><span class="p">([</span><span class="o">*</span><span class="n">c</span><span class="p">]</span><span class="kt">c_int</span><span class="p">)</span><span class="w"> </span><span class="kt">c_int</span><span class="p">;</span>
+<span class="kr">pub</span><span class="w"> </span><span class="kr">extern</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">longjmp</span><span class="p">([</span><span class="o">*</span><span class="n">c</span><span class="p">]</span><span class="kt">c_int</span><span class="p">,</span><span class="w"> </span><span class="kt">c_int</span><span class="p">)</span><span class="w"> </span><span class="kt">noreturn</span><span class="p">;</span>
+<span class="kr">pub</span><span class="w"> </span><span class="kr">extern</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">_setjmp</span><span class="p">([</span><span class="o">*</span><span class="n">c</span><span class="p">]</span><span class="kt">c_int</span><span class="p">)</span><span class="w"> </span><span class="kt">c_int</span><span class="p">;</span>
+<span class="kr">pub</span><span class="w"> </span><span class="kr">extern</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">_longjmp</span><span class="p">([</span><span class="o">*</span><span class="n">c</span><span class="p">]</span><span class="kt">c_int</span><span class="p">,</span><span class="w"> </span><span class="kt">c_int</span><span class="p">)</span><span class="w"> </span><span class="kt">noreturn</span><span class="p">;</span>
+<span class="kr">pub</span><span class="w"> </span><span class="kr">extern</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">sigsetjmp</span><span class="p">([</span><span class="o">*</span><span class="n">c</span><span class="p">]</span><span class="kt">c_int</span><span class="p">,</span><span class="w"> </span><span class="kt">c_int</span><span class="p">)</span><span class="w"> </span><span class="kt">c_int</span><span class="p">;</span>
+<span class="kr">pub</span><span class="w"> </span><span class="kr">extern</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">siglongjmp</span><span class="p">([</span><span class="o">*</span><span class="n">c</span><span class="p">]</span><span class="kt">c_int</span><span class="p">,</span><span class="w"> </span><span class="kt">c_int</span><span class="p">)</span><span class="w"> </span><span class="kt">noreturn</span><span class="p">;</span>
+<span class="kr">pub</span><span class="w"> </span><span class="kr">extern</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">longjmperror</span><span class="p">()</span><span class="w"> </span><span class="kt">void</span><span class="p">;</span>
+
+<span class="c1">// Zig won't expose the externs (and hence link correctly) unless we force them to be used.</span>
+<span class="k">fn</span><span class="w"> </span><span class="n">__roc_force_setjmp</span><span class="p">(</span><span class="n">it</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="o">*</span><span class="n">c</span><span class="p">]</span><span class="kt">c_int</span><span class="p">)</span><span class="w"> </span><span class="n">callconv</span><span class="p">(.</span><span class="n">C</span><span class="p">)</span><span class="w"> </span><span class="kt">c_int</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">setjmp</span><span class="p">(</span><span class="n">it</span><span class="p">);</span>
+<span class="p">}</span>
+<span class="k">fn</span><span class="w"> </span><span class="n">__roc_force_longjmp</span><span class="p">(</span><span class="n">a0</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="o">*</span><span class="n">c</span><span class="p">]</span><span class="kt">c_int</span><span class="p">,</span><span class="w"> </span><span class="n">a1</span><span class="o">:</span><span class="w"> </span><span class="kt">c_int</span><span class="p">)</span><span class="w"> </span><span class="n">callconv</span><span class="p">(.</span><span class="n">C</span><span class="p">)</span><span class="w"> </span><span class="kt">noreturn</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">longjmp</span><span class="p">(</span><span class="n">a0</span><span class="p">,</span><span class="w"> </span><span class="n">a1</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>My question, how do I ensure zig links in something with these on Windows?</p>
+
+
+
+<a name="378687546"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/378687546" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#378687546">(Jul 26 2023 at 07:12)</a>:</h4>
+<p>Figured a workaround that seems to work, all the tests pass now <span aria-label="tada" class="emoji emoji-1f389" role="img" title="tada">:tada:</span> </p>
+<div class="codehilite"><pre><span></span><code>fn roc_setjmp_windows_stub(it: [*c]c_int) callconv(.C) c_int {
+    _ = it;
+    return 0;
+}
+
+fn roc_longjmp_windows_stub(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
+    _ = a0;
+    _ = a1;
+    std.os.exit(1);
+}
+
+comptime {
+    if (builtin.os.tag == .windows) {
+        @export(roc_longjmp_windows_stub, .{ .name = &quot;longjmp&quot;, .linkage = .Strong });
+        @export(roc_setjmp_windows_stub, .{ .name = &quot;setjmp&quot;, .linkage = .Strong });
+    }
+}
+</code></pre></div>
+
+
+
+<a name="378947956"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/378947956" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#378947956">(Jul 26 2023 at 21:17)</a>:</h4>
+<p>I'm getting close with this <a href="https://github.com/roc-lang/roc/pull/5699">https://github.com/roc-lang/roc/pull/5699</a></p>
+
+
+
+<a name="378947988"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/378947988" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#378947988">(Jul 26 2023 at 21:17)</a>:</h4>
+<p>on x86_64 linux, anyway</p>
+
+
+
+<a name="378975019"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/378975019" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#378975019">(Jul 27 2023 at 00:58)</a>:</h4>
+<p><span class="user-mention" data-user-id="281543">@Folkert de Vries</span> is your work related to Windows at all? I'm just wondering if there is anything I can/should do to assist here.</p>
+
+
+
+<a name="379032273"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/379032273" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#379032273">(Jul 27 2023 at 07:15)</a>:</h4>
+<p>eventually, maybe. but I suspect there are other dev backend tests that fail too right now</p>
+
+
+
+<a name="379032629"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/setjmp%20/%20longjmp%20%26%20the%20dev%20backend/near/379032629" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/setjmp.20.2F.20longjmp.20.26.20the.20dev.20backend.html#379032629">(Jul 27 2023 at 07:16)</a>:</h4>
+<p>maybe try <code>cargo nextest-gen-dev --no-fail-fast</code> and see what happens on main today</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

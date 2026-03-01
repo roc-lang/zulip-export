@@ -1,0 +1,130 @@
+<html>
+<head><meta charset="utf-8"><title>Zig allocator · platform development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/index.html">platform development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html">Zig allocator</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="408428688"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408428688" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408428688">(Dec 17 2023 at 09:54)</a>:</h4>
+<p>When I learned zig (to write roc platforms) I learned about the different zig-allocators. So I think it is a pity, that the roc-zig-platforms do not use them, and instead use <code>extern fn malloc</code>.</p>
+<p>For my AoC platform, I tried to use the the zig GeneralPurposeAllocatorr: <a href="https://github.com/ostcar/aoc2023/blob/f657d50aa2b393b5dc26b49baeb6f740ef405908/platform/host.zig#L30-L50">https://github.com/ostcar/aoc2023/blob/f657d50aa2b393b5dc26b49baeb6f740ef405908/platform/host.zig#L30-L50</a></p>
+<p>This worked fine, until I had to free memory for Day 16 (my solution for day 16 seems very memory inefficient).</p>
+<p>How would I write <code>roc_dealloc</code> when roc does not call it with a <code>size</code> argument? Must the platform save the size of every allocation? Is there a trick, how to do this? My native solution would be, to use a global hashmap. But this seems inefficient and would need a lock, if the platform runs in parallel.</p>
+<p>Why does <code>roc_realloc</code> has the argument <code>old_size</code>? If it is the responsibility of the platform to save the size, then it could also be used for <code>roc_realloc</code>.</p>
+<p>What about the <code>alignment</code> argument? It is ignored in all examples and it does not seem to be needed. In what situation should the platform use it?</p>
+
+
+
+<a name="408434460"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408434460" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408434460">(Dec 17 2023 at 11:20)</a>:</h4>
+<blockquote>
+<p>How would I write roc_dealloc when roc does not call it with a size argument?</p>
+</blockquote>
+<p>Yeah the current API is really annoying to use with anything other than C <code>malloc</code> and <code>free</code> as the implementation.<br>
+The only way I know to deal with it is to slightly expand each allocation so that you can store the size just in front of the allocated bytes. It's definitely a pity that the definition of <code>roc_dealloc</code> forces this. I see this as a design mistake that we haven't fixed. I'm not aware of any strong reason to do it this way.<br>
+If we added a <code>size</code> argument, we could make some compiler changes to pass it in from compiled Roc. It would also require changes to every platform that currently exists.</p>
+
+
+
+<a name="408434862"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408434862" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408434862">(Dec 17 2023 at 11:27)</a>:</h4>
+<blockquote>
+<p>Why does roc_realloc has the argument old_size? If it is the responsibility of the platform to save the size, then it could also be used for roc_realloc.</p>
+</blockquote>
+<p>Good point, I have no idea. As far as I can tell this is an old decision and undoing it involves a lot of friction because every single platform would have to be redone. I know there are other changes planned to the platform API (changing Effects into a sort of state machine). If we are making other changes then we'd definitely want to batch them together so that there's only one upgrade to do.</p>
+
+
+
+<a name="408435085"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408435085" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408435085">(Dec 17 2023 at 11:31)</a>:</h4>
+<blockquote>
+<p>What about the alignment argument? It is ignored in all examples and it does not seem to be needed. In what situation should the platform use it?</p>
+</blockquote>
+<p>Yeah I think in theory every <code>roc_alloc</code> should ensure that the allocated memory has the requested alignment. The compiler is careful to ensure that Roc code supplies the right value. But nobody has written a platform yet that uses this argument. As far as I can tell, this is basically a bug in all our platforms that has been copied and pasted lots of times. But in practice maybe <code>malloc</code> already aligns to 16 bytes or something and we never ask for more alignment than that so everything is OK? That might be different in a custom allocator.</p>
+
+
+
+<a name="408441165"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408441165" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408441165">(Dec 17 2023 at 13:12)</a>:</h4>
+<p>we should be using aligned_alloc over malloc in examples but aren't <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="408441196"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408441196" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408441196">(Dec 17 2023 at 13:13)</a>:</h4>
+<p>in C examples at least; in Rust ones we should be using Rust's global allocator, but that requires knowing the size when we dealloc</p>
+
+
+
+<a name="408441208"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408441208" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408441208">(Dec 17 2023 at 13:13)</a>:</h4>
+<p>we want to pass that but currently we can't because seamless slices don't know it</p>
+
+
+
+<a name="408441296"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408441296" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408441296">(Dec 17 2023 at 13:14)</a>:</h4>
+<p>there's a project to change that, but it requires changing how every <code>List</code> and <code>Str</code> are represented in memory - <span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span> knows more</p>
+
+
+
+<a name="408450849"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408450849" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408450849">(Dec 17 2023 at 15:36)</a>:</h4>
+<blockquote>
+<p>But in practice maybe <code>malloc</code> already aligns to 16 bytes or something and we never ask for more alignment than that so everything is OK? That might be different in a custom allocator.</p>
+</blockquote>
+<p>100% this. That so why roc alignment never matters currently.</p>
+
+
+
+<a name="408451595"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408451595" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408451595">(Dec 17 2023 at 15:49)</a>:</h4>
+<p>As for passing size to dealloc. One simple solution would be to store an extra usize and the heap for every list and string. This is quite wasteful, especially given many allocators already store this information internal (that is why malloc doesn't need the information for example).</p>
+<p>From the last chat Richard and I had about this, we probably want roughly this API:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span> <span class="nf">roc_alloc</span><span class="p">(</span><span class="n">alignment</span>: <span class="kt">u8</span><span class="p">,</span><span class="w"> </span><span class="n">size</span>: <span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="n">roc_tracked_sized</span>: <span class="kt">bool</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="o">*</span><span class="n">void</span><span class="p">;</span>
+
+<span class="k">fn</span> <span class="nf">roc_realloc</span><span class="p">(</span><span class="n">ptr</span>: <span class="o">*</span><span class="n">void</span><span class="p">,</span><span class="w"> </span><span class="n">alignment</span>: <span class="kt">u8</span><span class="p">,</span><span class="w"> </span><span class="n">requested_size</span>: <span class="kt">usize</span><span class="p">,</span><span class="w"> </span><span class="n">old_size</span>: <span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span>-&gt; <span class="o">*</span><span class="n">void</span><span class="p">;</span>
+
+<span class="k">fn</span> <span class="nf">roc_dealloc</span><span class="p">(</span><span class="n">ptr</span>: <span class="o">*</span><span class="n">void</span><span class="p">,</span><span class="w"> </span><span class="n">size</span>: <span class="nb">Option</span><span class="o">&lt;</span><span class="kt">usize</span><span class="o">&gt;</span><span class="p">);</span>
+</code></pre></div>
+<p>For all types that have a size that roc can determine at compile time (records, tags, etc), roc will pass the size in. For types with a size that we can't determine at compile time (list, str), roc won't pass in a size. Most importantly with this, roc will let the platform know this info. As such, if the platform uses malloc, which already records the size, the platform can just ignore this info. If the platform uses some other for of allocator that needs to know the size, it is the platforms job to store the size somewhere (probably right before the roc allocation) when roc can't know the size at compile time.</p>
+
+
+
+<a name="408451610"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408451610" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408451610">(Dec 17 2023 at 15:49)</a>:</h4>
+<p>This minimizes repeated storage of the allocation size overall.</p>
+
+
+
+<a name="408452032"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408452032" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408452032">(Dec 17 2023 at 15:57)</a>:</h4>
+<p>Otherwise, every single list and string would require and extra usize no matter the allocator due to seamless slices not knowing the original capacity of the allocation.</p>
+
+
+
+<a name="408480928"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408480928" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408480928">(Dec 17 2023 at 21:12)</a>:</h4>
+<p>also note that in a future where Roc supports simd, 16 may not be enough anymore! So malloc happens to always work today, but may stop working in the future</p>
+
+
+
+<a name="408483093"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/408483093" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#408483093">(Dec 17 2023 at 21:50)</a>:</h4>
+<p>Very true</p>
+
+
+
+<a name="409563570"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Zig%20allocator/near/409563570" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Zig.20allocator.html#409563570">(Dec 22 2023 at 11:02)</a>:</h4>
+<p>This is wonderfully convenient, I came here to ask exactly this question after hitting this same issue trying to get a custom allocator to work for an embedded rust platform</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

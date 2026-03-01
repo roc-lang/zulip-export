@@ -1,0 +1,359 @@
+<html>
+<head><meta charset="utf-8"><title>Pizza and parens · contributing · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/index.html">contributing</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html">Pizza and parens</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="361745222"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361745222" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361745222">(May 28 2023 at 12:31)</a>:</h4>
+<p>I think I need some help with <a href="https://github.com/roc-lang/roc/issues/5379">Pipes ignore parenthesis wrapping an application</a></p>
+<p>I could blindly fix the exact problem outlined in the issue but the fix is not correct (I'll explain why below) and the biggest problem I'm struggling with is I don't know how to debug the compiler.</p>
+<p>All the time I encounter <a href="#narrow/stream/316715-contributing/topic/Build.20Issues/near/360565363">the problem</a>, probably because the changes I make lead to infinite loops but I don't know how to check it. I also added <code>println</code> to the <code>can</code> module to log intermediate values but it logs std which is very distracting. Ah, and I use <code>repl</code> to quickly test/experiment with my assumptions.</p>
+<hr>
+<p>Now regarding the issue itself. In the case of pizza, both <a href="https://github.com/roc-lang/roc/blob/ec21f1982611915bfbfffb4b89eece4cdc043ebd/crates/compiler/can/src/operator.rs#LL472C31-L472C31">desugaring for lefts</a> and <a href="https://github.com/roc-lang/roc/blob/ec21f1982611915bfbfffb4b89eece4cdc043ebd/crates/compiler/can/src/operator.rs#L479">right</a> matter. Both of the following examples should be invalid (because parens produce partial application which is not allowed):</p>
+<div class="codehilite"><pre><span></span><code>2 |&gt; (Num.sub 3) # removing desugar from the `right` helps in this case...
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>2 |&gt; (Num.sub 3) |&gt; Num.sub 3 # but in this case, desugar is applied to the `left`, but removing it breaks many other places
+</code></pre></div>
+<p>The idea is to match <code>loc_op</code> and desugar based on it, but it feels incorrect because it makes the pizza a special case.</p>
+
+
+
+<a name="361757614"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361757614" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361757614">(May 28 2023 at 13:39)</a>:</h4>
+<p>hm, this is interesting!</p>
+
+
+
+<a name="361757669"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361757669" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361757669">(May 28 2023 at 13:39)</a>:</h4>
+<p>an idea: what if we just didn't desugar parens? <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="361757923"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361757923" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361757923">(May 28 2023 at 13:41)</a>:</h4>
+<p>in other words, leave them in when we're doing the desugar pass in <code>operator.rs</code> and then <a href="https://github.com/roc-lang/roc/blob/7cabaecd6ec711371c24889445e9b3a00f7a528d/crates/compiler/can/src/expr.rs#L1399">later, in <code>can::expr</code></a>, remove them at the last minute (using the same strategy we currently do during desugaring)</p>
+
+
+
+<a name="361758135"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361758135" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361758135">(May 28 2023 at 13:42)</a>:</h4>
+<p>that way, when we're desugaring the pizza operator, we would see the parens and not treat it as a function call because <a href="https://github.com/roc-lang/roc/blob/ec21f1982611915bfbfffb4b89eece4cdc043ebd/crates/compiler/can/src/operator.rs#L32">https://github.com/roc-lang/roc/blob/ec21f1982611915bfbfffb4b89eece4cdc043ebd/crates/compiler/can/src/operator.rs#L32</a> wouldn't pass</p>
+
+
+
+<a name="361758171"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361758171" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361758171">(May 28 2023 at 13:42)</a>:</h4>
+<p>so it would take the <code>_ =&gt;</code> branch there and (I think) do what we want?</p>
+
+
+
+<a name="361761782"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361761782" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361761782">(May 28 2023 at 14:04)</a>:</h4>
+<p>With regards to debugging the compiler - when building/testing, you can use the environment variable <code>ROC_SKIP_SUBS_CACHE=1</code>, which will avoid building the std during compile time and hopefully give you better messages at runtime</p>
+
+
+
+<a name="361762066"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361762066" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361762066">(May 28 2023 at 14:06)</a>:</h4>
+<p>Actually I wonder, should <code>2 |&gt; (Num.sub 3)</code> be disallowed? Because there is only one way to interpret this, which is <code>Num.sub 2 3</code> (so it always breaks in to a call, you cannot claim a partial application)</p>
+
+
+
+<a name="361762224"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361762224" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361762224">(May 28 2023 at 14:07)</a>:</h4>
+<p>Another alternative to Richard's suggestion is to disallow parens around top-level expressions on the RHS and before LHS of a pipe. So <code>2 |&gt; (Num.sub 3)</code> is disallowed but e.g. <code> 2 |&gt; (if Bool.true then Num.add else Num.sub) 3</code> may be admitted.</p>
+
+
+
+<a name="361762528"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361762528" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361762528">(May 28 2023 at 14:09)</a>:</h4>
+<blockquote>
+<p>I wonder, should <code>2 |&gt; (Num.sub 3)</code> be disallowed? Because there is only one way to interpret this, which is <code>Num.sub 2 3</code> (so it always breaks in to a call, you cannot claim a partial application)</p>
+</blockquote>
+<p>I think it should be allowed, but should actually apply the function - e.g. I think this should be allowed, and should work:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">curriedSub</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">num1</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nf">\</span><span class="nv">num2</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Num</span><span class="nf">.</span><span class="nv">sub</span><span class="w"> </span><span class="nv">num1</span><span class="w"> </span><span class="nv">num2</span>
+
+<span class="nv">expect</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Num</span><span class="nf">.</span><span class="nv">sub</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="nf">==</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="p">(</span><span class="nv">curriedSub</span><span class="w"> </span><span class="mi">3</span><span class="p">)</span>
+</code></pre></div>
+
+
+
+<a name="361763712"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361763712" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361763712">(May 28 2023 at 14:16)</a>:</h4>
+<p><code>Num.sub</code> specifically isn't a curried function, so it shouldn't be allowed for that function, right?</p>
+
+
+
+<a name="361763850"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361763850" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361763850">(May 28 2023 at 14:17)</a>:</h4>
+<p>As in, the error should be that <code>Num.sub</code> didn't get enough arcs if you do <code>|&gt; (Num.sub 2)</code></p>
+
+
+
+<a name="361763896"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361763896" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361763896">(May 28 2023 at 14:17)</a>:</h4>
+<p>I'm saying I think the code I wrote there should be valid and the <code>expect</code> should pass</p>
+
+
+
+<a name="361763943"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361763943" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361763943">(May 28 2023 at 14:17)</a>:</h4>
+<p>in other words, that <code>x |&gt; (foo y)</code> should be allowed because <code>foo</code> could be curried</p>
+
+
+
+<a name="361764052"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361764052" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361764052">(May 28 2023 at 14:18)</a>:</h4>
+<p>and if <code>foo</code> is curried, then <code>x |&gt; foo y</code> should be a type mismatch because that desugars to <code>foo x y</code>, which is the wrong number of arguments to give <code>foo</code> if it's curried (since it should only be given 1 argument!)</p>
+
+
+
+<a name="361764851"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361764851" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361764851">(May 28 2023 at 14:23)</a>:</h4>
+<p>I see, I misunderstood - thanks!</p>
+
+
+
+<a name="361765114"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361765114" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361765114">(May 28 2023 at 14:25)</a>:</h4>
+<p>What if we passed a precedence level while parsing expressions in a pipe and increased the level each time you go under a parenthesis? Then the top level <code>|&gt; Num.sub 3</code> has Apply(Num.sub, 3) at precedence-level 0, and <code>|&gt; (Num.sub 3)</code> has Apply(Num.sub, 3) at precedence-level 1. During desugaring, only expressions at the same precedence-level can be chained, or else they must be nested <code>Apply</code>s.</p>
+
+
+
+<a name="361767878"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361767878" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361767878">(May 28 2023 at 14:40)</a>:</h4>
+<p>hm, what would the difference be between that and the idea of deferring removing parens until after operator desugaring? <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="361772855"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361772855" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361772855">(May 28 2023 at 15:07)</a>:</h4>
+<p>I guess maybe not much?</p>
+
+
+
+<a name="361772950"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361772950" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361772950">(May 28 2023 at 15:08)</a>:</h4>
+<p>maybe just separation of concerns so we don’t have to keep parents around as semantic information?</p>
+
+
+
+<a name="361774259"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361774259" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361774259">(May 28 2023 at 15:17)</a>:</h4>
+<p>oh they're still not kept around</p>
+
+
+
+<a name="361774281"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361774281" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361774281">(May 28 2023 at 15:17)</a>:</h4>
+<p>it's just a question of whether they get removed before or after desugaring</p>
+
+
+
+<a name="361774299"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361774299" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361774299">(May 28 2023 at 15:17)</a>:</h4>
+<p>(desugaring operators I mean)</p>
+
+
+
+<a name="361774516"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361774516" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361774516">(May 28 2023 at 15:18)</a>:</h4>
+<p>right now it's:</p>
+<ul>
+<li>desugar operators and parens while still in parse AST mode</li>
+<li>convert parse AST to canonical IR</li>
+</ul>
+<p>and I think if we change this to the following, it would (hopefully!) solve the problem:</p>
+<ul>
+<li>desugar operators while still in parse AST mode, but leave parens</li>
+<li>convert parse AST to canonical IR, dropping any parens we encounter along the way</li>
+</ul>
+
+
+
+<a name="361774654"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361774654" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361774654">(May 28 2023 at 15:19)</a>:</h4>
+<p>the critical distinction being that during operator desugaring the parens are still there, so <code>|&gt;</code> sees a distinction between parenthesized and non-parenthesized expressions (whereas today it can't see a distinction bc they've already been removed by the in-progress desugaring)</p>
+
+
+
+<a name="361776476"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361776476" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361776476">(May 28 2023 at 15:30)</a>:</h4>
+<p>Btw, the result of <a href="https://github.com/roc-lang/roc/blob/ec21f1982611915bfbfffb4b89eece4cdc043ebd/crates/compiler/parse/src/expr.rs#L437">compiler/parse/src/expr.rs#parse_expr_final</a></p>
+<p>for this expr</p>
+<div class="codehilite"><pre><span></span><code>2 |&gt; (Num.sub 3) |&gt; Num.sub 3
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>BinOps([(@66-67 Num(&quot;2&quot;), @68-70 Pizza), (@72-81 ParensAround(Apply(@72-79 Var { module_name: &quot;Num&quot;, ident: &quot;sub&quot; }, [@80-81 Num(&quot;3&quot;)], Space)), @83-85 Pizza)], @86-95 Apply(@86-93 Var { module_name: &quot;Num&quot;, ident: &quot;sub&quot; }, [@94-95 Num(&quot;3&quot;)], Space))
+</code></pre></div>
+<p>and</p>
+<div class="codehilite"><pre><span></span><code>2 |&gt; (Num.sub 3)
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>BinOps([(@66-67 Num(&quot;2&quot;), @68-70 Pizza)], @72-81 ParensAround(Apply(@72-79 Var { module_name: &quot;Num&quot;, ident: &quot;sub&quot; }, [@80-81 Num(&quot;3&quot;)], Space)))
+</code></pre></div>
+<p>so parser doesn't remove parens. or do you mean something else?</p>
+
+
+
+<a name="361799550"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361799550" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361799550">(May 28 2023 at 18:05)</a>:</h4>
+<p>ah, yeah! So in <code>operator.rs</code> (the "operator desugaring step" - which takes a parse AST as its input and then ouputs a desugared parse AST), there are two places where we explicitly drop parens from the parse AST:</p>
+<ul>
+<li><a href="https://github.com/roc-lang/roc/blob/cf20c74eb9713543f9dd4bae9763a46ac5d102e3/crates/compiler/can/src/operator.rs#L291">https://github.com/roc-lang/roc/blob/cf20c74eb9713543f9dd4bae9763a46ac5d102e3/crates/compiler/can/src/operator.rs#L291</a></li>
+<li><a href="https://github.com/roc-lang/roc/blob/cf20c74eb9713543f9dd4bae9763a46ac5d102e3/crates/compiler/can/src/operator.rs#L385">https://github.com/roc-lang/roc/blob/cf20c74eb9713543f9dd4bae9763a46ac5d102e3/crates/compiler/can/src/operator.rs#L385</a></li>
+</ul>
+<p>so my first suggestion is that in these cases, we should change these (just the <code>ParensAround</code> cases - so they would need to be moved out into their own branches in the <code>match</code>, because <code>SpaceBefore</code> and <code>SpaceAfter</code> should continue to be handled the way they are today) and make it so that <code>ParensAround</code> desugars the sub-expression but then re-adds the <code>ParensAround</code>, so that we aren't actually dropping the <code>ParensAround</code> anymore.</p>
+
+
+
+<a name="361799651"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361799651" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361799651">(May 28 2023 at 18:06)</a>:</h4>
+<p>so if you do this, it will cause some things to break, because this desugaring step runs before we convert between parse AST and canonical IR</p>
+
+
+
+<a name="361799707"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361799707" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361799707">(May 28 2023 at 18:06)</a>:</h4>
+<p>and today, when we convert to canonical IR, we have a check that says "hey if we run into any parens, that must be a bug, because a previous step should have gotten rid of those" - <a href="https://github.com/roc-lang/roc/blob/7cabaecd6ec711371c24889445e9b3a00f7a528d/crates/compiler/can/src/expr.rs#L1399">https://github.com/roc-lang/roc/blob/7cabaecd6ec711371c24889445e9b3a00f7a528d/crates/compiler/can/src/expr.rs#L1399</a></p>
+
+
+
+<a name="361799765"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361799765" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361799765">(May 28 2023 at 18:07)</a>:</h4>
+<p>so we'd want to change <em>that</em> code to no longer throw an error, and instead silently discard the parens right there</p>
+
+
+
+<a name="361799788"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361799788" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361799788">(May 28 2023 at 18:07)</a>:</h4>
+<p>does that make sense? Happy to elaborate on any part of that!</p>
+
+
+
+<a name="361804408"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/361804408" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#361804408">(May 28 2023 at 18:42)</a>:</h4>
+<p>ah, now I see. makes sense. let me try</p>
+
+
+
+<a name="362200628"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/362200628" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#362200628">(May 30 2023 at 14:24)</a>:</h4>
+<p>A simple pr (but it solves the problem. somehow) <a href="https://github.com/roc-lang/roc/pull/5481">https://github.com/roc-lang/roc/pull/5481</a></p>
+
+
+
+<a name="367795860"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/367795860" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#367795860">(Jun 20 2023 at 04:23)</a>:</h4>
+<p>Just wondering <span class="user-mention" data-user-id="584248">@Kiryl Dziamura</span> , what is the status of this? Will it be submitted soon?</p>
+<p>Ran into it in something I am working on and would be quite convenient to take advantage of this change if it can be submitted soon.</p>
+
+
+
+<a name="368695867"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/368695867" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#368695867">(Jun 22 2023 at 21:14)</a>:</h4>
+<p>Every day I think about back to the issue, but unfortunately, last three weeks I hardly find time even for my primary job <span aria-label="confounded" class="emoji emoji-1f616" role="img" title="confounded">:confounded:</span><br>
+Having small child, fulltime job and passion for opensource contribution is a very fragile construction.<br>
+I apologise for the delay and lack of status update. Will find some time next week, and put the status here if I have any difficulties. If it's a blocker - feel free to fix it, it doesn't look difficult at all. I would be happy to review and learn something new.<br>
+(omg, it’s the monthly meeting in two days. time flies)</p>
+
+
+
+<a name="368702527"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/368702527" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#368702527">(Jun 22 2023 at 21:54)</a>:</h4>
+<p>No worries, i totally understand.</p>
+
+
+
+<a name="368710835"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/368710835" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#368710835">(Jun 22 2023 at 22:58)</a>:</h4>
+<p>no need to apologize! We appreciate your time, and no pressure <span aria-label="heart" class="emoji emoji-2764" role="img" title="heart">:heart:</span></p>
+
+
+
+<a name="368710981"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/368710981" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#368710981">(Jun 22 2023 at 22:59)</a>:</h4>
+<p>ok, found a way to unhang the <code>load(build)</code> step: just commented <a href="https://github.com/roc-lang/roc/blob/a9f7961b524b11f34038d96e262e5f68f3ecc86d/crates/compiler/load/build.rs#L17-L28">https://github.com/roc-lang/roc/blob/a9f7961b524b11f34038d96e262e5f68f3ecc86d/crates/compiler/load/build.rs#L17-L28</a></p>
+<p>It helped a lot, so I could locate the problem I was struggling with almost immediately.</p>
+<p>I updated the pr, but some tests failed with stack overflow:</p>
+<p><a href="https://github.com/roc-lang/roc/pull/5481#issuecomment-1603413829">https://github.com/roc-lang/roc/pull/5481#issuecomment-1603413829</a></p>
+
+
+
+<a name="369263581"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/369263581" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#369263581">(Jun 24 2023 at 21:03)</a>:</h4>
+<p>any ideas on what I can do with the error?</p>
+<div class="codehilite"><pre><span></span><code>thread &#39;glue_cli_run::basic_record&#39; panicked at &#39;`roc glue` command had unexpected stderr:
+thread &#39;main&#39; has overflowed its stack
+fatal runtime error: stack overflow
+</code></pre></div>
+<p>not sure how to debug it</p>
+
+
+
+<a name="369264331"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/369264331" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#369264331">(Jun 24 2023 at 21:10)</a>:</h4>
+<p>I would make sure to run it in release just to check if it is a correctness issue or an optimization issue</p>
+
+
+
+<a name="369266554"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/369266554" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#369266554">(Jun 24 2023 at 21:32)</a>:</h4>
+<p>ha! in release glue code tests are passed</p>
+
+
+
+<a name="369270078"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/369270078" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#369270078">(Jun 24 2023 at 22:10)</a>:</h4>
+<p>faced fatal in the following scenario:</p>
+<div class="codehilite"><pre><span></span><code>» id = (\x -&gt; x)
+thread &#39;main&#39; panicked at &#39;function symbol `#UserApp.id` not in set LambdaSet { set: [( Test.2, [])], args: [InLayout(VOID)], ret: InLayout(VOID), representation: InLayout(21), full_layout: InLayout(22) }&#39;, crates/compiler/mono/src/layout.rs:1472:9
+</code></pre></div>
+
+
+
+<a name="369275879"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/369275879" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#369275879">(Jun 24 2023 at 23:27)</a>:</h4>
+<p>nice! Check out the <code>with_larger_debug_stack</code> test helper - it's what we use in the situation where a test works with <code>--release</code> but overflows the stack without <code>--release</code> (basically it just increases the test's stack size in non-<code>--release</code> builds)</p>
+
+
+
+<a name="369316028"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/369316028" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#369316028">(Jun 25 2023 at 06:14)</a>:</h4>
+<p>I’ll do that, thanks. But there’s another problem with the parens around lambda now. I probably should fix that first.</p>
+
+
+
+<a name="370556314"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/370556314" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#370556314">(Jun 28 2023 at 19:41)</a>:</h4>
+<p>An update: </p>
+<ol>
+<li>
+<p>since the parens aren't dropped, this code <code>id = (\x -&gt; x)</code> fails because for closures there's a special case in <code>canonicalize_pending_body</code> (lambda sets are involved there), and a closure wrapped into parens is not recognized. <a href="https://github.com/roc-lang/roc/pull/5481/commits/78380070e2d13959522efa954bdbdd794b563e50">I pushed an update</a>, all tests are passed (at least in --release) but I'm not sure about the changes. looking for insights</p>
+</li>
+<li>
+<p>speaking of the <code>with_larger_debug_stack</code> helper - it lives in <code>test_gen</code> crate but as I understand, I can't just add it to the <code>roc_glue</code> crate?</p>
+</li>
+</ol>
+
+
+
+<a name="371027598"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/371027598" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#371027598">(Jun 30 2023 at 07:20)</a>:</h4>
+<p><span class="user-mention" data-user-id="281383">@Richard Feldman</span> <span class="user-mention" data-user-id="454654">@Ayaz Hafiz</span> any thoughts here?</p>
+
+
+
+<a name="371330971"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Pizza%20and%20parens/near/371330971" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Pizza.20and.20parens.html#371330971">(Jul 01 2023 at 00:22)</a>:</h4>
+<p>I left some comments on the PR - great catch! <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

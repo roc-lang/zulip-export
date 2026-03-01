@@ -1,0 +1,276 @@
+<html>
+<head><meta charset="utf-8"><title>thread-safety in glue · platform development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/index.html">platform development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html">thread-safety in glue</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="302524537"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302524537" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302524537">(Oct 05 2022 at 18:59)</a>:</h4>
+<p>Currently, glue exports things like <code>NonNull&lt;ManuallyDrop&lt;u8&gt;&gt;</code>, which can't be sent between threads (<code>NonNull</code> does not implement <code>Send</code>.) Is this intentional / a long-term design? I assume it'd make doing things like web servers pretty annoying. <span aria-label="dizzy" class="emoji emoji-1f635" role="img" title="dizzy">:dizzy:</span> </p>
+<p>(I'm running into it when parallelizing work in rbt. I can get around it for now by having all the glue-y jobs live in the main thread and then converting them to send-safe stuff before shoving 'em in queues.)</p>
+
+
+
+<a name="302525815"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302525815" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302525815">(Oct 05 2022 at 19:06)</a>:</h4>
+<p>in what sort of scenario does this come up?</p>
+
+
+
+<a name="302525854"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302525854" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302525854">(Oct 05 2022 at 19:06)</a>:</h4>
+<p>specifically, what types are involved?</p>
+
+
+
+<a name="302535563"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302535563" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302535563">(Oct 05 2022 at 20:05)</a>:</h4>
+<p>well in this particular case, it looks like it's in a <code>RocStr</code>! Here's the causal chain that rustc generated:</p>
+<div class="codehilite"><pre><span></span><code>error[E0277]: `NonNull&lt;ManuallyDrop&lt;u8&gt;&gt;` cannot be shared between threads safely
+   --&gt; src/coordinator.rs:295:18
+    |
+295 |                 .spawn(move || self.run())
+    |                  ^^^^^ `NonNull&lt;ManuallyDrop&lt;u8&gt;&gt;` cannot be shared between threads safely
+    |
+    = help: within `glue::Command`, the trait `Sync` is not implemented for `NonNull&lt;ManuallyDrop&lt;u8&gt;&gt;`
+    = note: required because it appears within the type `std::option::Option&lt;NonNull&lt;ManuallyDrop&lt;u8&gt;&gt;&gt;`
+    = note: required because it appears within the type `RocList&lt;u8&gt;`
+    = note: required because it appears within the type `ManuallyDrop&lt;RocList&lt;u8&gt;&gt;`
+    = note: required because it appears within the type `roc_std::roc_str::RocStrInner`
+    = note: required because it appears within the type `RocStr`
+</code></pre></div>
+
+
+
+<a name="302535908"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302535908" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302535908">(Oct 05 2022 at 20:07)</a>:</h4>
+<p>well for that specific case we can just implement <code>unsafe impl Send for RocStr</code></p>
+
+
+
+<a name="302536026"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302536026" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302536026">(Oct 05 2022 at 20:08)</a>:</h4>
+<p>So Roc types are not thread safe by default. So this is probably correct actually. You can always wrap the type and make it send if you want to override that.</p>
+
+
+
+<a name="302536160"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302536160" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302536160">(Oct 05 2022 at 20:09)</a>:</h4>
+<p>If you we to take a <code>RocStr</code> and pass it into two different Roc functions on different threads that could lead to a double free.</p>
+
+
+
+<a name="302536323"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302536323" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302536323">(Oct 05 2022 at 20:10)</a>:</h4>
+<p>We technically need glue to generate different types based on if roc is configured to run with atomic refcounts or not. When using atomic refcounts, they are now send.</p>
+
+
+
+<a name="302536536"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302536536" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302536536">(Oct 05 2022 at 20:11)</a>:</h4>
+<p>This is all super long term stuff, but the platform should be able to request whether or not roc needs to be thread safe</p>
+
+
+
+<a name="302536663"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302536663" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302536663">(Oct 05 2022 at 20:12)</a>:</h4>
+<p>In a web platform, Roc probably doesn't need to be thread safe. Each thread is calling roc functions in a single threaded way. No communication between the threads.</p>
+
+
+
+<a name="302536714"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302536714" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302536714">(Oct 05 2022 at 20:13)</a>:</h4>
+<p>hmm then how does this work ? <a href="https://doc.rust-lang.org/std/vec/struct.Vec.html#impl-Send-for-Vec%3CT%2C%20A%3E">https://doc.rust-lang.org/std/vec/struct.Vec.html#impl-Send-for-Vec%3CT%2C%20A%3E</a></p>
+
+
+
+<a name="302536872"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302536872" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302536872">(Oct 05 2022 at 20:14)</a>:</h4>
+<p>send should just work: we can transfer our types between threads</p>
+
+
+
+<a name="302536991"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302536991" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302536991">(Oct 05 2022 at 20:15)</a>:</h4>
+<p>and <code>Sync</code> seems to say that <code>&amp;RocStr</code> can be shared between threads, which also seems fine? dropping that type does nothing</p>
+
+
+
+<a name="302537358"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302537358" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302537358">(Oct 05 2022 at 20:17)</a>:</h4>
+<p>Technically, as they currently stand, they should be <code>Sync</code> and <code>Send</code>, but only if the refcount is 1.</p>
+
+
+
+<a name="302537408"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302537408" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302537408">(Oct 05 2022 at 20:17)</a>:</h4>
+<p>Rust doesn't have conditional <code>Sync</code>/<code>Send</code>, so you have to label them as neither.</p>
+
+
+
+<a name="302537497"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302537497" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302537497">(Oct 05 2022 at 20:17)</a>:</h4>
+<p>If you send one with multiple references, you can get race conditions between the two threads.</p>
+
+
+
+<a name="302537687"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302537687" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302537687">(Oct 05 2022 at 20:18)</a>:</h4>
+<p>hmm… looks like I'm going to have to do something like this to get any of this to work (or I'll have to convert all my <code>RocStr</code> to <code>String</code>)</p>
+
+
+
+<a name="302537754"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302537754" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302537754">(Oct 05 2022 at 20:19)</a>:</h4>
+<p>thought it'd be fine but it looks like channels are <code>Send</code> iff their items are <code>Send</code>. Makes sense.</p>
+
+
+
+<a name="302537912"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302537912" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302537912">(Oct 05 2022 at 20:20)</a>:</h4>
+<p>If you know you will have the only reference, the best answer is to basically make a sendable wrapper type and use that. It isn't too much work.</p>
+
+
+
+<a name="302538093"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302538093" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302538093">(Oct 05 2022 at 20:21)</a>:</h4>
+<p>yeah, <code>Job</code> already wraps a bunch of stuff whose memory is managed by Roc. <code>unsafe impl send for Job</code> oughta do me. Sigh. Would've liked to avoid it, but I'm at least gonna document it thoroughly.</p>
+
+
+
+<a name="302538366"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302538366" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302538366">(Oct 05 2022 at 20:22)</a>:</h4>
+<p>If you really want to be thorough (which maybe isn't worth it), you would make <code>struct UniqueRocStr(RocStr)</code> That is sendable and ensures either the string is unique or that it gets copied. Maybe we could make glue generate that. Just a check in the constructor.</p>
+
+
+
+<a name="302538446"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302538446" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302538446">(Oct 05 2022 at 20:23)</a>:</h4>
+<p>how would that work? Just look at the refcount in the internals and copy if it's greater than 1?</p>
+
+
+
+<a name="302538479"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302538479" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302538479">(Oct 05 2022 at 20:23)</a>:</h4>
+<p>yep</p>
+
+
+
+<a name="302538493"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302538493" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302538493">(Oct 05 2022 at 20:23)</a>:</h4>
+<p>nice.</p>
+
+
+
+<a name="302538644"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302538644" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302538644">(Oct 05 2022 at 20:24)</a>:</h4>
+<p>not gonna do that right now, but I'll note that it should happen in the future. Currently <code>Job</code> just wraps over a couple glue-generated types wholesale. It's a TODO to eventually not do that, though.</p>
+
+
+
+<a name="302538692"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302538692" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302538692">(Oct 05 2022 at 20:24)</a>:</h4>
+<p><span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span></p>
+
+
+
+<a name="302546854"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302546854" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302546854">(Oct 05 2022 at 21:21)</a>:</h4>
+<p>roc collections (including string) aren't thread-safe by default because they're non-atomically reference counted</p>
+
+
+
+<a name="302546963"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302546963" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302546963">(Oct 05 2022 at 21:22)</a>:</h4>
+<p>so <code>RocList&lt;T&gt;</code> is not comparable to <code>Vec&lt;T&gt;</code>, but rather to <code>Rc&lt;Vec&lt;T&gt;&gt;</code></p>
+
+
+
+<a name="302546986"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302546986" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302546986">(Oct 05 2022 at 21:22)</a>:</h4>
+<p>and <code>Rc</code> is neither <code>Send</code> nor <code>Sync</code></p>
+
+
+
+<a name="302548883"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302548883" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302548883">(Oct 05 2022 at 21:34)</a>:</h4>
+<p>What do you think about glue generating a <code>UniqueRocList&lt;T&gt;</code> type that would have a constructor that took a <code>RocList&lt;T&gt;</code> and cloned it if it was not unique and took ownership if it is unique. Then <code>UniqueRocList&lt;T&gt;</code> should be <code>Send</code> but not <code>Sync</code>.</p>
+
+
+
+<a name="302548996"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302548996" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302548996">(Oct 05 2022 at 21:35)</a>:</h4>
+<p>that seems reasonable <span aria-label="thumbs up" class="emoji emoji-1f44d" role="img" title="thumbs up">:thumbs_up:</span></p>
+
+
+
+<a name="302551935"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302551935" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302551935">(Oct 05 2022 at 21:57)</a>:</h4>
+<p>well, sigh, looks like I'm just gonna have to do this. How do I get the reference count?</p>
+
+
+
+<a name="302552231"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302552231" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302552231">(Oct 05 2022 at 21:59)</a>:</h4>
+<p>or I guess I could just copy all the memory proactively. I don't love that but it'd get me unstuck here (been spinning my wheels all afternoon.) What would y'all think of that?</p>
+
+
+
+<a name="302552681"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302552681" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302552681">(Oct 05 2022 at 22:02)</a>:</h4>
+<p><span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span> do you think you could help with adding an implementation of <code>UniqueRocList</code> to <code>roc_std</code>? I'm still on parental leave, so my free time is spotty and unpredictable <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="302554905"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302554905" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302554905">(Oct 05 2022 at 22:22)</a>:</h4>
+<p>unblocked for now… I was already converting most of the <code>Job</code> into things like PathBufs and stuff, so I just needed to convert a list, a dict, and a str in addition.</p>
+
+
+
+<a name="302554926"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302554926" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302554926">(Oct 05 2022 at 22:22)</a>:</h4>
+<p>maddeningly, the code is actually now better-factored and easier to work with <span aria-label="mad" class="emoji emoji-1f621" role="img" title="mad">:mad:</span></p>
+
+
+
+<a name="302555001"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302555001" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302555001">(Oct 05 2022 at 22:23)</a>:</h4>
+<p>fortunately if we had like <code>RocList.unique</code> or something it'd be just a drop-in, I think?</p>
+
+
+
+<a name="302555379"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302555379" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302555379">(Oct 05 2022 at 22:26)</a>:</h4>
+<p>ok, that's enough concurrency shenanigans for today. I am going to go lie down now.</p>
+
+
+
+<a name="302555602"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302555602" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302555602">(Oct 05 2022 at 22:29)</a>:</h4>
+<blockquote>
+<p>do you think you could help with adding an implementation of UniqueRocList to roc_std? </p>
+</blockquote>
+<p>Yeah, I can take a look.</p>
+
+
+
+<a name="302555772"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302555772" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302555772">(Oct 05 2022 at 22:30)</a>:</h4>
+<p><span class="user-mention" data-user-id="419641">@Brian Hicks</span> Feel free to let me know if you have any other questions/ need any specific information related to this.</p>
+
+
+
+<a name="302556022"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/thread-safety%20in%20glue/near/302556022" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Hicks <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/thread-safety.20in.20glue.html#302556022">(Oct 05 2022 at 22:33)</a>:</h4>
+<p>I might when my brain recovers from the day. <span aria-label="dizzy" class="emoji emoji-1f635" role="img" title="dizzy">:dizzy:</span> For now, lemme know if it ends up being easy and I'll drop it in and test it for you as soon as I can!</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

@@ -1,0 +1,239 @@
+<html>
+<head><meta charset="utf-8"><title>Closure Data Copying · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html">Closure Data Copying</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="436573398"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436573398" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436573398">(May 01 2024 at 21:09)</a>:</h4>
+<p>At some point we need to really investigate closure data copying in Roc. Especially to compare it to either a manual implementation in c/zig or to compare it to rust async (or similar).</p>
+<p>I am still kinda stunned that in an example like rocci-bird, essentially all of the code size seems to come from simply copying data from one closure to the next. Which probably also means that a significant portion of the runtime is just copying data between closures.</p>
+<p>It fundamentally feels off to me. Maybe we are simply generating in a way that llvm can't optimize. May we need to unify our closure captures different to reduce data movement. I'm really not sure, but this really feels off to me.</p>
+
+
+
+<a name="436582047"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436582047" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436582047">(May 01 2024 at 22:22)</a>:</h4>
+<p>I wonder how hard it would be to start passing them around by reference if they're over a certain size</p>
+
+
+
+<a name="436584811"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436584811" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436584811">(May 01 2024 at 22:48)</a>:</h4>
+<p>I don't think that's the issue.</p>
+<p>I think the issue is that essentially every new await captures slightly different data (cause new local variables). Instead of having space and just adding the single new variable to the closure capture, we create a totally new closure capture with a slightly different layout.</p>
+<p>So like</p>
+<div class="codehilite"><pre><span></span><code>state = SomeBigRecord
+
+# captures {state}
+clickedMouse = getMouse!
+
+# captures {state, clickedMouse}
+pressedW = getKey! &#39;w&#39;
+
+activateAbility = calc state pressedW
+
+if clickedMouse &amp;&amp; activateAbility then
+    # captures {state, activateAbility}
+    changeColorPalette!
+
+nextState =
+    if activateAbility then
+        # something that uses state ...
+    else
+        # something that uses state ...
+
+# captures {nextState}
+displayState! nextState
+
+Task.ok nextState
+</code></pre></div>
+<p>Optimally, this would be one shared closure capture. It would have enough space for everything and state would never move around.</p>
+<p>Instead we make 4 unique closure captures:</p>
+<ol>
+<li>Store state into first</li>
+<li>Load state from first and store into second</li>
+<li>Store clickedMouse into second</li>
+<li>Load state from second store into third</li>
+<li>Store activateAbility into third</li>
+<li>Store nextState into forth</li>
+</ol>
+<hr>
+<p>Tons of copying and data movement</p>
+
+
+
+<a name="436584895"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436584895" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436584895">(May 01 2024 at 22:49)</a>:</h4>
+<p>ahhhh interesting</p>
+
+
+
+<a name="436585427"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436585427" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436585427">(May 01 2024 at 22:54)</a>:</h4>
+<p>not saying we should do this, but if we had nested closures capture strictly more as they got more and more nested, then: </p>
+<ul>
+<li>the capture itself would be bigger</li>
+<li>much less copying would happen</li>
+</ul>
+
+
+
+<a name="436585447"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436585447" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436585447">(May 01 2024 at 22:54)</a>:</h4>
+<p>and that would mainly affect tasks, parsers, etc.</p>
+
+
+
+<a name="436585710"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436585710" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436585710">(May 01 2024 at 22:56)</a>:</h4>
+<p>Due to each cluster capture being is own alloca and everything being nested, I think we also have all 4 closure captures alive for a really long time(so much more memory use than sharing even in the naive way).</p>
+
+
+
+<a name="436589081"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436589081" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436589081">(May 01 2024 at 23:25)</a>:</h4>
+<p>sure</p>
+
+
+
+<a name="436589126"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436589126" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436589126">(May 01 2024 at 23:25)</a>:</h4>
+<p>but some amount of this is inherent to async I/O</p>
+
+
+
+<a name="436589245"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436589245" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436589245">(May 01 2024 at 23:26)</a>:</h4>
+<p>like the state in between operations has to be saved somewhere, and that either results in a big chunk of memory that lives a long time, or else copying between minimally-sized chunks of memory</p>
+
+
+
+<a name="436589455"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436589455" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436589455">(May 01 2024 at 23:28)</a>:</h4>
+<p>I guess there could be some cleverness to try to reduce that, e.g. choosing layouts where values that refer to the same thing will be in the same place from one capture to the next, so if we're able to reuse that memory then we don't need to copy those particular fields because they're already in the right place</p>
+
+
+
+<a name="436589883"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436589883" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436589883">(May 01 2024 at 23:32)</a>:</h4>
+<p>I don't know how hard of a problem that is to automate (seems like the type of thing where there's an off-the-shelf algorithm somewhere which optimizes it) but it could be a helpful exercise to try to find a manual organization of the rocci bird captures that would minimize copying and memory usage</p>
+
+
+
+<a name="436589913"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436589913" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436589913">(May 01 2024 at 23:32)</a>:</h4>
+<p>like if you were doing all of it by hand in Zig or something, what's the most efficient layout and copying strategy you could come up with</p>
+
+
+
+<a name="436591478"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436591478" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436591478">(May 01 2024 at 23:48)</a>:</h4>
+<p>For sure, some of this is inherent. That said, I think we currently use more memory overall and do a bunch of copying.</p>
+
+
+
+<a name="436591554"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436591554" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436591554">(May 01 2024 at 23:49)</a>:</h4>
+<p>But yeah, let me try to port to zig while still using an async io style with capturing lambas. not sure when I will have time, but should be a really good exercise in what we could theoretically generate.</p>
+
+
+
+<a name="436918419"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436918419" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436918419">(May 03 2024 at 16:26)</a>:</h4>
+<p>As a note, I think the <code>Layout variants</code> section of this post on rust async await is the optimization we are fundamentally missing:<br>
+<a href="https://docs.roblab.la/asyncawait/posts/optimizing-await-1/">https://docs.roblab.la/asyncawait/posts/optimizing-await-1/</a></p>
+
+
+
+<a name="436952484"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436952484" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436952484">(May 03 2024 at 20:14)</a>:</h4>
+<p>ahh yes!</p>
+
+
+
+<a name="436952496"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436952496" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436952496">(May 03 2024 at 20:14)</a>:</h4>
+<p>that's exactly the optimization I was talking about</p>
+
+
+
+<a name="436952526"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436952526" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436952526">(May 03 2024 at 20:14)</a>:</h4>
+<p>with this part:</p>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/stream/395097-compiler-development/topic/Closure.20Data.20Copying/near/436589455">said</a>:</p>
+<blockquote>
+<p>I guess there could be some cleverness to try to reduce that, e.g. choosing layouts where values that refer to the same thing will be in the same place from one capture to the next, so if we're able to reuse that memory then we don't need to copy those particular fields because they're already in the right place</p>
+</blockquote>
+
+
+
+<a name="436952555"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436952555" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436952555">(May 03 2024 at 20:14)</a>:</h4>
+<p>so I guess not only is it optimizable, but rustc already implemented it! <span aria-label="laughing" class="emoji emoji-1f606" role="img" title="laughing">:laughing:</span></p>
+
+
+
+<a name="436961611"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436961611" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436961611">(May 03 2024 at 21:30)</a>:</h4>
+<p>Yeah, in the roc context. It would mean collapsing the state of nested closures that tail call each other. Which is most often seen in Task.await. but also result.try and similar.</p>
+
+
+
+<a name="436961742"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/436961742" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#436961742">(May 03 2024 at 21:31)</a>:</h4>
+<p>In current roc, llvm often manages to inline these chains, but still creates a state for every single closure and copies around tons of data.</p>
+
+
+
+<a name="438184875"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/438184875" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#438184875">(May 12 2024 at 13:28)</a>:</h4>
+<p>I learned some new things about this. First of all, the original post is <a href="https://tmandry.gitlab.io/blog/posts/optimizing-await-1/">https://tmandry.gitlab.io/blog/posts/optimizing-await-1/</a> and it has some followup posts.</p>
+<p>Also, this problem is still not fully solved in the rust compiler. The latest attempt is <a href="https://github.com/rust-lang/rust/pull/120168">https://github.com/rust-lang/rust/pull/120168</a> which seems like it's another step in the right direction, but notes that there are still cases that are not covered.</p>
+
+
+
+<a name="438190531"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/438190531" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#438190531">(May 12 2024 at 15:01)</a>:</h4>
+<p>what's upvar?</p>
+
+
+
+<a name="438191346"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/438191346" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#438191346">(May 12 2024 at 15:14)</a>:</h4>
+<p>not much how bout u</p>
+
+
+
+<a name="438191709"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/438191709" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#438191709">(May 12 2024 at 15:20)</a>:</h4>
+<p>Upvar is a variable captured by a closure</p>
+
+
+
+<a name="438195054"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/438195054" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#438195054">(May 12 2024 at 16:19)</a>:</h4>
+<p>There are a couple ideas to resolve this that would likely work well.<br>
+One is to more aggressively specialize unique lambdas to the same type. Part of the issue is that lambda sets monomorphize very aggressively, so two closures may have similar (but not the same) layouts, and be forced into different types. This can be seen for example with nested <code>Task.await</code> calls, where each nested <code>Task.await</code> is a separate closure. It may be better to force all nested calls to be the same closure type.</p>
+
+
+
+<a name="438195239"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/438195239" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#438195239">(May 12 2024 at 16:22)</a>:</h4>
+<p>Another is to store closures that are additive as a linked list. If you indicate in the closure type the name of a symbol that the closure references (which is already done, at least at the type-checking level), you can avoid unpacking and repacking closure sets by instead representing each closure set as a linked list of records. When you need to add new data, append to the linked list. This used to be an approach for closure compilation, though I don't know how popular it is today.</p>
+
+
+
+<a name="438197138"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Closure%20Data%20Copying/near/438197138" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Closure.20Data.20Copying.html#438197138">(May 12 2024 at 16:53)</a>:</h4>
+<p>Yeah, I think the nested closures being the same type would be a huge win and fix this issue for the most part.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

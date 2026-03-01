@@ -1,0 +1,178 @@
+<html>
+<head><meta charset="utf-8"><title>Ref count and parallel calls · platform development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/index.html">platform development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html">Ref count and parallel calls</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="439531079"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439531079" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439531079">(May 20 2024 at 09:01)</a>:</h4>
+<p>The kingfisher platform exports this function to the host: <code>Request, Box Model -&gt; Response</code>. It takes a <code>Model</code> but does not return <code>Model</code>.</p>
+<p>This call reduces the ref count of <code>Model</code> by one. Since a refcount of 0 would mean, that the value gets deallocated, the host has to set the refcount of <code>Model</code> to <code>2</code> before calling roc.</p>
+<p>When this is done in parallel, a segmentation fault happens. Probably, because the host and roc try to manipulate the same memory at the same time.</p>
+<p>A workaround is to set the refcount to a very high value any time <code>Model</code> gets manipulated. But this would mean, that the platform would only support that high number of read requests.</p>
+<p>I though, I read somewhere, that when refcount is set to a magic number, it is handled by roc as infinity and is not manipulated. But I don't know, where I read this or what that magic number is.</p>
+<p>Is there a magic refcount number, that tells roc not to manipulate the ref count?</p>
+<p>If not, is there another way to solve this?</p>
+
+
+
+<a name="439588075"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439588075" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439588075">(May 20 2024 at 14:44)</a>:</h4>
+<p><span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span> has done some atomic refcounting work</p>
+
+
+
+<a name="439590782"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439590782" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439590782">(May 20 2024 at 14:58)</a>:</h4>
+<blockquote>
+<p>When this is done in parallel, a segmentation fault happens. Probably, because the host and roc try to manipulate the same memory at the same time.</p>
+</blockquote>
+<p>Yeah, our refcounting is not thread safe currently. Also, simply updating the box refcount may not be enough. It might have recourse and update refcount a of things in the box, but not sure.</p>
+<blockquote>
+<p>Is there a magic refcount number, that tells roc not to manipulate the ref count?</p>
+</blockquote>
+<p>Yes, I believe it is <code>-1 as usize</code>, but would need to double check.</p>
+
+
+
+<a name="439613825"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439613825" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439613825">(May 20 2024 at 16:56)</a>:</h4>
+<p>Thank you. The confirmation, that there is a magic number helped me to find it.</p>
+<p>After playing around with different numbers, I think the magic number is <code>0</code>.</p>
+<p>As far as I know, <a href="#narrow/stream/302903-Writing-a-platform/topic/Set.20the.20refcounter.20in.20a.20platform/near/418433879">the highest bit of a refcount has to be set to 1</a>.</p>
+<p>When I set the value to <code>2^63+1</code> (<code>1&lt;&lt;63+1</code>, highest bit is 1, all other bits are 0), the refcount gets reduced by one (from <code>9223372036854775809</code> to <code>9223372036854775808</code>). If I call the function again without modifying the new refcount, it changes to a <code>random</code> number. Probably, because the memory is invalid. If I call the function again without modifying the refcount, I get a <code>segmentation violation</code>, since <code>Model</code> was deallocated.</p>
+<p>When I set the refcount to <code>1</code> (the lowest bit is 1, all other bits are zero, even the first bit) and I call the function, the refcount changes to <code>0</code>. If I call the function again, the value stays at <code>0</code>. The <code>Model</code> does not get deallocated.</p>
+<p>So setting the refcount to <code>0</code> does what I want.</p>
+
+
+
+<a name="439614135"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439614135" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439614135">(May 20 2024 at 16:58)</a>:</h4>
+<p>Awesome</p>
+
+
+
+<a name="439614156"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439614156" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439614156">(May 20 2024 at 16:58)</a>:</h4>
+<p>I guess I forgot the number</p>
+
+
+
+<a name="439631556"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439631556" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439631556">(May 20 2024 at 18:42)</a>:</h4>
+<p>we've talked about this in various places; I wonder if the time has come to figure out how we want to do this</p>
+
+
+
+<a name="439657376"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439657376" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439657376">(May 20 2024 at 18:49)</a>:</h4>
+<p>My current vote is roughly. Use a bit to decide whether or not to do atomic refcounting (this feature is off by default and must be enabled by a compile time or platform flag). Only do atomic refcounting if the platform sets that bit. Cause the only way for data to be shared between threads is through the platform. When sharing, it can set the bit.</p>
+
+
+
+<a name="439657935"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439657935" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439657935">(May 20 2024 at 18:52)</a>:</h4>
+<p>I like that design!</p>
+
+
+
+<a name="439670563"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439670563" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439670563">(May 20 2024 at 20:04)</a>:</h4>
+<p>I have another bug when calling roc in parallel. I don't understand what is going on or if this is related to refcount. Maybe you have an idea what the cause is or how I could debug it?</p>
+<p>First, the host calls a roc function, that returns a <code>Box Model</code>. <code>Model</code> has type <code>List Str</code>.  If <code>Model</code> is <code>Str</code>, everything works.</p>
+<p>Then, the host calls the function from above (<code>Request, Box Model -&gt; Response</code>). If the function is called in sequence, there is no problem. But if it is called many times in parallel (around 10.000 calls "at the same time"), the memory gets corrupted. For example, if <code>Model</code> was <code>["hello"]</code>,  then after the run, it is something like <code>[ �GM��]</code>.</p>
+<p>Could it be, that the Str inside the List is refcounted and roc manipulates that refcount?</p>
+
+
+
+<a name="439676993"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439676993" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439676993">(May 20 2024 at 20:47)</a>:</h4>
+<p>I tried to debug this by looking at the memory, that gets allocated with <code>roc_alloc</code>.</p>
+<p>After calling the function, that returns the <code>Model</code>, roc has allocated the following values:</p>
+<div class="codehilite"><pre><span></span><code>0x5b3d0ea5c930: [0 0 0 0 0 0 0 128 8 202 165 14 61 91 0 0 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0]
+0x5b3d0ea5ca00: [0 0 0 0 0 0 0 128 87 111 114 108 100 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 133]
+</code></pre></div>
+<p>The first 8 bytes of each value are the ref counter. When you know, how the roc types look it memory, you can see, that the second value is a short string with the ascii values for "World". From the two <code>1</code> at the first value, you can see that it could be a list with one element and a capacity of 1.</p>
+<p>After calling the second function, the following values look like this:</p>
+<div class="codehilite"><pre><span></span><code>0x5b3d0ea5c930: [254 255 255 255 255 255 255 255 8 202 165 14 61 91 0 0 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0]
+0x5b3d0ea5ca00: [0 0 0 0 0 0 0 128 87 111 114 108 100 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 133]
+</code></pre></div>
+<p>So the values are the same, but the refcount of the list has changed to a very big number. When the function is called again, the refcount of the list gets reduced by one.</p>
+<p>Should roc change the refcount of the list? If so, it should probably not be such a high number but something like <code>0</code>, <code>1</code>or the magic infinity.  Is this a bug in roc?</p>
+
+
+
+<a name="439677313"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439677313" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439677313">(May 20 2024 at 20:49)</a>:</h4>
+<p>By the way: It would be nice, if <code>roc_alloc</code> would have a debugging argument. For example a pointer to a struct, that contains the line number of the roc code, that triggert the <code>alloc</code> call, and a type-ID of the value, that gets allocated. In optimized builds, the argument could be a zero-pointer.</p>
+
+
+
+<a name="439685332"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439685332" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439685332">(May 20 2024 at 21:43)</a>:</h4>
+<blockquote>
+<p>Could it be, that the Str inside the List is refcounted and roc manipulates that refcount?</p>
+</blockquote>
+<p>Yes, exactly that</p>
+
+
+
+<a name="439685365"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439685365" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439685365">(May 20 2024 at 21:43)</a>:</h4>
+<p>We need to remove this kind of recursive refcounting</p>
+
+
+
+<a name="439685376"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439685376" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439685376">(May 20 2024 at 21:43)</a>:</h4>
+<p>I am planning to fix it for list (mostly done minus final tests)</p>
+
+
+
+<a name="439685410"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439685410" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439685410">(May 20 2024 at 21:43)</a>:</h4>
+<p>We separately probably need to fix it for recursive tags and box.</p>
+
+
+
+<a name="439685546"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439685546" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439685546">(May 20 2024 at 21:44)</a>:</h4>
+<p>Oh also, it is probably freeing the list, not the string</p>
+
+
+
+<a name="439685632"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439685632" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439685632">(May 20 2024 at 21:45)</a>:</h4>
+<p>Cause the string is small and would not get freed</p>
+
+
+
+<a name="439735038"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439735038" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439735038">(May 21 2024 at 05:34)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/302903-Writing-a-platform/topic/Ref.20count.20and.20parallel.20calls/near/439685376">said</a>:</p>
+<blockquote>
+<p>I am planning to fix it for list (mostly done minus final tests)</p>
+</blockquote>
+<p>This sounds great. Is it the <a href="https://github.com/roc-lang/roc/tree/list-size-on-heap">list-size-on-heap</a> branch? I tried it and it fails with <code>munmap_chunk(): invalid pointer</code></p>
+
+
+
+<a name="439738729"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439738729" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439738729">(May 21 2024 at 06:11)</a>:</h4>
+<p>It is.</p>
+
+
+
+<a name="439738796"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/302903-platform%20development/topic/Ref%20count%20and%20parallel%20calls/near/439738796" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/302903-platform-development/topic/Ref.20count.20and.20parallel.20calls.html#439738796">(May 21 2024 at 06:12)</a>:</h4>
+<p>And yeah, unsurprising. Though more of the code is hopefully done, it definitely has bugs</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

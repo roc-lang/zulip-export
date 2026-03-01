@@ -1,0 +1,89 @@
+<html>
+<head><meta charset="utf-8"><title>Checking integer overflows · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Checking.20integer.20overflows.html">Checking integer overflows</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="276787117"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Checking%20integer%20overflows/near/276787117" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Giovanni Zanandrea <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Checking.20integer.20overflows.html#276787117">(Mar 27 2022 at 12:57)</a>:</h4>
+<p>I watched <span class="user-mention silent" data-user-id="281383">Richard Feldman</span>'s <a href="https://media.handmade-seattle.com/roc-lang/">Roc at Handmade Seattle</a> talk, and I've a question about integer overflows. This is (or at least was back when the talk was given) the kind of code the ROC compiler generates for an overflow-checked integer addition:</p>
+<div class="codehilite"><pre><span></span><code>    add rdi, rsi
+    jo  .LBB1_2
+</code></pre></div>
+<p>According to the video, the problem with the above code is not so much the presence of one extra machine instruction, but rather the fact that that instruction is a jump, which makes it more difficult for the LLVM compiler to optimize the code.</p>
+<p>Now, what I'm going to ask may be the most stupid question ever, but I don't know enough to tell, so I'll dare ask anyway: in a pure functional language without recoverable exceptions like ROC, do we need to check that overflow right away?</p>
+<p>Let's suppose we can permanently spare one bit in one of the CPU registers. Let's call that bit <code>STICKY_OVERFLOW_BIT</code>. We could initialize it to 0 at startup, and than do this after each overflow-checked integer addition:</p>
+<div class="codehilite"><pre><span></span><code>    z = x + y;
+    STICKY_OVERFLOW_BIT |= ACTUAL_HARDWARE_OVERFLOW_BIT;
+</code></pre></div>
+<p>If an overflow happens we just record that fact and keep going. From that moment on the memory used by ROC code (as opposed to the memory used by the platform for its own purposes, which will still be fine) will contain garbage, but it seems to me that the problem will remained contained for as long as we avoid I/O. So maybe all we need to do is check the <code>STICKY_OVERFLOW_BIT</code> before performing the next I/O operation? Or maybe delay that check until we return from the function, since the return instruction is going to confuse the optimizer anyway?</p>
+<p>Another possibility would be to check before returning from the current function and also before making a call into any other function. That way we would preserve the correct stack trace (not sure how useful that would be in a release build, but still...) and we wouldn't need to permanently allocate any CPU register space for the sticky overflow bit, since the decision of what (if any) register to use for that purpose could be made on a function-by-function basis.</p>
+<p>An even more minimalist possibility would be to delay the check only when the operations we need to check are in a tight loop, or when there's several of them in a row. Take this code, for example:</p>
+<div class="codehilite"><pre><span></span><code>    sum = 0;
+    for (int i=0 ; i &lt; n ; i++) {
+      int x = xs[i];
+      sum += x;
+    }
+</code></pre></div>
+<p>On an Intel processor, the carry flag is (I think) bit 0 of the <code>EFLAGS</code> register. Let's say there's a spare CPU register at that particular location in the code and let's call it <code>STICKY_EFLAGS</code>. The above code could be checked like this:</p>
+<div class="codehilite"><pre><span></span><code>  sum = 0;
+  STICKY_EFLAGS = 0;
+  for (int i=0 ; i &lt; n ; i++) {
+    int x = xs[i];
+    sum += x;
+    STICKY_EFLAGS |= EFLAGS;
+  }
+  if (STICKY_EFLAGS &amp; 1)
+    panic();
+</code></pre></div>
+<p>The ideal solution of course would be to have a sticky carry bit that is implemented in hardware. So I did a quick search, and it looks like maybe the ARM processor does have something like that? It's called the <code>Q</code> flag, and it comes with its own <code>QADD</code>, <code>QSUB</code>, ... instructions. I wasn't able to find anything similar for Intel processors.</p>
+<p>Could that possibly work? Would it provide any benefits? I've been wondering since I watched that talk.</p>
+
+
+
+<a name="276800356"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Checking%20integer%20overflows/near/276800356" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Checking.20integer.20overflows.html#276800356">(Mar 27 2022 at 18:12)</a>:</h4>
+<p>So a few pieces here. I am trying to figure out the right order to present them.</p>
+<p>Let's start with the actual issue with the <code>jo  .LBB1_2</code> instruction. This individual instruction actually has about zero cost. It is a jump instruction that is never taken and should have 100% branch prediction accuracy. So on any vaguely modern processor, that cost is super low.<br>
+The actual cost comes from simply bloating the number of instructions. In order to load the next useful instruction after the add instruction, the cpu now has to load 1 more instruction than without the jump. So this can lead to performance cost, particularly in hot loops.</p>
+<p>side note: the real cost is probably the slot the jump instruction takes up in buffers in the cpu before it is resolved, but it easier to just view it the cost of loading an extra instruction.</p>
+
+
+
+<a name="276800626"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Checking%20integer%20overflows/near/276800626" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Checking.20integer.20overflows.html#276800626">(Mar 27 2022 at 18:19)</a>:</h4>
+<p>When it comes tot using a <code>STICKY_EFLAGS</code> it has a number likely issues. The main ones I see are:</p>
+<ul>
+<li>Still adding an extra instruction to the pipeline (though it has less resolution concerns in the cpu)</li>
+<li>Losing precision on the issues. We generate different panics depending on the issues that cause them. With this solution, we may run into cases where we can't distinguish the correct panic to generate.</li>
+<li>Also pinning a register. That can have large performance implication in some cases.</li>
+</ul>
+
+
+
+<a name="276800777"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Checking%20integer%20overflows/near/276800777" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Checking.20integer.20overflows.html#276800777">(Mar 27 2022 at 18:22)</a>:</h4>
+<p>An extra clarification on <code>which makes it more difficult for the LLVM compiler to optimize the code</code></p>
+<p>LLVM is generating optimized code for what we are asking it to do. In order to get more optimized code, we would need to ask it to do something different. For example, adding a surrounding if branch that ensures integer overflow can't happen will lead to llvm removing all of the jump instructions related to integer overflow.</p>
+
+
+
+<a name="276825836"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Checking%20integer%20overflows/near/276825836" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Giovanni Zanandrea <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Checking.20integer.20overflows.html#276825836">(Mar 28 2022 at 04:16)</a>:</h4>
+<p>Thanks for the explanation. I see now it was indeed a stupid question, but as I said, I didn't know enough to figure that out on my own.</p>
+
+
+
+<a name="276826065"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Checking%20integer%20overflows/near/276826065" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Checking.20integer.20overflows.html#276826065">(Mar 28 2022 at 04:23)</a>:</h4>
+<p>It's not stupid, the question is totally valid. There is even a decent chance that implementing the <code>STICKY_EFLAGS</code> version could be faster for some programs. A branch definitely has more weird constraints in a CPU than other instructions. It is most likely the case that that they would perform almost identical for most programs. The big thing here that makes it so <code>STICKY_EFLAGS</code> is not likely to be faster is just that our branch should never be taken. If instead this was a branch that was taken even 1% of the time, <code>STICKY_EFLAGS</code> could be significantly faster.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

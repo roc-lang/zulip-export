@@ -1,0 +1,111 @@
+<html>
+<head><meta charset="utf-8"><title>Help with Go platform cross-compile · contributing · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/index.html">contributing</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Help.20with.20Go.20platform.20cross-compile.html">Help with Go platform cross-compile</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="435813418"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Help%20with%20Go%20platform%20cross-compile/near/435813418" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Help.20with.20Go.20platform.20cross-compile.html#435813418">(Apr 28 2024 at 03:24)</a>:</h4>
+<p>I'm just wondering if there are any Go users who may be able to assist with <a href="https://github.com/roc-lang/examples/pull/173">the Go platform example</a>?</p>
+<p>I was exploring changes so that the platform builds the pre-built binaries itself, and also cross-compiles to the various roc supported targets.</p>
+<p>If I compile for my native target (macos arm64) everything is happy and I get a c-archive for the host which links nicely with Roc and I can use with <code>roc dev --prebuilt-platform main.roc</code>. </p>
+<p>But as soon as I go to cross-compile for another target I get an issue <code>build constraints exclude all Go files</code> which seems strange as we don't specify any build constraints. I've been following various guides online and this doesn't seem to be a common thing.</p>
+<p>I've left a <code>build.sh</code> script in that branch to help debug this.</p>
+<div class="codehilite"><pre><span></span><code>GOOS=linux GOARCH=arm64 go build -C host -buildmode=c-archive -o libhost.a
+cp host/libhost.a platform/macos-arm64.a
+
+roc dev --prebuilt-platform main.roc
+</code></pre></div>
+<p>Also, below is the WIP roc build script for building the platform for various architectures.</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>main =
+
+    buildGoTarget! MacosArm64
+
+    # TODO -- why is this failing with "build constraints exclude all Go files"?
+    buildGoTarget! MacosX64
+
+    # buildGoTarget! LinuxArm64
+    # etc
+
+    Stdout.line "DONE"
+
+buildGoTarget : SupportedTarget -&gt; Task {} _
+buildGoTarget = \target -&gt;
+
+    (goos, goarch, prebuiltBinary) = when target is
+        MacosArm64 -&gt; ("darwin", "arm64", "macos-arm64.a")
+        MacosX64 -&gt; ("darwin", "amd64", "macos-x64")
+        LinuxArm64 -&gt; ("linux", "arm64", "linux-arm64.a")
+        LinuxX64 -&gt; ("linux", "amd64", "linux-x64.a")
+        WindowsArm64 -&gt; ("windows", "arm64", "windows-arm64.a")
+        WindowsX64 -&gt; ("windows", "amd64", "windows-x64")
+
+    Cmd.new "go"
+    |&gt; Cmd.envs [("GOOS", goos), ("GOARCH", goarch)]
+    |&gt; Cmd.args ["build", "-C", "host", "-buildmode=c-archive", "-o","libhost.a"]
+    |&gt; Cmd.status
+    |&gt; Task.mapErr! \err -&gt; BuildErr goos goarch (Inspect.toStr err)
+
+    Cmd.exec "cp" ["host/libhost.a", "platform/$(prebuiltBinary)"]
+    |&gt; Task.mapErr! \err -&gt; CpErr (Inspect.toStr err)
+</code></pre></div>
+
+
+
+<a name="435847209"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Help%20with%20Go%20platform%20cross-compile/near/435847209" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Help.20with.20Go.20platform.20cross-compile.html#435847209">(Apr 28 2024 at 08:20)</a>:</h4>
+<p>Could you tell exactly, what commands you are running and which returns the error message  <code>build constraints exclude all Go files</code>?</p>
+<p>The first command, you have to call is <code>roc build --lib main.roc --output host/libapp.so</code>. I can not see this in your build-scripts.</p>
+<p>You also have to call <code>roc preprocess-host main.roc</code>. This command internally calls <code>roc gen-stub-lib</code> which does something similar then <code>roc build --lib</code>, but is broken in some cases. This means, that <code>roc preprocess-host</code> creates a broken <code>libapp.so</code> file. You have to call <code>roc build --lib</code> every time after calling <code>roc preprocess-host</code> to replace the broken <code>libapp.so</code>.</p>
+<p>There are some strange things in your branch. Why are you using <code>go 1.23</code> ?  The latest go version is <code>1.22</code>. Some time ago, they changed the syntax of the <code>go.mod</code> file. You have to specify a miner version. For example <code>go 1.22.0</code> or <code>go 1.22.1</code>.</p>
+<p>You removed the <code>LDFLAGS</code> from the <code>main.go</code> file: <code>#cgo LDFLAGS: -L. -lapp</code> I don't think it works without it.</p>
+<p>Is there a reason, you are using <code>-buildmode=c-archive</code> instead of <code>-buildmode=pie</code>?</p>
+
+
+
+<a name="435847628"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Help%20with%20Go%20platform%20cross-compile/near/435847628" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Help.20with.20Go.20platform.20cross-compile.html#435847628">(Apr 28 2024 at 08:26)</a>:</h4>
+<p>You could also try to use <code>zig</code> as the c-compiler. If you want go cross compile cgo, you could get better results with it:</p>
+<p><code>CC="zig cc" go build [...]</code></p>
+<p>If you look for "cgo cross compile zig" you find some articles, that explain, how zig helps to cross compile cgo.</p>
+
+
+
+<a name="435849379"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Help%20with%20Go%20platform%20cross-compile/near/435849379" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Help.20with.20Go.20platform.20cross-compile.html#435849379">(Apr 28 2024 at 08:55)</a>:</h4>
+<p>Thank you for your comments. I probably should have provided some more context for what I am trying to achieve and my intent here. </p>
+<p>I'm not necessarily wanting to merge that PR... I've been researching and working towards achieving <a href="https://github.com/roc-lang/roc/issues/6414">https://github.com/roc-lang/roc/issues/6414</a> </p>
+<p>The intent is to remove the "Rebuilding platform..." from roc cli. So all platforms will be responsible for building their own prebuilt binaries and roc only needs to link with either a library (using the legacy linker) or where available the preprocessed host (surgical linker).</p>
+<p>I was updating the examples and the current  Go example doesn't work using the <code>ci/all_tests.sh</code> script for me. I started investigating that... and got sidetracked learning about the go build system and then started thinking about the changes for glue, and then thinking about how I could make a tool which scaffolds out starter platforms for various languages. It's a bit of a random thought process... but where the PR is at is kind of where I got to. I've almost got all the pieces that I could make a tool that scaffolds out a zig, rust, and now basic go platform that can cross compile to all of the roc supported targets.</p>
+<p>So, I've changed the example to build a c-archive and produce a <code>libhost.a</code> library instead of the dynamic library. That is why you can't see any <code>libapp.so</code>, because it's now doing something very different.</p>
+<p>I wasn't aware that <code>1.23</code> isn't the latest. I just had an error when I try to build that says I need to upgrade to <code>1.23</code>. It must be something that homebrew installed for me? <span aria-label="shrug" class="emoji emoji-1f937" role="img" title="shrug">:shrug:</span>  </p>
+<p>I removed the LDFLAGS as it didn't seem to be required any more, and included <code>#cgo CFLAGS: -Wno-main-return-type</code> as I was getting warnings for that. I needed to add <code>//export main</code> so that the static library kept the main symbol in the artefact.</p>
+<p>Using zig for the c-compiler sounds interesting. I'll explore that further. </p>
+<p>Thank you for your assistance.</p>
+
+
+
+<a name="435866959"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Help%20with%20Go%20platform%20cross-compile/near/435866959" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Help.20with.20Go.20platform.20cross-compile.html#435866959">(Apr 28 2024 at 11:25)</a>:</h4>
+<p>btw you can set some environment variables to prevent Homebrew from automatically updating things:</p>
+<div class="codehilite"><pre><span></span><code>export HOMEBREW_NO_AUTO_UPDATE=1
+export HOMEBREW_NO_INSTALL_UPGRADE=1
+</code></pre></div>
+
+
+
+<a name="435868401"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/Help%20with%20Go%20platform%20cross-compile/near/435868401" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/Help.20with.20Go.20platform.20cross-compile.html#435868401">(Apr 28 2024 at 11:41)</a>:</h4>
+<p>A bit of a follow up to the above. <span class="user-mention" data-user-id="496321">@Oskar Hahn</span> and I did some more investigation into this. The issue is related to how I've set up the cross compilation with Go in that PR. Using environment variables <code>CGO_ENABLED=1</code> and setting <code>CC</code> to a cross compiler looks to be the solution. I didnt quite get to the point of fully working static library due to obscure issues, but I've convinced myself that someone familiar with go could do this without too much trouble. </p>
+<p>My take away though from this exploration is that it will be helpful to have an example or template with a good developer experience suited for the native toolchain. The current example is really helpful, I'dlike to add something like a build script maybe. </p>
+<p>Anyone who would like to build binaries for multiple archs and OS should be able to use things like GH actions or docker buildx as other alternatives.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

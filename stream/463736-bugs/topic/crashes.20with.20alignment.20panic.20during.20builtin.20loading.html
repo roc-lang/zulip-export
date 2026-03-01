@@ -1,0 +1,116 @@
+<html>
+<head><meta charset="utf-8"><title>crashes with alignment panic during builtin loading · bugs · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/index.html">bugs</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/crashes.20with.20alignment.20panic.20during.20builtin.20loading.html">crashes with alignment panic during builtin loading</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="568880000"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/crashes%20with%20alignment%20panic%20during%20builtin%20loading/near/568880000" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> nandi <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/crashes.20with.20alignment.20panic.20during.20builtin.20loading.html#568880000">(Jan 19 2026 at 20:10)</a>:</h4>
+<h1>Bug Report: <code>rocn</code> crashes with alignment panic during builtin loading</h1>
+<h2>Summary</h2>
+<p><code>rocn</code> crashes with an alignment panic during builtin module deserialization. The crash occurs before any user code is processed, making it impossible to use <code>rocn</code> with local platforms.</p>
+<h2>Version Info</h2>
+<div class="codehilite"><pre><span></span><code>Roc compiler version debug-bcb502a3
+</code></pre></div>
+<h2>Environment</h2>
+<ul>
+<li><strong>OS</strong>: Ubuntu 24.04.3 LTS</li>
+<li><strong>Kernel</strong>: 6.8.0-71-generic x86_64</li>
+<li><strong>Zig</strong>: snap package 15308</li>
+</ul>
+<h2>Minimal Reproduction</h2>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>mkdir<span class="w"> </span>-p<span class="w"> </span>/tmp/rocn-bug/platform<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>/tmp/rocn-bug
+
+<span class="c1"># Create minimal platform</span>
+cat<span class="w"> </span>&gt;<span class="w"> </span>platform/main.roc<span class="w"> </span><span class="s">&lt;&lt; 'EOF'</span>
+<span class="s">platform ""</span>
+<span class="s">    requires {} { main! : {} =&gt; {} }</span>
+<span class="s">    exposes []</span>
+<span class="s">    packages {}</span>
+<span class="s">    provides { main_for_host!: "main_for_host" }</span>
+<span class="s">    targets: {</span>
+<span class="s">        files: "targets/",</span>
+<span class="s">        exe: {</span>
+<span class="s">            x64musl: ["libhost.a", app],</span>
+<span class="s">        }</span>
+<span class="s">    }</span>
+
+<span class="s">main_for_host! : {} =&gt; I32</span>
+<span class="s">main_for_host! = |{}|</span>
+<span class="s">    main!({})</span>
+<span class="s">    0</span>
+<span class="s">EOF</span>
+
+<span class="c1"># Create minimal app</span>
+cat<span class="w"> </span>&gt;<span class="w"> </span>main.roc<span class="w"> </span><span class="s">&lt;&lt; 'EOF'</span>
+<span class="s">app [main!] { pf: platform "./platform/main.roc" }</span>
+
+<span class="s">main! = |{}| {}</span>
+<span class="s">EOF</span>
+
+<span class="c1"># Trigger crash</span>
+rocn<span class="w"> </span>main.roc
+</code></pre></div>
+<h2>Stack Trace</h2>
+<div class="codehilite"><pre><span></span><code>thread panic: incorrect alignment
+/home/nandi/code/roc/src/collections/safe_list.zig:178:45: in deserialize
+    const items_ptr: [*]T = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
+                            ^
+/home/nandi/code/roc/src/canonicalize/NodeStore.zig:4058:74: in deserialize
+    const deserialized_int128_values = self.int128_values.deserialize(base_addr).*;
+                                                                     ^
+/home/nandi/code/roc/src/canonicalize/ModuleEnv.zig:2262:44: in deserialize
+    .store = self.store.deserialize(base_addr, gpa).*,
+                                   ^
+/home/nandi/code/roc/src/eval/builtin_loading.zig:50:47: in loadCompiledModule
+    const env = try serialized_ptr.deserialize(base_addr, gpa, source, module_name);
+                                              ^
+/home/nandi/code/roc/src/eval/BuiltinModules.zig:57:68: in init
+    var builtin_module = try builtin_loading.loadCompiledModule(allocator,
+        compiled_builtins.builtin_bin, &quot;Builtin&quot;, compiled_builtins.builtin_source);
+                                                                   ^
+/home/nandi/code/roc/src/cli/main.zig:1684:55: in setupSharedMemoryWithModuleEnv
+    var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
+                                                      ^
+/home/nandi/code/roc/src/cli/main.zig:1244:58: in rocRun
+    const shm_result = try setupSharedMemoryWithModuleEnv(ctx, args.path, args.allow_errors);
+                                                         ^
+</code></pre></div>
+<h2>Analysis</h2>
+<p>The crash occurs in <code>BuiltinModules.init()</code> during deserialization of pre-compiled builtin modules. Specifically, <code>int128_values</code> in the <code>NodeStore</code> has incorrect alignment when being deserialized from the embedded binary.</p>
+<p>This suggests either:</p>
+<ol>
+<li>The <code>compiled_builtins.builtin_bin</code> was compiled with different alignment requirements than the current runtime</li>
+<li>There's a serialization/deserialization mismatch for 128-bit integer types</li>
+<li>The embedded binary is corrupted or incompatible with the current Zig version</li>
+</ol>
+<h2>Workaround</h2>
+<p>None known. The crash occurs before user code is processed, so it affects all uses of <code>rocn</code> with local platforms.</p>
+
+
+
+<a name="568928681"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/crashes%20with%20alignment%20panic%20during%20builtin%20loading/near/568928681" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/crashes.20with.20alignment.20panic.20during.20builtin.20loading.html#568928681">(Jan 20 2026 at 01:48)</a>:</h4>
+<p>what is <code>rocn</code>? <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="568928766"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/crashes%20with%20alignment%20panic%20during%20builtin%20loading/near/568928766" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> nandi <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/crashes.20with.20alignment.20panic.20during.20builtin.20loading.html#568928766">(Jan 20 2026 at 01:49)</a>:</h4>
+<p>its my symlink to new compiler heh i think i was thinking "roc new" or something</p>
+
+
+
+<a name="568928792"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/crashes%20with%20alignment%20panic%20during%20builtin%20loading/near/568928792" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> nandi <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/crashes.20with.20alignment.20panic.20during.20builtin.20loading.html#568928792">(Jan 20 2026 at 01:50)</a>:</h4>
+<p>I built again and i think error went away so not sure if this was because stale code or not</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

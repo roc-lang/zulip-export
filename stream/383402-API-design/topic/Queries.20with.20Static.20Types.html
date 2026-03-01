@@ -1,0 +1,339 @@
+<html>
+<head><meta charset="utf-8"><title>Queries with Static Types · API design · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/index.html">API design</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html">Queries with Static Types</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="449360063"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449360063" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449360063">(Jul 05 2024 at 17:15)</a>:</h4>
+<p>So, I'm guessing that <span class="user-mention" data-user-id="489294">@Agus Zubiaga</span> knows and the answer is somehow record builders, but general question: How do we make a nicer api for something like sqlite queries? If you look at basic webserver today, it is:</p>
+<div class="codehilite"><pre><span></span><code>execute :
+    {
+        path : Str,
+        query : Str,
+        bindings : List Binding,
+    }
+    -&gt; Task (List (List InternalSQL.SQLiteValue)) Error
+</code></pre></div>
+<p>Obviously for performance reasons, we could add prepared statements and keep those alive, but I am more concerned about the output type. The output type is a list of lists of tagged values. So for every row, we are paying the cost of an extra allocation. On top of that, the returned values have to be pattern matched. They basically have runtime type info.</p>
+<p>For this query, <code>SELECT id, task FROM todos WHERE status = :status</code>, the preferred type is almost certainly a <code>List { id: I64, task: Str}</code>. That both skips <code>n</code> allocations and has concrete types instead of a generic wrapper type.</p>
+
+
+
+<a name="449367280"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449367280" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449367280">(Jul 05 2024 at 17:57)</a>:</h4>
+<p>Right. The way this works in <code>roc-pg</code> is that before getting row data, we get a <code>Row Description</code> message which tells us what type each column holds and the name corresponding to each index. </p>
+<p>The result of a command is an opaque type that looks like this:</p>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nx">CmdResult</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nv">fields</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">List</span><span class="w"> </span><span class="nx">RowField</span><span class="p">,</span><span class="w">           </span><span class="c1"># name, type (amongst other things)</span>
+<span class="w">    </span><span class="nv">rows</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">List</span><span class="w"> </span><span class="p">(</span><span class="nx">List</span><span class="w"> </span><span class="p">(</span><span class="nx">List</span><span class="w"> </span><span class="nx">U8</span><span class="p">)),</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>The way you access the result is through a decoder API that can be used with record builders. All together a query looks like this:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="w">    </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Cmd</span><span class="nf">.</span><span class="nv">new</span><span class="w"> </span><span class="s">"select name, price from products"</span>
+<span class="w">    </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Cmd</span><span class="nf">.</span><span class="nv">expectN</span><span class="w"> </span><span class="p">(</span>
+<span class="w">        </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Result</span><span class="nf">.</span><span class="nv">succeed</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nv">name</span><span class="nf">:</span><span class="w"> </span><span class="nf">&lt;-</span><span class="w"> </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Result</span><span class="nf">.</span><span class="nv">str</span><span class="w"> </span><span class="s">"name"</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Result</span><span class="nf">.</span><span class="nv">apply</span><span class="p">,</span>
+<span class="w">            </span><span class="nv">price</span><span class="nf">:</span><span class="w"> </span><span class="nf">&lt;-</span><span class="w"> </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Result</span><span class="nf">.</span><span class="nv">dec</span><span class="w"> </span><span class="s">"price"</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Result</span><span class="nf">.</span><span class="nv">apply</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">    </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Client</span><span class="nf">.</span><span class="nv">command</span><span class="w"> </span><span class="nv">client</span>
+</code></pre></div>
+
+
+
+<a name="449368274"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449368274" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449368274">(Jul 05 2024 at 18:01)</a>:</h4>
+<p>It currently doesn't do this (I'm going to rewrite a lot of <code>roc-pg</code> once I'm done with module params), but the idea is that we  can use the type information from the row description to check that types of each columns match.</p>
+
+
+
+<a name="449368321"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449368321" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449368321">(Jul 05 2024 at 18:01)</a>:</h4>
+<p>Right now it will attempt to decode them anyway</p>
+
+
+
+<a name="449368628"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449368628" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449368628">(Jul 05 2024 at 18:02)</a>:</h4>
+<p>Oof, <code>List (List (List U8))</code>... cries in allocations.</p>
+
+
+
+<a name="449368783"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449368783" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449368783">(Jul 05 2024 at 18:03)</a>:</h4>
+<p>Theoretically, it could decode on the fly and directly build the output type?</p>
+
+
+
+<a name="449368895"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449368895" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449368895">(Jul 05 2024 at 18:04)</a>:</h4>
+<p>Yeah, for sure. That's just what it's now, but it doesn't have to be</p>
+
+
+
+<a name="449369074"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449369074" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449369074">(Jul 05 2024 at 18:05)</a>:</h4>
+<p>I also want to build a cursor-based API for streaming applications</p>
+
+
+
+<a name="449369119"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449369119" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449369119">(Jul 05 2024 at 18:05)</a>:</h4>
+<p>I wonder what the cost of FFI is. Cause theoretically, I could run the sqlite state machine in roc. That would enable it to build up whatever type and have a similar API that can avoid allocations.</p>
+
+
+
+<a name="449369184"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449369184" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449369184">(Jul 05 2024 at 18:05)</a>:</h4>
+<p>Probably a lot smaller than the cost of many allocations.</p>
+
+
+
+<a name="449369366"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449369366" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449369366">(Jul 05 2024 at 18:06)</a>:</h4>
+<p>Yeah, that makes sense</p>
+
+
+
+<a name="449372275"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449372275" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449372275">(Jul 05 2024 at 18:20)</a>:</h4>
+<p>I think I might take a crack at improving the sqlite API for basic webserver. Won't make a query builder (still just string queries), but want to try and make a cursor API that can use record builders to extract a list of rows.</p>
+
+
+
+<a name="449442321"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449442321" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449442321">(Jul 06 2024 at 05:55)</a>:</h4>
+<p>So thinking about this more. Instead of record builder, would you actually just want to use the more flexible version of decode (<a class="stream-topic" data-stream-id="304641" href="/#narrow/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode">#ideas &gt; Revamped Encode and Decode</a> ) for using a cursor style api to build out roc types?</p>
+<p>I guess I'm not exactly sure how a record builder would apply to something generating a list of records like an sql query.</p>
+
+
+
+<a name="449478197"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449478197" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449478197">(Jul 06 2024 at 11:13)</a>:</h4>
+<p>Ah, right. I guess <code>Decode</code> would be a better fit for a raw-SQL API. You’d probably have to fail in some cases such as nested records, but that’s probably fine.</p>
+<p>I tried implementing it for <code>roc-pg</code> originally, but the current implementation isn’t flexible enough. I needed custom state, but I believe that’s fixed by this flexible proposal.</p>
+
+
+
+<a name="449478397"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449478397" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449478397">(Jul 06 2024 at 11:16)</a>:</h4>
+<p>For a type safe query builder, though, record builders are better because they allow you to compose the selection and decoding as one</p>
+
+
+
+<a name="449514396"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449514396" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449514396">(Jul 06 2024 at 15:50)</a>:</h4>
+<p>Luckily for me sqlite doesn't really have types anyway, just suggestions. As in, it records a type for every element, but the type of an element does not need to match the type of a column. The column type is just the "recommended" type. Besides the special case of null, it will happily attempt to convert any type to any other type.</p>
+
+
+
+<a name="449514911"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449514911" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449514911">(Jul 06 2024 at 15:53)</a>:</h4>
+<p>Yeah <span aria-label="mind blown" class="emoji emoji-1f92f" role="img" title="mind blown">:mind_blown:</span> was my reaction too when learning this</p>
+
+
+
+<a name="449515162"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449515162" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449515162">(Jul 06 2024 at 15:54)</a>:</h4>
+<p><a href="https://youtu.be/sgVpOaJLoG0?si=l8Cg5t_Z8oXDQUHJ">https://youtu.be/sgVpOaJLoG0?si=l8Cg5t_Z8oXDQUHJ</a></p>
+<div class="youtube-video message_inline_image"><a data-id="sgVpOaJLoG0" href="https://youtu.be/sgVpOaJLoG0?si=l8Cg5t_Z8oXDQUHJ"><img src="https://uploads.zulipusercontent.net/9ae17bc39ac4b70e6ec3cd7cb25786d2d671eb8b/68747470733a2f2f692e7974696d672e636f6d2f76692f736756704f614a4c6f47302f64656661756c742e6a7067"></a></div>
+
+
+
+<a name="449516222"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449516222" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449516222">(Jul 06 2024 at 16:00)</a>:</h4>
+<p>ah ok, at least you can make tables "strict"</p>
+
+
+
+<a name="449516478"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449516478" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449516478">(Jul 06 2024 at 16:01)</a>:</h4>
+<p>still annoying that everything has to be tagged (I imagine) in order to support these flexible types</p>
+
+
+
+<a name="449516685"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449516685" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449516685">(Jul 06 2024 at 16:02)</a>:</h4>
+<p>For sure, but nothing is nested and loading a raw value from sqlite should be cheap with a cursor API. So not that much of a cost.</p>
+
+
+
+<a name="449516899"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449516899" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449516899">(Jul 06 2024 at 16:04)</a>:</h4>
+<p>The rust sqlite library doesn't even expose getting the real column type ... <span aria-label="joy" class="emoji emoji-1f602" role="img" title="joy">:joy:</span></p>
+
+
+
+<a name="449516935"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449516935" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449516935">(Jul 06 2024 at 16:04)</a>:</h4>
+<p>Just the current row column type</p>
+
+
+
+<a name="449518310"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449518310" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449518310">(Jul 06 2024 at 16:10)</a>:</h4>
+<p>Ah, looks like <code>rusqlite</code> is the more popular library with more features like this.</p>
+
+
+
+<a name="449518508"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449518508" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449518508">(Jul 06 2024 at 16:11)</a>:</h4>
+<p>That said, I probably could pretty easily live with a raw sqlite3 wrapper for roc. Don't really need fancy rust macros and features. Just raw query binding and cursor access.</p>
+
+
+
+<a name="449543005"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449543005" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449543005">(Jul 06 2024 at 18:39)</a>:</h4>
+<p>I attempted to make a basic form of something that matches the <code>roc-pg</code> record builder for sqlite. It directly reads a column at a time, converting result and building a record. I have it type checking, but I don't think roc likes the equivalent of <code>roc-pg</code> but using a bunch of <code>Task</code> instead of <code>Result</code>.</p>
+<p>The end code looks pretty decent though:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">queryTodosByStatus</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">dbPath</span><span class="p">,</span><span class="w"> </span><span class="nv">status</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">stmt</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="kt">SQLite3</span><span class="nf">.</span><span class="nv">prepareAndBind</span><span class="err">!</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nv">path</span><span class="nf">:</span><span class="w"> </span><span class="nv">dbPath</span><span class="p">,</span>
+<span class="w">        </span><span class="nv">query</span><span class="nf">:</span><span class="w"> </span><span class="s">"SELECT id, task FROM todos WHERE status = :status;"</span><span class="p">,</span>
+<span class="w">        </span><span class="nv">bindings</span><span class="nf">:</span><span class="w"> </span><span class="p">[{</span><span class="w"> </span><span class="nv">name</span><span class="nf">:</span><span class="w"> </span><span class="s">":status"</span><span class="p">,</span><span class="w"> </span><span class="nv">value</span><span class="nf">:</span><span class="w"> </span><span class="kt">String</span><span class="w"> </span><span class="nv">status</span><span class="w"> </span><span class="p">}],</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="kt">SQLite3</span><span class="nf">.</span><span class="nv">decode</span><span class="err">!</span>
+<span class="w">        </span><span class="nv">stmt</span>
+<span class="w">        </span><span class="p">(</span>
+<span class="w">            </span><span class="kt">SQLite3</span><span class="nf">.</span><span class="nv">succeed</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="nv">id</span><span class="nf">:</span><span class="w"> </span><span class="nf">&lt;-</span><span class="w"> </span><span class="kt">SQLite3</span><span class="nf">.</span><span class="nv">i64</span><span class="w"> </span><span class="s">"id"</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">SQLite3</span><span class="nf">.</span><span class="nv">apply</span><span class="p">,</span>
+<span class="w">                </span><span class="nv">task</span><span class="nf">:</span><span class="w"> </span><span class="nf">&lt;-</span><span class="w"> </span><span class="kt">SQLite3</span><span class="nf">.</span><span class="nv">str</span><span class="w"> </span><span class="s">"task"</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">SQLite3</span><span class="nf">.</span><span class="nv">apply</span><span class="p">,</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">)</span>
+</code></pre></div>
+
+
+
+<a name="449543026"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449543026" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449543026">(Jul 06 2024 at 18:39)</a>:</h4>
+<p>On this branch if anyway wants to look into why it won't compile: <a href="https://github.com/roc-lang/basic-webserver/compare/main...sqlite-improvements">https://github.com/roc-lang/basic-webserver/compare/main...sqlite-improvements</a></p>
+
+
+
+<a name="449543090"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449543090" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449543090">(Jul 06 2024 at 18:40)</a>:</h4>
+<p>Ends up being a <code>no lambda set found</code> error.</p>
+
+
+
+<a name="449561082"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449561082" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449561082">(Jul 06 2024 at 20:58)</a>:</h4>
+<p>Also, I think I have everything wired up on the rust side. So assuming we can figure out the roc compiler error or a workaround, this should be a much nicer and more performant sqlite api. One that is able to just build a final list of the wanted result type without any runtime tagging being required.</p>
+<p>Also has the power to reuse prepared statements, but unless we get prepared statement cached at init time, that won't be particularly useful.</p>
+<p>Caveat: also need to verify if statements get freed at the correct time.</p>
+
+
+
+<a name="449562690"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449562690" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449562690">(Jul 06 2024 at 21:23)</a>:</h4>
+<p><span class="user-mention" data-user-id="489294">@Agus Zubiaga</span> quick record builder question:</p>
+<p>Is there a reason to separate <code>Pg.Result.apply</code> from <code>Pg.Result.str</code>?</p>
+<p>As in, you would embed <code>Pg.Result.apply</code> into <code>Pg.Result.str</code> and then the record builder code would be:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="w">    </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Cmd</span><span class="nf">.</span><span class="nv">new</span><span class="w"> </span><span class="s">"select name, price from products"</span>
+<span class="w">    </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Cmd</span><span class="nf">.</span><span class="nv">expectN</span><span class="w"> </span><span class="p">(</span>
+<span class="w">        </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Result</span><span class="nf">.</span><span class="nv">succeed</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nv">name</span><span class="nf">:</span><span class="w"> </span><span class="nf">&lt;-</span><span class="w"> </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Result</span><span class="nf">.</span><span class="nv">str</span><span class="w"> </span><span class="s">"name"</span><span class="p">,</span>
+<span class="w">            </span><span class="nv">price</span><span class="nf">:</span><span class="w"> </span><span class="nf">&lt;-</span><span class="w"> </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Result</span><span class="nf">.</span><span class="nv">dec</span><span class="w"> </span><span class="s">"price"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">)</span>
+<span class="w">    </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Pg</span><span class="nf">.</span><span class="kt">Client</span><span class="nf">.</span><span class="nv">command</span><span class="w"> </span><span class="nv">client</span>
+</code></pre></div>
+
+
+
+<a name="449562804"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449562804" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449562804">(Jul 06 2024 at 21:25)</a>:</h4>
+<p>Yeah, that’s what I did for the query builder. That is more convenient, but the downside is that the resulting type is a function which is not as nice if you want to <code>map</code> it right there.</p>
+
+
+
+<a name="449562872"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449562872" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449562872">(Jul 06 2024 at 21:26)</a>:</h4>
+<p>That’s not an issue in the proposed map2-based record builders, though</p>
+
+
+
+<a name="449562899"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449562899" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449562899">(Jul 06 2024 at 21:27)</a>:</h4>
+<p>which one of the main reasons I’m looking forward to it tbh</p>
+
+
+
+<a name="449563016"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449563016" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449563016">(Jul 06 2024 at 21:29)</a>:</h4>
+<p>If you map in the builder, can you return new error types? I guess so, the errors unify. So like you theoretically could take that string and run decode on it right in the builder then pass it to apply.</p>
+
+
+
+<a name="449563121"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449563121" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449563121">(Jul 06 2024 at 21:30)</a>:</h4>
+<p>I described that issue on the last point here: <a href="#narrow/stream/304641-ideas/topic/map2-based.20record.20builders/near/446284737">https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/map2-based.20record.20builders/near/446284737</a></p>
+
+
+
+<a name="449588506"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449588506" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449588506">(Jul 07 2024 at 01:52)</a>:</h4>
+<p><span class="user-mention" data-user-id="454654">@Ayaz Hafiz</span> Do we have any good way to start debugging something like:</p>
+<div class="codehilite"><pre><span></span><code>no lambda set found for (`36.IdentId(76)`, [
+    InLayout(
+        42,
+    ),
+    InLayout(
+        425,
+    ),
+]): LambdaSet {
+    set: [
+        ( 36.76, [InLayout(42), InLayout(274)]),
+    ],
+    args: [
+        InLayout(UNIT),
+    ],
+    ret: InLayout(
+        269,
+    ),
+    representation: InLayout(
+        275,
+    ),
+    full_layout: InLayout(
+        276,
+    ),
+}
+</code></pre></div>
+<p>?</p>
+<p><code>ROC_CHECK_MONO_IR=1</code> I don't think is reached (at least timing execution didn't change with this set.<br>
+<code>ROC_PRINT_IR_AFTER_SPECIALIZATION=1</code> is not reached before the crash.</p>
+
+
+
+<a name="449589459"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449589459" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449589459">(Jul 07 2024 at 02:07)</a>:</h4>
+<p>not really.. but the problem here is that InLayout(425) is not InLayout(274). You can print out the full representation of those types with <code>interner.dbg_deep</code></p>
+
+
+
+<a name="449589549"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449589549" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449589549">(Jul 07 2024 at 02:09)</a>:</h4>
+<p>is this likely related to the cross-module bug?</p>
+
+
+
+<a name="449589566"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449589566" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449589566">(Jul 07 2024 at 02:09)</a>:</h4>
+<p>(the bug where "this lambda set is not this other one, but ought to be" is a symptom)</p>
+
+
+
+<a name="449590644"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Queries%20with%20Static%20Types/near/449590644" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Queries.20with.20Static.20Types.html#449590644">(Jul 07 2024 at 02:28)</a>:</h4>
+<p>i cant tell without more investigation</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

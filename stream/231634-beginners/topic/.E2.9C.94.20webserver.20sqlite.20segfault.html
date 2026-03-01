@@ -1,0 +1,169 @@
+<html>
+<head><meta charset="utf-8"><title>✔ webserver sqlite segfault · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html">✔ webserver sqlite segfault</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="518920865"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/518920865" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Prokop Randacek <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#518920865">(May 18 2025 at 13:09)</a>:</h4>
+<p>Hi! :D</p>
+<p>I'm trying to setup a sqlite inside my basic-webserver based application but i'm getting a segfault at runtime with no extra information. I'm pretty sure i'm doing something bad in the init:</p>
+<div class="codehilite"><pre><span></span><code>init! : {} =&gt; Result Model _
+init! = |_|
+    db_path = Env.var!(&quot;DB_PATH&quot;) ? |err| ServerErr(&quot;DB_PATH not set: ${Inspect.to_str(err)}&quot;)
+
+    create_command = &quot;CREATE TABLE responses (id INTEGER PRIMARY KEY AUTOINCREMENT, time INTEGER, ip TEXT, lat DOUBLE, lng DOUBLE, type INTEGER, comment TEXT)&quot;
+
+    existing_create_command =
+        Sqlite.query!(
+            {
+                path: db_path,
+                query: &quot;SELECT sql FROM sqlite_schema WHERE type=&#39;table&#39; AND name=&#39;responses&#39;;&quot;,
+                bindings: [],
+                row: Sqlite.str(&quot;sql&quot;),
+            },
+        )
+        ? |err| ServerErr(&quot;Failed to select from sqlite schemas: ${Inspect.to_str(err)}&quot;)
+
+    if existing_create_command != create_command then
+        Err(ServerErr(&quot;DB already contains responses table and it has a bad shape&quot;))
+    else
+        select_stmt =
+            Sqlite.prepare!(
+                {
+                    path: db_path,
+                    query: &quot;SELECT * FROM responses;&quot;,
+                },
+            )
+            ? |err| ServerErr(&quot;Failed to prepare sqlite statement: ${Inspect.to_str(err)}&quot;)
+
+        insert_stmt =
+            Sqlite.prepare!(
+                {
+                    path: db_path,
+                    query: &quot;INSERT INTO responses (time, ip, lat, long, type, comment) VALUES (:time, :ip, :lat, :long, :type, :comment);&quot;,
+                },
+            )
+            ? |err| ServerErr(&quot;Failed to prepare sqlite statement: ${Inspect.to_str(err)}&quot;)
+
+        Ok({ select_stmt, insert_stmt })
+</code></pre></div>
+<p>I'm trying to check that there is a table that I expect and then prepare two statements that I want to use later. I was going to add creating the new table if it is not there yet but I got stuck on this.</p>
+<p>Is there something obvious i'm missing? Thanks for any help! :D</p>
+<p>Full code is here: <a href="https://git.sr.ht/~prokop/mapform/tree/f773abdd1e52650e2565bdf29c3cc2089a2a52d7/item/main.roc">https://git.sr.ht/~prokop/mapform/tree/f773abdd1e52650e2565bdf29c3cc2089a2a52d7/item/main.roc</a></p>
+
+
+
+<a name="518933565"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/518933565" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#518933565">(May 18 2025 at 15:53)</a>:</h4>
+<p>Hmm. Definitely a basic webserver bug:</p>
+<div class="codehilite"><pre><span></span><code>main(4165,0x1ecdfc840) malloc: *** error for object 0x1009d4000: pointer being freed was not allocated
+main(4165,0x1ecdfc840) malloc: *** set a breakpoint in malloc_error_break to debug
+Process 4165 stopped
+* thread #1, queue = &#39;com.apple.main-thread&#39;, stop reason = signal SIGABRT
+    frame #0: 0x0000000183453720 libsystem_kernel.dylib`__pthread_kill + 8
+libsystem_kernel.dylib`__pthread_kill:
+-&gt;  0x183453720 &lt;+8&gt;:  b.lo   0x183453740    ; &lt;+40&gt;
+    0x183453724 &lt;+12&gt;: pacibsp
+    0x183453728 &lt;+16&gt;: stp    x29, x30, [sp, #-0x10]!
+    0x18345372c &lt;+20&gt;: mov    x29, sp
+(lldb) bt
+* thread #1, queue = &#39;com.apple.main-thread&#39;, stop reason = signal SIGABRT
+  * frame #0: 0x0000000183453720 libsystem_kernel.dylib`__pthread_kill + 8
+    frame #1: 0x000000018348bf70 libsystem_pthread.dylib`pthread_kill + 288
+    frame #2: 0x0000000183398908 libsystem_c.dylib`abort + 128
+    frame #3: 0x00000001832a1e38 libsystem_malloc.dylib`malloc_vreport + 896
+    frame #4: 0x00000001832a59bc libsystem_malloc.dylib`malloc_report + 64
+    frame #5: 0x00000001832c4144 libsystem_malloc.dylib`find_zone_and_free + 528
+    frame #6: 0x0000000100007494 main`___lldb_unnamed_symbol21408 + 16
+    frame #7: 0x0000000100061f0c main`___lldb_unnamed_symbol21642 + 584
+    frame #8: 0x000000010004694c main`Host_sqlite_reset!_a45290bef5734ad62afcaea912ebb28a88fcce6265e83e5ce118554fa9b23df6 + 48
+    frame #9: 0x000000010004a760 main`Sqlite_reset!_7caba61bebab67ae1a3d5e6f4932f5086371aaa834774ba7fe45103dc45036 + 28
+    frame #10: 0x000000010005e79c main`Sqlite_query_prepared!_3ef0be3dc434ba1162e39580a72ad0387348f7e2ac5c485921af9f85a731eea + 388
+    frame #11: 0x0000000100047040 main`Sqlite_query!_7b73be30696c7fe3ed242ca4629f76c2f696011d9271def91eeffdd89e9134d + 492
+    frame #12: 0x000000010005a20c main`#UserApp_init!_8ea48f352d7289114fe202e56461de528fa632d8a6cda9163cba5554b08a8b + 564
+    frame #13: 0x000000010005d6f4 main`_init_for_host!_e95211bde2283defe545e72d738137b8d7082e1cb419ffde6603c1dfde96f + 32
+    frame #14: 0x000000010005d9f4 main`roc__init_for_host_1_exposed + 16
+    frame #15: 0x000000010011c26c main`rust_main + 44
+    frame #16: 0x000000018310c274 dyld`start + 2840
+</code></pre></div>
+
+
+
+<a name="518934373"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/518934373" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#518934373">(May 18 2025 at 16:03)</a>:</h4>
+<p>I just tested with basic-webserver built from source and everything works as expected</p>
+
+
+
+<a name="518934420"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/518934420" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#518934420">(May 18 2025 at 16:04)</a>:</h4>
+<p>I wonder if we have a fix that just hasn't been released yet</p>
+
+
+
+<a name="518934497"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/518934497" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#518934497">(May 18 2025 at 16:05)</a>:</h4>
+<p><a href="https://github.com/roc-lang/basic-webserver/issues/106">https://github.com/roc-lang/basic-webserver/issues/106</a></p>
+
+
+
+<a name="518934501"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/518934501" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#518934501">(May 18 2025 at 16:05)</a>:</h4>
+<p>hasn't been released</p>
+
+
+
+<a name="518934768"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/518934768" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#518934768">(May 18 2025 at 16:09)</a>:</h4>
+<p>Or, this fix: <a href="https://github.com/roc-lang/basic-webserver/issues/104">https://github.com/roc-lang/basic-webserver/issues/104</a></p>
+
+
+
+<a name="518934782"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/518934782" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#518934782">(May 18 2025 at 16:09)</a>:</h4>
+<p>But yeah, we need a new release of basic webserver</p>
+
+
+
+<a name="518956578"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/518956578" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Prokop Randacek <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#518956578">(May 18 2025 at 20:41)</a>:</h4>
+<p>Alright. I will be looking forward for the next releaste then :D</p>
+
+
+
+<a name="518956582"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/518956582" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#518956582">(May 18 2025 at 20:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="917605">Prokop Randacek</span> has marked this topic as resolved.</p>
+
+
+
+<a name="519043818"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/519043818" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#519043818">(May 19 2025 at 09:06)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/channel/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault/near/518934782">said</a>:</p>
+<blockquote>
+<p>But yeah, we need a new release of basic webserver</p>
+</blockquote>
+<p>It's a high priority TODO for me, there are a bunch of exposed functions without tests, so I want to add tests for those before releasing.</p>
+
+
+
+<a name="519045242"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20webserver%20sqlite%20segfault/near/519045242" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault.html#519045242">(May 19 2025 at 09:11)</a>:</h4>
+<p><span class="user-mention" data-user-id="917605">@Prokop Randacek</span> if you want, you can build the latest version from source with:</p>
+<div class="codehilite"><pre><span></span><code>git clone https://github.com/roc-lang/basic-webserver.git
+cd basic-webserver
+nix develop
+roc build.roc
+roc examples/hello-web.roc --linker=legacy
+</code></pre></div>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

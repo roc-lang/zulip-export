@@ -1,0 +1,255 @@
+<html>
+<head><meta charset="utf-8"><title>Understanding performance · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html">Understanding performance</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="418509885"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418509885" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anne Archibald <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418509885">(Jan 28 2024 at 15:09)</a>:</h4>
+<p>I'm an absolute beginner at roc, so I thought I'd try a CS 101 exercise: naive functional mergesort. It is Slow. How should I go about figuring out why?</p>
+<div class="codehilite"><pre><span></span><code>mergesort = \list -&gt;
+    n = (List.len list) // 2
+    r = List.split list n
+    when n is
+        0 -&gt; list
+        _ -&gt; mergeSorted (mergesort r.before) (mergesort r.others)
+
+mergeSorted = \left, right -&gt;
+    when left is
+        [] -&gt; right
+        [leftFirst, .. as leftRest] -&gt;
+            when right is
+                [] -&gt; left
+                [rightFirst, .. as rightRest] -&gt;
+                    if leftFirst &lt;= rightFirst then
+                        mergeSorted leftRest right |&gt; List.prepend leftFirst
+                    else
+                        mergeSorted left rightRest |&gt; List.prepend rightFirst
+</code></pre></div>
+<p>I know roc lists are actually contiguous arrays, so prepend, split, dropFirst, and maybe even destructuring may be expensive. But this is the obvious way to write the algorithm, so how should I find my way from here to something efficient?</p>
+<p>(Yes, I know there's a sort function, and I know that it's slow for a reason that may have to do with list operation problems, and I know there's a problem with lists where I can't even make one that's 100k elements long without a segfault. And maybe this algorithm will be efficient when the list problems are fixed. But how can I find out? Does my code permit tail-call elimination, opportunistic mutation, copy-free slicing?) </p>
+<p>Full code attached; I'm sure the style is appalling.<br>
+<a href="/user_uploads/22008/LsI_Uycxfv4YtKWxQCzDBHBq/main.roc">main.roc</a></p>
+
+
+
+<a name="418517923"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418517923" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418517923">(Jan 28 2024 at 16:56)</a>:</h4>
+<p>So generally speaking for measuring the performance of roc, you want to use <code>--optimize</code> and <code>--profiling</code>. Then use some sort of sampling profiler that can read the stack (perf, instruments, dtrace). I tend to find <code>perf</code> with <code>--call-graph dwarf</code> works the best, but the others are functional. I gave <a href="https://drive.google.com/file/d/11gKHrsUH3HwCPrqlXudCJRqkYyjWrfY_/view?usp=drive_link">a talk about this in the last meetup</a>. Was the first talk.</p>
+
+
+
+<a name="418517942"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418517942" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418517942">(Jan 28 2024 at 16:57)</a>:</h4>
+<p>Looking at the profile, about 90% of the time is spent in <code>memmove</code></p>
+
+
+
+<a name="418517959"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418517959" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418517959">(Jan 28 2024 at 16:57)</a>:</h4>
+<p>This is do to prepending instead of appending to the arrays in mergeSorted.</p>
+
+
+
+<a name="418518035"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418518035" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418518035">(Jan 28 2024 at 16:58)</a>:</h4>
+<p>That is easy to fix with swapping to the last instead of the first:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">mergeSorted</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">left</span><span class="p">,</span><span class="w"> </span><span class="nv">right</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">when</span><span class="w"> </span><span class="nv">left</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">        </span><span class="p">[]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nv">right</span>
+<span class="w">        </span><span class="p">[</span><span class="nf">..</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nv">leftRest</span><span class="p">,</span><span class="w"> </span><span class="nv">leftLast</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nv">when</span><span class="w"> </span><span class="nv">right</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">                </span><span class="p">[]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nv">left</span>
+<span class="w">                </span><span class="p">[</span><span class="nf">..</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nv">rightRest</span><span class="p">,</span><span class="w"> </span><span class="nv">rightLast</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">                    </span><span class="kr">if</span><span class="w"> </span><span class="nv">leftLast</span><span class="w"> </span><span class="nf">&gt;=</span><span class="w"> </span><span class="nv">rightLast</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">                        </span><span class="nv">mergeSorted</span><span class="w"> </span><span class="nv">leftRest</span><span class="w"> </span><span class="nv">right</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">List</span><span class="nf">.</span><span class="nv">append</span><span class="w"> </span><span class="nv">leftLast</span>
+<span class="w">                    </span><span class="kr">else</span>
+<span class="w">                        </span><span class="nv">mergeSorted</span><span class="w"> </span><span class="nv">left</span><span class="w"> </span><span class="nv">rightRest</span><span class="w"> </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">List</span><span class="nf">.</span><span class="nv">append</span><span class="w"> </span><span class="nv">rightLast</span>
+</code></pre></div>
+
+
+
+<a name="418518926"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418518926" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418518926">(Jan 28 2024 at 17:10)</a>:</h4>
+<p>After that, the function isn't tail recursive. which actually makes tracking down the real issue and getting a perf graph quite hard. Luckily, that is easy to fix as well:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">mergeSorted</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">accum</span><span class="p">,</span><span class="w"> </span><span class="nv">left</span><span class="p">,</span><span class="w"> </span><span class="nv">right</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">when</span><span class="w"> </span><span class="nv">left</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">        </span><span class="p">[]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">List</span><span class="nf">.</span><span class="nv">concat</span><span class="w"> </span><span class="nv">accum</span><span class="w"> </span><span class="nv">right</span>
+<span class="w">        </span><span class="p">[</span><span class="nf">..</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nv">leftRest</span><span class="p">,</span><span class="w"> </span><span class="nv">leftLast</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nv">when</span><span class="w"> </span><span class="nv">right</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">                </span><span class="p">[]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">List</span><span class="nf">.</span><span class="nv">concat</span><span class="w"> </span><span class="nv">accum</span><span class="w"> </span><span class="nv">left</span>
+<span class="w">                </span><span class="p">[</span><span class="nf">..</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nv">rightRest</span><span class="p">,</span><span class="w"> </span><span class="nv">rightLast</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">                    </span><span class="kr">if</span><span class="w"> </span><span class="nv">leftLast</span><span class="w"> </span><span class="nf">&gt;=</span><span class="w"> </span><span class="nv">rightLast</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">                        </span><span class="nv">mergeSorted</span><span class="w"> </span><span class="p">(</span><span class="kt">List</span><span class="nf">.</span><span class="nv">append</span><span class="w"> </span><span class="nv">accum</span><span class="w"> </span><span class="nv">leftLast</span><span class="p">)</span><span class="w"> </span><span class="nv">leftRest</span><span class="w"> </span><span class="nv">right</span>
+<span class="w">                    </span><span class="kr">else</span>
+<span class="w">                        </span><span class="nv">mergeSorted</span><span class="w"> </span><span class="p">(</span><span class="kt">List</span><span class="nf">.</span><span class="nv">append</span><span class="w"> </span><span class="nv">accum</span><span class="w"> </span><span class="nv">rightLast</span><span class="p">)</span><span class="w"> </span><span class="nv">left</span><span class="w"> </span><span class="nv">rightRest</span>
+</code></pre></div>
+
+
+
+<a name="418519173"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418519173" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418519173">(Jan 28 2024 at 17:13)</a>:</h4>
+<p>With this version, there is a solid chunk of time spent in <code>realloc</code> still. We can just add a <code>List.withCapacity</code> at the beginning to help alleviate that:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">mergesort</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">list</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">len</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="kt">List</span><span class="nf">.</span><span class="nv">len</span><span class="w"> </span><span class="nv">list</span>
+<span class="w">    </span><span class="nv">n</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nv">len</span><span class="w"> </span><span class="nf">//</span><span class="w"> </span><span class="mi">2</span>
+<span class="w">    </span><span class="nv">r</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="kt">List</span><span class="nf">.</span><span class="nv">split</span><span class="w"> </span><span class="nv">list</span><span class="w"> </span><span class="nv">n</span>
+<span class="w">    </span><span class="nv">when</span><span class="w"> </span><span class="nv">n</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">        </span><span class="mi">0</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nv">list</span>
+<span class="w">        </span><span class="nv">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nv">mergeSorted</span><span class="w"> </span><span class="p">(</span><span class="kt">List</span><span class="nf">.</span><span class="nv">withCapacity</span><span class="w"> </span><span class="nv">len</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nv">mergesort</span><span class="w"> </span><span class="nv">r</span><span class="nf">.</span><span class="nv">before</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nv">mergesort</span><span class="w"> </span><span class="nv">r</span><span class="nf">.</span><span class="nv">others</span><span class="p">)</span>
+</code></pre></div>
+
+
+
+<a name="418519580"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418519580" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418519580">(Jan 28 2024 at 17:19)</a>:</h4>
+<p>At this point, the next biggest obvious thing to fix is some refcounting stuff, but that is compiler work and not something to be done in userland.</p>
+
+
+
+<a name="418519657"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418519657" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418519657">(Jan 28 2024 at 17:20)</a>:</h4>
+<p>Of course even better than any of this would be to do all of the work inplace with indices, but that is essentially a full rewrite of the algorithm</p>
+
+
+
+<a name="418722301"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418722301" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anne Archibald <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418722301">(Jan 29 2024 at 21:18)</a>:</h4>
+<p>Thanks! I ended up with:</p>
+<div class="codehilite"><pre><span></span><code>mergesort = \list -&gt;
+    n = List.len list
+    r = List.split list (n//2)
+    when n is
+        0 -&gt; list
+        1 -&gt; list
+        _ -&gt; mergeSorted (List.withCapacity n) (mergesort r.before) (mergesort r.others)
+
+mergeSorted = \accum, left, right -&gt;
+    when left is
+        [] -&gt; List.concat right (List.reverse accum)
+        [.. as leftRest, leftLast] -&gt;
+            when right is
+                [] -&gt; List.concat left (List.reverse accum)
+                [.. as rightRest, rightLast] -&gt;
+                    if leftLast &gt; rightLast then
+                        mergeSorted (List.append accum leftLast) leftRest right
+                    else
+                        mergeSorted (List.append accum rightLast) left rightRest
+</code></pre></div>
+<p>Is tail recursion easy enough to detect that the language server could highlight tail calls differently? (Particularly if it's modulo cons...) </p>
+<p>Appending versus prepending I guess is just something you have to know, and I suppose one should just trust the compiler to manage opportunistic mutation?</p>
+<p>Are there differences in efficiency for different destructuring patterns (a "rest" that's the beginning versus the end of the list, for example)?</p>
+<p>I guess one can always profile, but I'm hoping to develop some mental rules/idioms for efficient style.</p>
+
+
+
+<a name="418724409"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418724409" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418724409">(Jan 29 2024 at 21:30)</a>:</h4>
+<blockquote>
+<p>(Particularly if it's modulo cons...) </p>
+</blockquote>
+<p>IIUC, which I very well may not, modulo cons only applies to tags in roc, so it wouldn't apply to this case. Roc's lists are flat.</p>
+<blockquote>
+<p>and I suppose one should just trust the compiler to manage opportunistic mutation?</p>
+</blockquote>
+<p>Trust but verify is my general opinion.</p>
+<blockquote>
+<p>Are there differences in efficiency for different destructuring patterns (a "rest" that's the beginning versus the end of the list, for example)?</p>
+</blockquote>
+<p>There shouldn't be for the most part. Though rest at the beginning in some certain mutating cases may be faster. Like if you took rest and then appended to it.</p>
+<blockquote>
+<p>List.reverse accum</p>
+</blockquote>
+<p>That will hurt perf. Probably should look into how this can be avoided.</p>
+
+
+
+<a name="418726765"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418726765" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418726765">(Jan 29 2024 at 21:46)</a>:</h4>
+<p>So probably actually want this:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">mergeSorted</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">accum</span><span class="p">,</span><span class="w"> </span><span class="nv">left</span><span class="p">,</span><span class="w"> </span><span class="nv">right</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">when</span><span class="w"> </span><span class="nv">left</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">        </span><span class="p">[]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">List</span><span class="nf">.</span><span class="nv">concat</span><span class="w"> </span><span class="nv">accum</span><span class="w"> </span><span class="nv">right</span>
+<span class="w">        </span><span class="p">[</span><span class="nv">leftFirst</span><span class="p">,</span><span class="w"> </span><span class="nf">..</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nv">leftRest</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nv">when</span><span class="w"> </span><span class="nv">right</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">                </span><span class="p">[]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">List</span><span class="nf">.</span><span class="nv">concat</span><span class="w"> </span><span class="nv">accum</span><span class="w"> </span><span class="nv">left</span>
+<span class="w">                </span><span class="p">[</span><span class="nv">rightFirst</span><span class="p">,</span><span class="w"> </span><span class="nf">..</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nv">rightRest</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">                    </span><span class="kr">if</span><span class="w"> </span><span class="nv">leftFirst</span><span class="w"> </span><span class="nf">&lt;=</span><span class="w"> </span><span class="nv">rightFirst</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">                        </span><span class="nv">mergeSorted</span><span class="w"> </span><span class="p">(</span><span class="kt">List</span><span class="nf">.</span><span class="nv">append</span><span class="w"> </span><span class="nv">accum</span><span class="w"> </span><span class="nv">leftFirst</span><span class="p">)</span><span class="w"> </span><span class="nv">leftRest</span><span class="w"> </span><span class="nv">right</span>
+<span class="w">                    </span><span class="kr">else</span>
+<span class="w">                        </span><span class="nv">mergeSorted</span><span class="w"> </span><span class="p">(</span><span class="kt">List</span><span class="nf">.</span><span class="nv">append</span><span class="w"> </span><span class="nv">accum</span><span class="w"> </span><span class="nv">rightFirst</span><span class="p">)</span><span class="w"> </span><span class="nv">left</span><span class="w"> </span><span class="nv">rightRest</span>
+</code></pre></div>
+
+
+
+<a name="418726981"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418726981" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418726981">(Jan 29 2024 at 21:48)</a>:</h4>
+<p>Now that we have an accumulator that we are appending to, that should be fast and always do inplace mutation.</p>
+
+
+
+<a name="418734277"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418734277" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418734277">(Jan 29 2024 at 22:45)</a>:</h4>
+<p>Btw, regarding <code>List.reverse</code>. Recently I had to use it only for backward walk. I haven’t checked, but the gut feeling suggests that it should be possible to optimize the iteration based on the ref counter (like, opportunistic zero-mutation). Isn’t it?</p>
+<p>Yes, there are walkBackwards flavours, but the list doesn't seem to be complete:</p>
+<div class="codehilite"><pre><span></span><code>walk - walkBackwards
+walkUntil - walkBackwardsUntil
+
+walkWithIndex
+walkWithIndexUntil
+
+walkFrom
+walkFromUntil
+</code></pre></div>
+
+
+
+<a name="418737180"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418737180" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418737180">(Jan 29 2024 at 23:06)</a>:</h4>
+<p>Yeah, we should probably add the backwards version of all of those functions. In the future, loop fusion on list functions may be able to make them equivalent, but that is thinking very long term. Filling out these functions is a better solution today. Contributions welcome to add any/all of theses.</p>
+
+
+
+<a name="418746443"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418746443" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418746443">(Jan 30 2024 at 00:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="685556">Anne Archibald</span> <a href="#narrow/stream/231634-beginners/topic/Understanding.20performance/near/418722301">said</a>:</p>
+<blockquote>
+<p>Is tail recursion easy enough to detect that the language server could highlight tail calls differently? (Particularly if it's modulo cons...) </p>
+</blockquote>
+<p>I actually really like this idea, I just tried to implement it and hit some issues, but got it kind of working<br>
+<a href="/user_uploads/22008/qTSINzV-P9xhJQJF7iFYwC0J/image.png">image.png</a><br>
+<a href="/user_uploads/22008/6K1bHMYJlCVOvPmyjnxLqEgJ/image.png">image.png</a></p>
+<div class="message_inline_image"><a href="/user_uploads/22008/qTSINzV-P9xhJQJF7iFYwC0J/image.png" title="image.png"><img src="/user_uploads/22008/qTSINzV-P9xhJQJF7iFYwC0J/image.png"></a></div><div class="message_inline_image"><a href="/user_uploads/22008/6K1bHMYJlCVOvPmyjnxLqEgJ/image.png" title="image.png"><img src="/user_uploads/22008/6K1bHMYJlCVOvPmyjnxLqEgJ/image.png"></a></div>
+
+
+
+<a name="418763649"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/418763649" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eli Dowling <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#418763649">(Jan 30 2024 at 04:01)</a>:</h4>
+<p><span class="user-mention" data-user-id="685556">@Anne Archibald</span> I've made a new topic for this editor integration and have it working in a branch if you'd like to try it :)<br>
+<a href="#narrow/stream/304641-ideas/topic/Editor.20indicate.20if.20a.20function.20is.20tail.20recursive">https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/Editor.20indicate.20if.20a.20function.20is.20tail.20recursive</a></p>
+
+
+
+<a name="419514523"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/419514523" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anne Archibald <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#419514523">(Feb 02 2024 at 18:47)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/231634-beginners/topic/Understanding.20performance/near/418726981">said</a>:</p>
+<blockquote>
+<p>Now that we have an accumulator that we are appending to, that should be fast and always do inplace mutation.</p>
+</blockquote>
+<p>I can't speak for the mutation, but it seems to me that the list destructuring [a, .. as rest] has to effectively do a dropFirst to construct rest. That would seem to require copying all but one of the elements to a new list. Or is there an efficient way to do this list destructuring operation?</p>
+
+
+
+<a name="419520655"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Understanding%20performance/near/419520655" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Understanding.20performance.html#419520655">(Feb 02 2024 at 19:27)</a>:</h4>
+<p>We have seamless slice. So you will just get a slice referencing the original list except the first element.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

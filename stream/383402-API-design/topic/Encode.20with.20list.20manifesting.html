@@ -1,0 +1,83 @@
+<html>
+<head><meta charset="utf-8"><title>Encode with list manifesting · API design · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/index.html">API design</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Encode.20with.20list.20manifesting.html">Encode with list manifesting</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="449749120"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Encode%20with%20list%20manifesting/near/449749120" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Encode.20with.20list.20manifesting.html#449749120">(Jul 08 2024 at 01:41)</a>:</h4>
+<p>I am looking at the encode and decode api rn. One thing I quite dislike is that record and tuple encoding requires manifesting a list. On top of that, the record encoder forces generating a string name, but many encoders (especially for binary formats) will never use the field name. Given the api is getting update, I was thinking it would be good to iron this out as well.</p>
+<p>Specifically these 3 functions:</p>
+<div class="codehilite"><pre><span></span><code>    record : List { key : Str, value : Encoder state } -&gt; Encoder state where state implements EncoderFormatting
+    tuple : List (Encoder state fmt) -&gt; Encoder state where state implements EncoderFormatting
+    tag : Str, List (Encoder state fmt) -&gt; Encoder state where state implements EncoderFormatting
+</code></pre></div>
+<p>Can we somehow do this in a polling format where instead of manefesting the list, we load one element at a time. With that we can also separate loading the record field name from loading the record field encoder.</p>
+<p>Any thoughts?</p>
+
+
+
+<a name="449750833"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Encode%20with%20list%20manifesting/near/449750833" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Encode.20with.20list.20manifesting.html#449750833">(Jul 08 2024 at 01:59)</a>:</h4>
+<p>Oh, looks like serde has answers again:</p>
+<p>add a separate method for encoding fields from encoding the wrapper type.<br>
+Then build up the record like so:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">rgb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serializer</span><span class="p">.</span><span class="n">serialize_struct</span><span class="p">(</span><span class="s">"Rgb"</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="n">rgb</span><span class="p">.</span><span class="n">serialize_field</span><span class="p">(</span><span class="s">"r"</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">r</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="n">rgb</span><span class="p">.</span><span class="n">serialize_field</span><span class="p">(</span><span class="s">"g"</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">g</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="n">rgb</span><span class="p">.</span><span class="n">serialize_field</span><span class="p">(</span><span class="s">"b"</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">.</span><span class="n">b</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="n">rgb</span><span class="p">.</span><span class="n">end</span><span class="p">()</span>
+</code></pre></div>
+<p>Not 100% sure how all the types work out and how this maps, but feels quite doable.</p>
+
+
+
+<a name="449751408"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Encode%20with%20list%20manifesting/near/449751408" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Encode.20with.20list.20manifesting.html#449751408">(Jul 08 2024 at 02:03)</a>:</h4>
+<p>Maybe for roc, this mean that <code>Encode.record</code> would take a lambda to add fields:</p>
+<p>I noticed that we don't actually name our records unlike serde. Not sure if that is something we want to add or not. Given are types aren't nominal, it feels unimportant. Though might matter for opaque types or certain serialization formats?</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">encodeRgb</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="p">{</span><span class="nv">r</span><span class="p">,</span><span class="w"> </span><span class="nv">g</span><span class="p">,</span><span class="w"> </span><span class="nv">b</span><span class="p">}</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">size</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="mi">3</span>
+<span class="w">    </span><span class="kt">Encode</span><span class="nf">.</span><span class="nv">record</span><span class="w"> </span><span class="s">"name?"</span><span class="w"> </span><span class="nv">size</span><span class="w"> </span><span class="nf">\</span><span class="nv">state</span><span class="p">,</span><span class="w"> </span><span class="nv">addField</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">        </span><span class="nv">state</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="nv">addField</span><span class="w"> </span><span class="s">"r"</span><span class="w"> </span><span class="nv">r</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="nv">addField</span><span class="w"> </span><span class="s">"g"</span><span class="w"> </span><span class="nv">g</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="nv">addField</span><span class="w"> </span><span class="s">"b"</span><span class="w"> </span><span class="nv">b</span>
+</code></pre></div>
+
+
+
+<a name="449751623"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Encode%20with%20list%20manifesting/near/449751623" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Encode.20with.20list.20manifesting.html#449751623">(Jul 08 2024 at 02:04)</a>:</h4>
+<p>hmm, not user that actually would typecheck. Cause each field could have a different type. So each field might need to monomorphize <code>addField</code> differently.</p>
+
+
+
+<a name="449751773"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Encode%20with%20list%20manifesting/near/449751773" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Encode.20with.20list.20manifesting.html#449751773">(Jul 08 2024 at 02:05)</a>:</h4>
+<p>oh wait, this should work:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">encodeRgb</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="p">{</span><span class="nv">r</span><span class="p">,</span><span class="w"> </span><span class="nv">g</span><span class="p">,</span><span class="w"> </span><span class="nv">b</span><span class="p">}</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">size</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="mi">3</span>
+<span class="w">    </span><span class="kt">Encode</span><span class="nf">.</span><span class="nv">record</span><span class="w"> </span><span class="s">"name?"</span><span class="w"> </span><span class="nv">size</span><span class="w"> </span><span class="nf">\</span><span class="nv">state</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">        </span><span class="nv">state</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Encode</span><span class="nf">.</span><span class="nv">recordField</span><span class="w"> </span><span class="s">"r"</span><span class="w"> </span><span class="nv">r</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Encode</span><span class="nf">.</span><span class="nv">recordField</span><span class="w"> </span><span class="s">"g"</span><span class="w"> </span><span class="nv">g</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">Encode</span><span class="nf">.</span><span class="nv">recordField</span><span class="w"> </span><span class="s">"b"</span><span class="w"> </span><span class="nv">b</span>
+</code></pre></div>
+<p>Cause <code>Encode.recordField</code> can now monomorphize for each field uniquely.</p>
+
+
+
+<a name="449753123"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/Encode%20with%20list%20manifesting/near/449753123" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/Encode.20with.20list.20manifesting.html#449753123">(Jul 08 2024 at 02:16)</a>:</h4>
+<p>That said, this api still feels off a bit. Maybe it is good though.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

@@ -1,0 +1,80 @@
+[
+    {
+        "content": "<p>This is an attempt to describe a problem I think I have with a design for a fast JSON decoder. I am a fair way off being blocked on this, as I haven't implemented the stage-1 pre-processing code and I don't know exactly what that will look like, however I'm trying to scope out how that stage might integrate with the decode ability as there are things from SIMDjson etc that don't translate directly into the Roc context.</p>\n<p>Imagine I want to decode JSON into the following Roc type</p>\n<div class=\"codehilite\"><pre><span></span><code>Person : {\n  name : Str,\n  contacts : {\n    email : Str,\n    phone : Str,\n  }\n}\n</code></pre></div>\n<p>So the user passes in a <code>List U8</code> bytes into <code>Decode.fromBytes</code> etc, and Roc will call the <code>decodeRecord</code> function in the JSON implementation which is currently implemented using <code>Decode.custom</code> something like the following;</p>\n<div class=\"codehilite\"><pre><span></span><code>decodeRecord = \\initialState, stepField, finalizer -&gt; Decode.custom \\bytes, @Json { ... decoder state } -&gt;\n\n    # Recursively build up record from object field:value pairs\n    decodeFields = \\recordState, bytesBeforeField -&gt; ...\n</code></pre></div>\n<p>When this implementation gets to the <code>contacts</code> field, it will retrieve a decoder and call <code>Decode.decodeWith</code> passing in the sublist of <code>List U8</code> bytes for the <code>contacts</code> field. In this case this will be <code>decodeRecord</code> because this field is also an object.</p>\n<p>The idea I currently have for implementing a fast JSON decoder is to have a preprocessing step to identify the document structure and then use that information to slice into the original input bytes.</p>\n<p>One problem with this idea is that <code>Decode.custom</code> is provided a <code>List U8</code> bytes and this is the only information we have to work with. So if we preprocessed the input in an earlier stage (function call) we don't have that information available.</p>\n<p>One idea might be to preprocess the JSON document and store the original input bytes and field indexes in the decoder state  <code>@Json {inputBytes : List U8, fieldSlices : ... }</code>, then maybe have some special sequence of bytes that flags to use the preprocessed information to get the bytes we want to process and proceed with decoding. Or maybe this special sequence includes the information required to slice into the original input bytes.</p>\n<p>I'm not sure if this is a good problem description... I am likely missing something obvious and feel like we can probably do what we need with the current implementation.</p>",
+        "id": 377684208,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690062106
+    },
+    {
+        "content": "<p>It may also not be that important to solve this, I probably should use benchmarks to test some ideas. If the preprocess stage is fast enough it may not be that bad to run it each time we decode a new object/record and still use the current recursive descent strategy.</p>",
+        "id": 377692944,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690066713
+    },
+    {
+        "content": "<p>What are the limitations of storing the offset information in the decoder state? That is where my head was at. I think I do not totally follow what the downsides of that approach are.</p>",
+        "id": 377715210,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1690077103
+    },
+    {
+        "content": "<p>I've had a bit of a breakthrough and made some progress putting things into the decoder state.  <span aria-label=\"octopus\" class=\"emoji emoji-1f419\" role=\"img\" title=\"octopus\">:octopus:</span> </p>\n<p>Unfortunately I've hit a compiler bug with <code>roc check</code> <span aria-label=\"cry\" class=\"emoji emoji-1f622\" role=\"img\" title=\"cry\">:cry:</span> </p>\n<div class=\"codehilite\"><pre><span></span><code>% roc check package/Core.roc\nAn internal compiler expectation was broken.\nThis is definitely a compiler bug.\nPlease file an issue here: https://github.com/roc-lang/roc/issues/new/choose\nthread &#39;&lt;unnamed&gt;&#39; panicked at &#39;ambient lambda set function import is not a function, found: Error&#39;, crates/compiler/solve/src/module.rs:182:36\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>\n<p>I've uploaded the relevant code to <a href=\"https://gist.github.com/lukewilliamboswell/db6b73c7ca0f6a94fa3ec9a7962cfe33#file-core-roc-L2070\">this gist</a>, and you can see on line 2070 where i have isolated the issue to. </p>\n<p>I've tried a bunch of different things, re-structuring the code with functions and type annotations etc, but I can't seem to get it to type check.</p>",
+        "id": 383228276,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1691577489
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> could this be the first application of Checkmate? <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 383234683,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1691578745
+    },
+    {
+        "content": "<p>not the first sadly, but definitely a perfect candidate for checkmate! <span aria-label=\"chess\" class=\"emoji emoji-265f\" role=\"img\" title=\"chess\">:chess:</span></p>",
+        "id": 383301347,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1691590592
+    },
+    {
+        "content": "<p>Do you have a minimal reproducer Luke?</p>",
+        "id": 383301413,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1691590604
+    },
+    {
+        "content": "<p>Sorry for derailing, but what's checkmate?</p>",
+        "id": 383315051,
+        "sender_full_name": "Nikita Tchayka",
+        "timestamp": 1691592818
+    },
+    {
+        "content": "<p>A tool that Ayaz made to debug the type solver (checker + inference + specialization engine), you can find it <a href=\"https://github.com/roc-lang/roc/tree/main/crates/compiler/checkmate\">here</a>.</p>",
+        "id": 383316300,
+        "sender_full_name": "Anton",
+        "timestamp": 1691592995
+    },
+    {
+        "content": "<p>I think Ayaz also has it available live (hosted) somewhere.</p>",
+        "id": 383316635,
+        "sender_full_name": "Anton",
+        "timestamp": 1691593051
+    },
+    {
+        "content": "<p>I can try minimising, it's the Decode.decodeWith part that cuases it, so I think I have to keep all the other unrelated decode ability functions around.</p>",
+        "id": 383406989,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1691611746
+    },
+    {
+        "content": "<p>I tried implementing the function using <code>List.walkUntil</code> instead of recursion but still get the same issue.</p>\n<div class=\"codehilite\"><pre><span></span><code>decodeRecordPreProcessed = \\stepField, finalizer, initialState, @Json ds -&gt;\n    when ds.structure is\n        JsonObject fields -&gt; decodeRecordPreProcessedHelp stepField finalizer (@Json ds) initialState fields\n        _ -&gt; crash &quot;unreachable, pre-processed string index&quot;\n\n# Check each field/value pair of the object and decode if it is required\ndecodeRecordPreProcessedHelp = \\stepField, finalizer, @Json ds, initialState, recordFieldValues -&gt;\n\n    help = \\recordState, recordFieldValue -&gt;\n        result =\n            # Decode the field name\n            fieldNameStr &lt;- decodeObjectFieldName recordFieldValue.field (@Json ds) |&gt; Result.map\n\n            # Retrieve value decoder for the current field\n            when stepField recordState fieldNameStr is\n\n                # Skip the field and value, leave record state unchanged\n                Skip -&gt;\n\n                    recordState\n\n                # Decode the value using the decoder from the recordState\n                Keep valueDecoder -&gt;\n\n                    # UNCOMMENT TO &#39;STOP COMPILER BUG&#39;\n                    # { result: Err TooShort, rest: [] }\n\n                    # COMMENING OUT BELOW TO &#39;STOP COMPILER BUG&#39;\n                    Decode.decodeWith [] valueDecoder (objectFieldValueDecoder (@Json {ds &amp; structure: recordFieldValue.value}))\n\n        when result is\n            Err _ -&gt;\n\n                # Return early, failed to decode the field\n                Break recordState\n\n            Ok updatedRecordState -&gt;\n\n                # Decode the next field, passing updated recordState\n                Continue updatedRecordState\n\n    finalRecordState = List.walkUntil recordFieldValues initialState help\n\n    # Build final record\n    when finalizer finalRecordState is\n        Ok record -&gt; { result: Ok record, rest: [] }\n        Err _ -&gt; { result: Err TooShort, rest: [] }\n</code></pre></div>",
+        "id": 383494158,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1691643589
+    },
+    {
+        "content": "<p>Thanks for the update Luke. I’ll take a look tomorrow morning (central US time), but i suspect a minimal reproducer will still be necessary</p>",
+        "id": 383498384,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1691645497
+    }
+]

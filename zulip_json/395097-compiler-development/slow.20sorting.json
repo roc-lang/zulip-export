@@ -1,0 +1,326 @@
+[
+    {
+        "content": "<p>I've been investigating <a href=\"https://github.com/roc-lang/roc/issues/6294\">#6294</a>, this basic sorting of 30k elements takes 1.8 seconds:</p>\n<div class=\"codehilite\"><pre><span></span><code>app &quot;helloWorld&quot;\n    packages { pf: &quot;https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br&quot; }\n    imports [\n        pf.Stdout,\n        pf.Task,\n    ]\n    provides [main] to pf\n\nmain : Task.Task {} I32\nmain =\n    n = 30000\n\n    list = List.range { start: At n, end: Before 0 }\n    listSorted = List.sortAsc list\n\n    {} &lt;- Stdout.line (Inspect.toStr (List.get listSorted 0)) |&gt; Task.await\n    Stdout.line (Inspect.toStr (List.get listSorted (n-1)))\n</code></pre></div>\n<p>The corresponding python code takes 0.024 seconds:</p>\n<div class=\"codehilite\"><pre><span></span><code>n = 30001\n\nlst = list(reversed(range(n)))\nlst.sort()\n\nprint(lst[0])\nprint(lst[n-1])\n</code></pre></div>\n<p>The <a href=\"/user_uploads/22008/rAPdKP_dXw5sulYnoMbjox-H/flamegraph.svg\">flamegraph</a> is really interesting, it basically spends all its time on doing memcpy before calling <code>rust_main</code>.</p>\n<p><a href=\"/user_uploads/22008/1pmmxJ_3pKI2aM53FVybLpPZ/sortTest.ll\">llvm IR</a></p>",
+        "id": 411522923,
+        "sender_full_name": "Anton",
+        "timestamp": 1704561768
+    },
+    {
+        "content": "<p>is that with debug symbols preserved? a flamegraph without opt might also help you.</p>",
+        "id": 411523392,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1704562223
+    },
+    {
+        "content": "<p>This was built with:</p>\n<div class=\"codehilite\"><pre><span></span><code>./target/release/roc build examples/sortTest.roc --profiling --linker=legacy --emit-llvm-ir --optimize\n</code></pre></div>",
+        "id": 411523454,
+        "sender_full_name": "Anton",
+        "timestamp": 1704562308
+    },
+    {
+        "content": "<p>I'll do one without optimize as well</p>",
+        "id": 411523510,
+        "sender_full_name": "Anton",
+        "timestamp": 1704562324
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/22008/OlJ2FhNM7O-gjkYCWHMshI1X/flamegraph_no_optimize.svg\">flamegraph_no_optimize.svg</a><br>\n<a href=\"/user_uploads/22008/-8JR1eP1iaq6u7udzxEeL0dI/sortTest_no_optimize.ll\">sortTest_no_optimize.ll</a></p>",
+        "id": 411523792,
+        "sender_full_name": "Anton",
+        "timestamp": 1704562589
+    },
+    {
+        "content": "<p>one quick observation here is that in practice <code>List.range</code> seems to not <code>withCapacity</code> with the right amounts. I see a bunch of reallocations happening</p>",
+        "id": 411525697,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704564315
+    },
+    {
+        "content": "<p>I think we just pick the partition index very poorly?</p>\n<div class=\"codehilite\"><pre><span></span><code>list is unique true\n- realloc u8@7f3e6adbf690\nbefore make unique [*]u8@7f3e6adbf848\nlist is unique true\nafter make unique [*]u8@7f3e6adbf848\npartition 0 &lt;-&gt; 0 &lt;-&gt; 9\npartition 1 &lt;-&gt; 9 &lt;-&gt; 9\npartition 1 &lt;-&gt; 1 &lt;-&gt; 8\npartition 2 &lt;-&gt; 8 &lt;-&gt; 8\npartition 2 &lt;-&gt; 2 &lt;-&gt; 7\npartition 3 &lt;-&gt; 7 &lt;-&gt; 7\npartition 3 &lt;-&gt; 3 &lt;-&gt; 6\npartition 4 &lt;-&gt; 6 &lt;-&gt; 6\npartition 4 &lt;-&gt; 4 &lt;-&gt; 5\n</code></pre></div>",
+        "id": 411526103,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704564662
+    },
+    {
+        "content": "<p>we can do better by not touching any memory in the swap, but fundamentally that input hits a bad pattern in  how we select the pivot. that is how the standard quicksort is implemented though and without randomness there is no way to fundamentally do better. Though picking the halfway element is likely better in practice than the current solution</p>",
+        "id": 411528301,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704566708
+    },
+    {
+        "content": "<p>is this one of those situations where <a href=\"https://en.wikipedia.org/wiki/Timsort\">timsort</a> might do better?</p>\n<p>important disclaimer: I don't know anything about timsort</p>",
+        "id": 411528544,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1704566936
+    },
+    {
+        "content": "<p>is the long term to plan to switch to timsort or one of the quicksorts with recognition for many patterns.</p>",
+        "id": 411528568,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704566964
+    },
+    {
+        "content": "<p>As a note, python is just recognizing the list is in reverse and reversing it a second time</p>",
+        "id": 411528676,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567086
+    },
+    {
+        "content": "<p>Python uses timsort which has that as a pattern.</p>",
+        "id": 411528682,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567097
+    },
+    {
+        "content": "<p>so we are kinda comparing apples to oranges. Python isn't sorting, Roc is sorting.</p>",
+        "id": 411528735,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567125
+    },
+    {
+        "content": "<blockquote>\n<p>As a note, python is just recognizing the list is in reverse and reversing it a second time</p>\n</blockquote>\n<p>lol</p>",
+        "id": 411528742,
+        "sender_full_name": "Anton",
+        "timestamp": 1704567133
+    },
+    {
+        "content": "<p>Should I write a randomly shuffled list to a file and use that as input?</p>",
+        "id": 411528778,
+        "sender_full_name": "Anton",
+        "timestamp": 1704567183
+    },
+    {
+        "content": "<p>Anyway, many languages use timsort and I think it is a safe default for us to use as well. I know I have seen c++ talks about going even faster and recognizing more patterns, but it is probably fine to just pick timsort for now and change to that. It is quite good overall.</p>",
+        "id": 411528819,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567237
+    },
+    {
+        "content": "<blockquote>\n<p>Should I write a randomly shuffled list to a file and use that as input?</p>\n</blockquote>\n<p>yeah, that would be a good test. Take a range, shuffle it, dump to file.</p>",
+        "id": 411528896,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567299
+    },
+    {
+        "content": "<p>Then base sorting of of that random list.</p>",
+        "id": 411528912,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567314
+    },
+    {
+        "content": "<blockquote>\n<p>As a note, python is just recognizing the list is in reverse and reversing it a second time</p>\n</blockquote>\n<p>How did you figure that out btw <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span>?</p>",
+        "id": 411528990,
+        "sender_full_name": "Anton",
+        "timestamp": 1704567370
+    },
+    {
+        "content": "<p>python uses timsort</p>",
+        "id": 411529123,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567419
+    },
+    {
+        "content": "<p>timsort has a special pattern for descending runs</p>",
+        "id": 411529145,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567426
+    },
+    {
+        "content": "<p>there is also <a href=\"https://github.com/orlp/glidesort\">https://github.com/orlp/glidesort</a></p>",
+        "id": 411529636,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704567779
+    },
+    {
+        "content": "<p>pattern-defeating quicksort is awesome. So if that actually does merge the two successfully, that sounds great.</p>",
+        "id": 411529839,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567869
+    },
+    {
+        "content": "<p>not totally sure yet whether it needs extra space</p>",
+        "id": 411529853,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704567901
+    },
+    {
+        "content": "<blockquote>\n<p>Glidesort can use as much (up to n) or as little extra memory as you want. If given only O(1) memory the average and worst case become O(n (log n)^2), however in practice its performance is great for all but the most skewed data size / auxiliary space ratios. The default is to allocate up to n elements worth of data, unless this exceeds 1 MiB, in which case we scale this down to n / 2 elements worth of data up until 1 GiB after which glidesort uses n / 8 memory.</p>\n</blockquote>\n<p>Hmm...interesting</p>",
+        "id": 411529876,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567937
+    },
+    {
+        "content": "<p>yeah, that is a tradeoff to think about.</p>",
+        "id": 411529884,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704567952
+    },
+    {
+        "content": "<p>hi all! I wrote the original issue <a href=\"https://github.com/roc-lang/roc/issues/6294\">#6294</a>, so</p>\n<ol>\n<li>thanks for looking into this <span aria-label=\"pray\" class=\"emoji emoji-1f64f\" role=\"img\" title=\"pray\">:pray:</span></li>\n<li>though I'm not a maintainer, I'm here because I have some interest in this particular issue. I hope it's alright for me to chime in with some thoughts, and please let me know if I'm leading the conversation away towards a topic that's not of interest or priority for the project.</li>\n</ol>",
+        "id": 411555618,
+        "sender_full_name": "Becker A.",
+        "timestamp": 1704590280
+    },
+    {
+        "content": "<p>Comments are always welcome</p>",
+        "id": 411556464,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704590935
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/slow.20sorting/near/411528896\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>Should I write a randomly shuffled list to a file and use that as input?</p>\n</blockquote>\n<p>yeah, that would be a good test. Take a range, shuffle it, dump to file.</p>\n</blockquote>\n<p>a less rigorous check (for the sake of my lazy Saturday) is to make python randomize the numbers as well. which isn't fair to python, but python still runs much faster despite the handicap.</p>\n<p>new code:</p>\n<div class=\"codehilite\" data-code-language=\"Python\"><pre><span></span><code><span class=\"kn\">import</span> <span class=\"nn\">random</span>\n\n<span class=\"n\">n</span> <span class=\"o\">=</span> <span class=\"mi\">1000000</span>\n<span class=\"n\">l</span> <span class=\"o\">=</span> <span class=\"nb\">list</span><span class=\"p\">(</span><span class=\"nb\">range</span><span class=\"p\">(</span><span class=\"n\">n</span><span class=\"p\">))</span>\n<span class=\"n\">random</span><span class=\"o\">.</span><span class=\"n\">shuffle</span><span class=\"p\">(</span><span class=\"n\">l</span><span class=\"p\">)</span>\n<span class=\"n\">l</span><span class=\"o\">.</span><span class=\"n\">sort</span><span class=\"p\">()</span>\n\n<span class=\"nb\">print</span><span class=\"p\">(</span><span class=\"s1\">'sorting done'</span><span class=\"p\">)</span><span class=\"s2\">\"</span>\n</code></pre></div>\n<p>timed this on my machine via:</p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>$<span class=\"w\"> </span><span class=\"nb\">time</span><span class=\"w\"> </span>python3<span class=\"w\"> </span>-c<span class=\"w\"> </span><span class=\"s2\">\"n = 1000000; import random; l = list(range(n)); random.shuffle(l); l.sort(); print('sorting done')\"</span>\n\nsorting<span class=\"w\"> </span><span class=\"k\">done</span>\npython3<span class=\"w\"> </span>-c<span class=\"w\">   </span><span class=\"m\">0</span>.53s<span class=\"w\"> </span>user<span class=\"w\"> </span><span class=\"m\">0</span>.02s<span class=\"w\"> </span>system<span class=\"w\"> </span><span class=\"m\">95</span>%<span class=\"w\"> </span>cpu<span class=\"w\"> </span><span class=\"m\">0</span>.574<span class=\"w\"> </span>total\n</code></pre></div>\n<p>so altogether (on my machine):</p>\n<ul>\n<li>Python reverse &amp; \"sort\" 1 million - 0.07 s</li>\n<li>Python shuffle &amp; sort <strong>1 million - 0.57 s</strong></li>\n<li>Roc reverse &amp; sort <strong>~90k - 24 s</strong></li>\n</ul>\n<p>-&gt; the speed difference between Python sort and Roc sort is probably more than just pattern exploitation</p>",
+        "id": 411556526,
+        "sender_full_name": "Becker A.",
+        "timestamp": 1704590997
+    },
+    {
+        "content": "<p>oh, we swap elements with a buffer and memcpy. that is probably the root of the issues.</p>",
+        "id": 411557748,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704591862
+    },
+    {
+        "content": "<p>cause we are handling what should be an int load and int store as a dynamic memcpy.</p>",
+        "id": 411557781,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704591896
+    },
+    {
+        "content": "<p>that or we are making way to many swaps for some reason cause like almost all time is spent in memcpy for swapping elements.</p>",
+        "id": 411557829,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704591931
+    },
+    {
+        "content": "<p>how swapping is done is zig treating everything as just an opaque block of bytes with dynamic size may be a big part of killing the perf.</p>",
+        "id": 411557890,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704591964
+    },
+    {
+        "content": "<p>It would be really awesome if we could give comptime parameters to zig from roc. (instead we may need to generate and expose many forms of the same function).</p>",
+        "id": 411558313,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704592390
+    },
+    {
+        "content": "<p>Not fast, but a lot better overall (a bit over 10x faster on my system):</p>\n<div class=\"codehilite\" data-code-language=\"Bash Session\"><pre><span></span><code><span class=\"gp\">$ </span><span class=\"nb\">time</span><span class=\"w\"> </span>/tmp/sort\n<span class=\"gp gp-VirtualEnv\">(Ok 1)</span>\n<span class=\"gp gp-VirtualEnv\">(Ok 30000)</span>\n<span class=\"go\">/tmp/sort  0.44s user 0.01s system 99% cpu 0.450 total</span>\n</code></pre></div>",
+        "id": 411558389,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704592457
+    },
+    {
+        "content": "<p>Added this to the swap function to avoid the memcpy:</p>\n<div class=\"codehilite\"><pre><span></span><code>    switch (element_width) {\n        8 =&gt; {\n            var i = @as(*u64, @ptrCast(@alignCast(element_at_i)));\n            var j = @as(*u64, @ptrCast(@alignCast(element_at_j)));\n            const tmp = i.*;\n            i.* = j.*;\n            j.* = tmp;\n        },\n</code></pre></div>",
+        "id": 411558415,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704592487
+    },
+    {
+        "content": "<p>This is still terrible cause every single swap is dynamic on size when they really shouldn't be.</p>",
+        "id": 411558447,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704592523
+    },
+    {
+        "content": "<p>Cause it is an extra branch that should be 100% knowable that is repeated way way too much.</p>",
+        "id": 411558481,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704592563
+    },
+    {
+        "content": "<p>Right but then it's a very predictable branch so maybe not that bad</p>",
+        "id": 411605561,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1704638990
+    },
+    {
+        "content": "<p>Need to do more testing, but Python sorted 1 million items in the same time (note comparing different machines that had similar times). I am only sorting 30 thousand.</p>",
+        "id": 411607982,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704640969
+    },
+    {
+        "content": "<p>in this example we do lots of swaps with the same source and target. Those could be skipped but your code here still would do all the memcpys in that case I think</p>",
+        "id": 411608775,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704641561
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"560905\">Simon Peleška</span> has marked this topic as resolved.</p>",
+        "id": 411616983,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1704648394
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"560905\">Simon Peleška</span> has marked this topic as unresolved.</p>",
+        "id": 411617378,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1704648697
+    },
+    {
+        "content": "<p>Sorry i was just reading this out of interest and accidentally resolved the topic</p>",
+        "id": 411617756,
+        "sender_full_name": "Simon Peleška",
+        "timestamp": 1704648958
+    },
+    {
+        "content": "<p>Quicksort has good average performance but has pathological failure cases. If I have understood the code correctly, roc's quicksort picks the last element of the range in question as the pivot; if I'm not mistaken, given that choice a sorted list is a psychological case for this implementation. A quick check would be to try sorting a \"random\" list (say mapping hash over range) - if this is a normal speed, that's probably the problem.</p>\n<p>I'll not a roc developer, but I think quicksort is a poor choice for roc. First it's performance is only good on average, which can lead to not-at-all delightful surprises. Second, it's not a stable sort - the order of elements that compare equal is not preserved; more less-than-delightful surprises.</p>\n<p>Timsort was designed to replace python's existing sorting algorithm based on considerable real-world experience. It is based on mergesort, guaranteeing decent scaling for all inputs, and has considerable specialization for special cases (simpler sort for small segments where that's faster, tuning to ensure sitting nearly sorted lists is fast, and so on).</p>\n<p>One design consideration where roc may need to handle this differently is that python lists always storte only pointers - fixed, small, size objects. If the list items were large (or maybe even had poor memory alignment), something like numpy's argsort would be faster: determine the correct order in an auxiliary array, then reshuffle in a single pass.</p>",
+        "id": 417531944,
+        "sender_full_name": "Anne Archibald",
+        "timestamp": 1706045319
+    },
+    {
+        "content": "<p>yes the input given here is a pathological case for our choice of pivot</p>",
+        "id": 417532514,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1706045532
+    },
+    {
+        "content": "<p>but then, how do we decide on a better pivot, e.g. picking the first or center element has similar pathological input cases</p>",
+        "id": 417532583,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1706045569
+    },
+    {
+        "content": "<p>yeah timsort is interesting, but perhaps dated? The <a href=\"https://github.com/orlp/glidesort\">https://github.com/orlp/glidesort</a> project is I think the current state of the art?</p>",
+        "id": 417532825,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1706045674
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"685556\">Anne Archibald</span> <a href=\"#narrow/stream/395097-compiler-development/topic/slow.20sorting/near/417531944\">said</a>:</p>\n<blockquote>\n<p>Quicksort has good average performance but has pathological failure cases. … A quick check would be to try sorting a \"random\" list … - if this is a normal speed, that's probably the problem.</p>\n</blockquote>\n<p>The check you described (sorting a random list) sounds like an easy check to perform that would also provide some good insight. I’d be curious to see the results.</p>\n<p>Though afaik, this specific problem is more likely related to what <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> was investigating. I do not expect a new sorting algorithm will fix this problem.</p>\n<p>This is because I’ve also encountered other cases (e.g. writing a heap queue, other instances I can no longer remember, etc.) that use lists in what should be an efficient way (i.e. just using the O(1) operations like swap or dropLast), but exhibit notably poor runtime performance, much worse than what could be explained by just poor algorithm design.</p>\n<p>This is just my hunch though, I don’t have a lot of data on this (aside from having written a heapsort in pure roc that outperforms the library sort function by only 2x, but I don’t think that’s super clear evidence for it).</p>",
+        "id": 417698305,
+        "sender_full_name": "Becker A.",
+        "timestamp": 1706118912
+    },
+    {
+        "content": "<blockquote>\n<p>Though afaik, this specific problem is more likely related to what @Brendan Hansknecht was investigating. I do not expect a new sorting algorithm will fix this problem.</p>\n</blockquote>\n<p>My comment is part of the problem, but I think the sorting algorithm is likely a big part of the issue.</p>",
+        "id": 417709334,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1706123121
+    },
+    {
+        "content": "<p>I think something that would be good to test is to pass in an always inline function into zig. That function would be the swap element function and it would generate while knowing roc types. It will be specialized function for every call to <code>List.sortAsc/swap/etc</code>.</p>\n<p>Though I guess you probably can't always inline a pointer, so it is probably up to llvm to inline it still. That said, still should be way faster than calling memcpy.</p>\n<p>I thought that llvm has a pass that is meant for propagating constant function args, but I'm not sure how well it works in practices for something like this.</p>",
+        "id": 417715863,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1706125618
+    },
+    {
+        "content": "<p>Ah okay, <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> thanks for clarifying.</p>\n<p>I guess I’m showing my inexperience with both sorting algorithms and compiler magic, because I still suspect that it’s not a sorting-specific issue. Unfortunately I’m not well-equipped to explore this more. But I’m excited to see how this gets resolved! Thanks all for your work and kindness so far, and good luck bug-hunting!</p>",
+        "id": 418445762,
+        "sender_full_name": "Becker A.",
+        "timestamp": 1706388957
+    },
+    {
+        "content": "<p>I mean it definitely takes the combination of both. Bad sorting algorithm means way more swaps. Slow swaps mean way more time. Slow swaps but a good sorting algorithm should still be ok speed. But yeah, a multi-factor fix is needed.</p>",
+        "id": 418451650,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1706395132
+    },
+    {
+        "content": "<p>I filed <a href=\"https://github.com/roc-lang/roc/issues/6450\">#6450</a> for the memory copy slowness.</p>",
+        "id": 418466236,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1706410821
+    }
+]

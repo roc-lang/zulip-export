@@ -1,0 +1,393 @@
+<html>
+<head><meta charset="utf-8"><title>Windows roc_mmap issue · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html">Windows roc_mmap issue</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="378032680"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378032680" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378032680">(Jul 24 2023 at 08:21)</a>:</h4>
+<p>Almost all the test failures on Windows I am experiencing look to be the same issue. Something like the following.</p>
+<div class="codehilite"><pre><span></span><code>thread &#39;main&#39; panicked at &#39;extern function roc_mmap is not defined by the builtins&#39;, crates\compiler\gen_llvm\src\llvm\externs.rs:176:17
+</code></pre></div>
+<p>So, I thought I might try and investigate further. It looks liks roc_mmap is provided in the bitcode. When I run the tests for zig builtins in <code>crates\compiler\builtins\bitcode</code>  I get the following lld-link errors.</p>
+<div class="codehilite"><pre><span></span><code>PS C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode&gt; zig build test
+lld-link: error: undefined symbol: getppid
+&gt;&gt;&gt; referenced by C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\src\utils.zig:28
+&gt;&gt;&gt;               C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\zig-cache\o\956e3fa7e43377a9e7882b44adf58cc5\test.obj:(roc_getppid)
+
+lld-link: error: undefined symbol: mmap
+&gt;&gt;&gt; referenced by C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\src\utils.zig:39
+&gt;&gt;&gt;               C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\zig-cache\o\956e3fa7e43377a9e7882b44adf58cc5\test.obj:(roc_mmap)
+
+lld-link: error: undefined symbol: shm_open
+&gt;&gt;&gt; referenced by C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\src\utils.zig:36
+&gt;&gt;&gt;               C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\zig-cache\o\956e3fa7e43377a9e7882b44adf58cc5\test.obj:(roc_shm_open)
+error: LLDReportedFailure
+The following command exited with error code 1:
+C:\ProgramData\chocolatey\lib\zig\tools\zig-windows-x86_64-0.9.1\zig.exe test C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\src\main.zig -lc --cache-dir C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\zig-cache --global-cache-dir C:\Users\bosyl\AppData\Local\zig --name test
+error: the following build command failed with exit code 1:
+C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\zig-cache\o\52b924dff34895983671b1f52442ea3d\build.exe C:\ProgramData\chocolatey\lib\zig\tools\zig-windows-x86_64-0.9.1\zig.exe C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode C:\Users\bosyl\Documents\GitHub\roc\crates\compiler\builtins\bitcode\zig-cache C:\Users\bosyl\AppData\Local\zig test
+</code></pre></div>
+<p>ChatGPT tells me the following</p>
+<blockquote>
+<p>It looks like you're getting linker errors when trying to compile your Zig program, which is probably because the functions getppid, mmap, and shm_open are not found.<br>
+The reason you're encountering this issue is likely because these functions are not available on Windows. These are POSIX (Portable Operating System Interface) system calls:<br>
+<strong>getppid</strong>: This function returns the parent process id. On Windows, you can use GetCurrentProcessId and GetParentProcessId instead.<br>
+<strong>mmap</strong>: This function is used to map a file or other object into memory. On Windows, you can use CreateFileMapping and MapViewOfFile.<br>
+<strong>shm_open</strong>: This function creates or opens a named shared memory object. On Windows, you can use CreateFileMapping with a unique name to achieve similar functionality.</p>
+</blockquote>
+
+
+
+<a name="378050151"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378050151" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378050151">(Jul 24 2023 at 09:16)</a>:</h4>
+<p>In c hosts we do:</p>
+<div class="codehilite"><pre><span></span><code>void* roc_mmap(void* addr, int length, int prot, int flags, int fd, int offset) {
+#ifdef _WIN32
+    return addr;
+#else
+    return mmap(addr, length, prot, flags, fd, offset);
+#endif
+</code></pre></div>
+<p>I don't really know zig, but in compiler/builtins/bitcode/src/utils.zig we don't have an if:</p>
+<div class="codehilite"><pre><span></span><code>extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
+</code></pre></div>
+<p>So that may be a problem.</p>
+<p>I don't think I've seen <code>extern function roc_mmap is not defined by the builtins</code> when fixing windows issues a couple of months ago, so that may also be a recently introduced issue.</p>
+
+
+
+<a name="378060517"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378060517" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378060517">(Jul 24 2023 at 09:47)</a>:</h4>
+<p>I think it's specific to some platforms. In any case, we should not be using mmap on windows, so providing a dummy implementation is fine</p>
+
+
+
+<a name="378071024"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378071024" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378071024">(Jul 24 2023 at 10:14)</a>:</h4>
+<p>Sounds good. Do you have any pointers where the dummy implementation should go? Also, should zig tests run on windows?</p>
+
+
+
+<a name="378075014"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378075014" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378075014">(Jul 24 2023 at 10:23)</a>:</h4>
+<p>they kind of should</p>
+
+
+
+<a name="378076254"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378076254" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378076254">(Jul 24 2023 at 10:25)</a>:</h4>
+<p>re the error, I think here </p>
+<div class="codehilite"><pre><span></span><code>        unreachable_function(env, &quot;roc_getppid&quot;);
+        unreachable_function(env, &quot;roc_mmap&quot;);
+        unreachable_function(env, &quot;roc_shm_open&quot;);
+
+        add_sjlj_roc_panic(env)
+    }
+}
+
+fn unreachable_function(env: &amp;Env, name: &amp;str) {
+    // The type of this function (but not the implementation) should have
+    // already been defined by the builtins, which rely on it.
+    let fn_val = match env.module.get_function(name) {
+        Some(f) =&gt; f,
+        None =&gt; panic!(&quot;extern function {name} is not defined by the builtins&quot;),
+    };
+</code></pre></div>
+<p>(you'll find this by searching for string in the panic here)</p>
+
+
+
+<a name="378076565"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378076565" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378076565">(Jul 24 2023 at 10:26)</a>:</h4>
+<p>we should just not call <code>unreachable_function(env, ...</code> on windows for roc_mmap, ppid, and shm_open I think</p>
+
+
+
+<a name="378076855"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378076855" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378076855">(Jul 24 2023 at 10:26)</a>:</h4>
+<p>so just add some <code>#[cfg(not(windows))]</code> would be my guess</p>
+
+
+
+<a name="378085311"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378085311" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378085311">(Jul 24 2023 at 10:41)</a>:</h4>
+<div class="codehilite"><pre><span></span><code>        #[cfg(not(windows))]
+        {
+            unreachable_function(env, &quot;roc_getppid&quot;);
+            unreachable_function(env, &quot;roc_mmap&quot;);
+            unreachable_function(env, &quot;roc_shm_open&quot;);
+        }
+ ```
+
+Seems to have done it. Ran one test and it passed. I&#39;ll try running all of test_gen next
+</code></pre></div>
+
+
+
+<a name="378094713"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378094713" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378094713">(Jul 24 2023 at 11:10)</a>:</h4>
+<p>Ok so running <code>cargo test --release --locked --package test_gen --test test_gen</code> gave me this.</p>
+<p><a href="/user_uploads/22008/i7_y8iaORzVl-cUM23H_oREk/Screenshot-2023-07-24-210147.png">Screenshot-2023-07-24-210147.png</a></p>
+<div class="message_inline_image"><a href="/user_uploads/22008/i7_y8iaORzVl-cUM23H_oREk/Screenshot-2023-07-24-210147.png" title="Screenshot-2023-07-24-210147.png"><img src="/user_uploads/22008/i7_y8iaORzVl-cUM23H_oREk/Screenshot-2023-07-24-210147.png"></a></div><p>I'm not sure why that crashes the test runner. If I disable the <code>decode_derive_decoder_for_opaque</code>which overflowed its stack I get the same issue where something is causing <code>exit code: 0xc0000005, STATUS_ACCESS_VIOLATION)</code>. I've also tried running in debug mode and get the same issue.</p>
+
+
+
+<a name="378098432"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378098432" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378098432">(Jul 24 2023 at 11:21)</a>:</h4>
+<p>what might be helpful here is <code>cargo nextest-gen-llvm --no-fail-fast</code> (may need <code>cargo install nextest</code> or similar)</p>
+
+
+
+<a name="378098479"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378098479" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378098479">(Jul 24 2023 at 11:21)</a>:</h4>
+<p>that should run all the tests and not stop when one of them crashes</p>
+
+
+
+<a name="378098517"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378098517" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378098517">(Jul 24 2023 at 11:21)</a>:</h4>
+<p>so we can get an overview of what fails, maybe there are patterns</p>
+
+
+
+<a name="378098854"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378098854" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378098854">(Jul 24 2023 at 11:22)</a>:</h4>
+<p>I'll give that a go. </p>
+<p>Just ran mono tests also</p>
+<div class="codehilite"><pre><span></span><code>failures:
+
+---- branch_store_variable stdout ----
+`git diff &quot;generated/branch_store_variable.txt&quot;` failed
+thread &#39;branch_store_variable&#39; panicked at &#39;internal error: entered unreachable code&#39;, crates\compiler\test_mono\src/tests.rs:232:9
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    branch_store_variable
+
+test result: FAILED. 156 passed; 1 failed; 7 ignored; 0 measured; 0 filtered out; finished in 9.80s
+</code></pre></div>
+
+
+
+<a name="378099116"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378099116" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378099116">(Jul 24 2023 at 11:23)</a>:</h4>
+<p>that error means that git diff failed?!</p>
+
+
+
+<a name="378099279"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378099279" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378099279">(Jul 24 2023 at 11:24)</a>:</h4>
+<p>maybe the file doesn't exist?</p>
+
+
+
+<a name="378370630"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378370630" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378370630">(Jul 25 2023 at 07:53)</a>:</h4>
+<p>Here are the results for <a href="https://gist.github.com/lukewilliamboswell/d06dba9a6f7ed85a94786a0c5456010b">test-gen</a> in case this helps.</p>
+
+
+
+<a name="378372131"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378372131" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378372131">(Jul 25 2023 at 07:59)</a>:</h4>
+<p>hmm, there is this chunk</p>
+<div class="codehilite"><pre><span></span><code>   FAIL [   3.124s] test_gen::test_gen gen_num::to_i64_checked_larger_width_signed_fits_neg
+        FAIL [   3.978s] test_gen::test_gen gen_num::to_i64_checked_larger_width_signed_fits_pos
+        FAIL [   2.370s] test_gen::test_gen gen_num::to_i64_checked_larger_width_signed_oob_neg
+        FAIL [   2.326s] test_gen::test_gen gen_num::to_i64_checked_larger_width_signed_oob_pos
+        FAIL [   2.134s] test_gen::test_gen gen_num::to_i64_checked_larger_width_unsigned_fits_pos
+        FAIL [   2.151s] test_gen::test_gen gen_num::to_i64_checked_larger_width_unsigned_oob_pos
+</code></pre></div>
+
+
+
+<a name="378372172"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378372172" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378372172">(Jul 25 2023 at 07:59)</a>:</h4>
+<p>they fail "normally". can you find an error message for them?</p>
+
+
+
+<a name="378372250"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378372250" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378372250">(Jul 25 2023 at 07:59)</a>:</h4>
+<p>(others abort because they do the equivalent of a segfault)</p>
+
+
+
+<a name="378373581"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378373581" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378373581">(Jul 25 2023 at 08:04)</a>:</h4>
+<p>Something like <code>thread 'gen_num::to_i64_checked_larger_width_signed_fits_neg' panicked at 'LLVM error: Did not get return value from bitcode function "roc_builtins.num.int_to_i64_checking_max_and_min.i128"'</code></p>
+
+
+
+<a name="378373830"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378373830" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378373830">(Jul 25 2023 at 08:05)</a>:</h4>
+<p>and then for the other issues, I suspect <code>return_tuple_3</code> is the easiest to debug. that'll be an adventure in assembly though</p>
+
+
+
+<a name="378374111"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378374111" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378374111">(Jul 25 2023 at 08:06)</a>:</h4>
+<p>hmm, ok, strange. I think it would help to see the LLVM IR for that failing i128 test. I think when a test fails we try to save that IR</p>
+
+
+
+<a name="378374152"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378374152" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378374152">(Jul 25 2023 at 08:06)</a>:</h4>
+<p>but maybe that is skipped on windows</p>
+
+
+
+<a name="378374569"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378374569" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378374569">(Jul 25 2023 at 08:07)</a>:</h4>
+<ul>
+<li>thread 'gen_num::to_i64_checked_larger_width_signed_fits_pos' panicked at 'LLVM error: Did not get return value from bitcode function "roc_builtins.num.int_to_i64_checking_max_and_min.i128"'</li>
+<li>thread 'gen_num::to_i64_checked_larger_width_signed_oob_neg' panicked at 'LLVM error: Did not get return value from bitcode function "roc_builtins.num.int_to_i64_checking_max_and_min.i128"'</li>
+<li>thread 'gen_num::to_i64_checked_larger_width_signed_oob_pos' panicked at 'LLVM error: Did not get return value from bitcode function "roc_builtins.num.int_to_i64_checking_max_and_min.i128"'</li>
+<li>thread 'gen_num::to_i64_checked_larger_width_unsigned_fits_pos' panicked at 'LLVM error: Did not get return value from bitcode function "roc_builtins.num.int_to_i64_checking_max.u128"'</li>
+<li>thread 'gen_num::to_i64_checked_larger_width_unsigned_oob_pos' panicked at 'LLVM error: Did not get return value from bitcode function "roc_builtins.num.int_to_i64_checking_max.u128"'</li>
+</ul>
+
+
+
+<a name="378375022"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378375022" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378375022">(Jul 25 2023 at 08:09)</a>:</h4>
+<p>right, so on windows this function does not return, apparently</p>
+
+
+
+<a name="378375091"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378375091" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378375091">(Jul 25 2023 at 08:09)</a>:</h4>
+<p>and you pass in effectively a <code>&amp;mut result</code> for it to write the value into</p>
+
+
+
+<a name="378375179"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378375179" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378375179">(Jul 25 2023 at 08:10)</a>:</h4>
+<p>so that will have to be special-cased</p>
+
+
+
+<a name="378375926"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378375926" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378375926">(Jul 25 2023 at 08:13)</a>:</h4>
+<p>in particular, I suspect that this logic is not entirely correct</p>
+<div class="codehilite"><pre><span></span><code>                        if target_int_width.stack_size() as usize &gt; env.target_info.ptr_size() {
+                            let bitcode_return_type =
+                                zig_to_int_checked_result_type(env, target_int_width.type_name());
+
+                            call_bitcode_fn_fixing_for_convention(
+                                env,
+                                layout_interner,
+                                bitcode_return_type,
+                                &amp;[arg.into()],
+                                return_layout,
+                                intrinsic,
+                            )
+                        } else {
+                            call_bitcode_fn(env, &amp;[arg.into()], intrinsic)
+                        }
+</code></pre></div>
+
+
+
+<a name="378377139"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378377139" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378377139">(Jul 25 2023 at 08:17)</a>:</h4>
+<p>They run through the <code>else</code> branch when I add dbg's</p>
+
+
+
+<a name="378377513"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378377513" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378377513">(Jul 25 2023 at 08:18)</a>:</h4>
+<p>yeah, I think that is incorrect</p>
+
+
+
+<a name="378384205"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378384205" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378384205">(Jul 25 2023 at 08:43)</a>:</h4>
+<p>So does this mean the builtin function when it is called by env.builder.build_call() isn't returning a BasicValueEnum type?</p>
+
+
+
+<a name="378384623"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378384623" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378384623">(Jul 25 2023 at 08:44)</a>:</h4>
+<p>yes</p>
+
+
+
+<a name="378384651"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378384651" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378384651">(Jul 25 2023 at 08:45)</a>:</h4>
+<p>it's a void function</p>
+
+
+
+<a name="378385210"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378385210" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378385210">(Jul 25 2023 at 08:46)</a>:</h4>
+<p><code>pub fn exportToIntCheckingMaxAndMin(comptime From: type, comptime To: type, comptime name: []const u8) void</code></p>
+
+
+
+<a name="378388380"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378388380" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378388380">(Jul 25 2023 at 08:56)</a>:</h4>
+<p>eh yes but that function is the generator</p>
+
+
+
+<a name="378388436"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378388436" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378388436">(Jul 25 2023 at 08:56)</a>:</h4>
+<p>it makes available a function with some different type</p>
+
+
+
+<a name="378388458"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378388458" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378388458">(Jul 25 2023 at 08:56)</a>:</h4>
+<p>it's like a macro</p>
+
+
+
+<a name="378389339"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378389339" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378389339">(Jul 25 2023 at 08:59)</a>:</h4>
+<div class="codehilite"><pre><span></span><code>let xxx = call_bitcode_fn_help(env, args, fn_name);
+
+    dbg!(&amp;xxx);
+
+    xxx.try_as_basic_value()
+        .left()
+        .unwrap_or_else(|| {
+            panic!(&quot;LLVM error: Did not get return value from bitcode function {fn_name:?}&quot;)
+        })
+</code></pre></div>
+<p>Gives</p>
+<div class="codehilite"><pre><span></span><code>[crates\compiler\gen_llvm\src\llvm\bitcode.rs:35] &amp;xxx = CallSiteValue(
+    Value {
+        name: &quot;&quot;,
+        address: 0x000001b9326ddd10,
+        is_const: false,
+        is_null: false,
+        is_undef: false,
+        llvm_value: &quot;  call void @roc_builtins.num.int_to_i64_checking_max_and_min.i128(i128 noalias nocapture nonnull sret(%\&quot;num.ToIntCheckedResult(i64)\&quot;) %\&quot;#arg1\&quot;), !dbg !9&quot;,
+        llvm_type: &quot;void&quot;,
+    },
+)
+</code></pre></div>
+
+
+
+<a name="378396578"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378396578" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378396578">(Jul 25 2023 at 09:22)</a>:</h4>
+<p>yes, exactly</p>
+
+
+
+<a name="378396643"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/Windows%20roc_mmap%20issue/near/378396643" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/Windows.20roc_mmap.20issue.html#378396643">(Jul 25 2023 at 09:23)</a>:</h4>
+<p>it returns void, and the first argument is a pointer to write the result into</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

@@ -1,0 +1,236 @@
+[
+    {
+        "content": "<p>I'd like to get some opinions on how to handle json's null type.</p>\n<p>I've got an Option type that decodes to <code>@Option None</code> when given a 0 byte decode input. That lets me handle missing fields, but what about fields that are null eg <code>{\"name\":null,\"age\":20}</code>vs <code>{\"age\":20}</code><br>\nSome ideas i had:<br>\nA) Add a special check in the json record decoder that sends the decoder <code>[]</code> instead of <code>null</code><br>\nB) Add a check in the Option decoder that decodes <code>null</code> to <code>None</code> tying it to json<br>\nC) Make some new Opaque type that specifically decodes <code>null</code> and <code>[]</code><br>\nD) some other wizardry </p>\n<p>I like A the most because it's simple, but it does obscure the idea of  \"null\" vs \"undefined\". This would put us inline with most other decoding libraries and we could make this optional if the user wants to implement their own extra opaque type for null vs undefined</p>",
+        "id": 427908008,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1710934779
+    },
+    {
+        "content": "<p>I like the sound of A too. I originally had it decoding null into a valid Str \"null\" which wasn't a good call. <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span>  had thoughts on that as he is using it at Vendr for some things and found that bug the hard way. So I definitely would be interested to know what he thinks too. I haven't used JSON much in anger, so for me it's more of a theoretical concept and staring at a spec to guess what we should do.</p>",
+        "id": 428027293,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1710974619
+    },
+    {
+        "content": "<p>There is also a similar question around encoding. I have currently made it so when a record field's encoder returns <code>[]</code>  the field is omitted and same with elements in a list and in a tuple. <br>\nI've then added an option to put in a <code>null</code> instead.</p>\n<p>Although it's unconventional I'm leaning towards having it put nulls in by default, or making it the default for lists and tuples, I want tuples and options to put in nulls because if you encode <code>[Some 1 ,None ,Some 2 ]</code> to <code>[1,2]</code> then decode it you get <code>[Some 1, Some 2 ]</code> which feels like an annoying \"gotcha\" moment I'd rather <code>[1,null,2]</code> so it correctly decodes to <code>[Some 1,None,Some 2]</code></p>",
+        "id": 428035130,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1710979019
+    },
+    {
+        "content": "<p>I was talking to a friend about this recently and he mentioned that for some APIs there is an important difference between null and undefined in json . Sending a message that has a single field null is and the rest undefined is a way to null-out that one field.<br>\nWith my current implementation there is no way to encode both concepts at once. I was able to make a type that does handle both, but it is very coupled to json because it only decodes a null when it gets exactly \"null\" and encodes exactly \"null\" on encode.</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">interface</span><span class=\"w\"> </span><span class=\"kt\">OptionOrNull</span>\n<span class=\"w\">    </span><span class=\"nv\">exposes</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nv\">none</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">some</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">null</span><span class=\"p\">]</span>\n<span class=\"w\">    </span><span class=\"nv\">imports</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">        </span><span class=\"kt\">Encode</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"kt\">Core</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">]</span>\n\n<span class=\"kt\">OptionOrNull</span><span class=\"w\"> </span><span class=\"nv\">val</span><span class=\"w\"> </span><span class=\"nf\">:=</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">Some</span><span class=\"w\"> </span><span class=\"nv\">val</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">None</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">Null</span><span class=\"p\">]</span>\n<span class=\"w\">    </span><span class=\"nv\">implements</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">        </span><span class=\"kt\">Eq</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"kt\">Decoding</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"nv\">decoder</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">},</span>\n<span class=\"w\">        </span><span class=\"kt\">Encoding</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"nv\">toEncoder</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">},</span>\n<span class=\"w\">    </span><span class=\"p\">]</span>\n<span class=\"nv\">none</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"err\">@</span><span class=\"kt\">OptionOrNull</span><span class=\"w\"> </span><span class=\"kt\">None</span>\n<span class=\"nv\">some</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">a</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"err\">@</span><span class=\"kt\">OptionOrNull</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Some</span><span class=\"w\"> </span><span class=\"nv\">a</span><span class=\"p\">)</span>\n<span class=\"nv\">null</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"err\">@</span><span class=\"kt\">OptionOrNull</span><span class=\"w\"> </span><span class=\"kt\">Null</span>\n\n<span class=\"nv\">nullChars</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"s\">\"null\"</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"nf\">.</span><span class=\"nv\">toUtf8</span>\n\n<span class=\"nv\">toEncoder</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"err\">@</span><span class=\"kt\">OptionOrNull</span><span class=\"w\"> </span><span class=\"nv\">val</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"kt\">Encode</span><span class=\"nf\">.</span><span class=\"nv\">custom</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">bytes</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">fmt</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">        </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"nv\">val</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">            </span><span class=\"kt\">Some</span><span class=\"w\"> </span><span class=\"nv\">contents</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nv\">bytes</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Encode</span><span class=\"nf\">.</span><span class=\"nv\">append</span><span class=\"w\"> </span><span class=\"nv\">contents</span><span class=\"w\"> </span><span class=\"nv\">fmt</span>\n<span class=\"w\">            </span><span class=\"kt\">None</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nv\">bytes</span>\n<span class=\"w\">            </span><span class=\"kt\">Null</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nv\">bytes</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">List</span><span class=\"nf\">.</span><span class=\"nv\">concat</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">nullChars</span><span class=\"p\">)</span>\n\n<span class=\"nv\">decoder</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"kt\">Decode</span><span class=\"nf\">.</span><span class=\"nv\">custom</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">bytes</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">fmt</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"nv\">bytes</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">        </span><span class=\"p\">[]</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">result</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"err\">@</span><span class=\"kt\">OptionOrNull</span><span class=\"w\"> </span><span class=\"kt\">None</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"nv\">rest</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">[]</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"p\">[</span><span class=\"nf\">'</span><span class=\"nv\">n'</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nf\">'</span><span class=\"nv\">u'</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nf\">'</span><span class=\"nv\">l'</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nf\">'</span><span class=\"nv\">l'</span><span class=\"p\">,</span><span class=\"nf\">..</span><span class=\"w\"> </span><span class=\"kr\">as</span><span class=\"w\"> </span><span class=\"nv\">rest</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">result</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">null</span><span class=\"w\"> </span><span class=\"p\">{}),</span><span class=\"w\"> </span><span class=\"nv\">rest</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">rest</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">            </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"nv\">bytes</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Decode</span><span class=\"nf\">.</span><span class=\"nv\">decodeWith</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Decode</span><span class=\"nf\">.</span><span class=\"nv\">decoder</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nv\">fmt</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">                </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">result</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"nv\">res</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">rest</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">result</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"err\">@</span><span class=\"kt\">OptionOrNull</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Some</span><span class=\"w\"> </span><span class=\"nv\">res</span><span class=\"p\">)),</span><span class=\"w\"> </span><span class=\"nv\">rest</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">                </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">result</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Err</span><span class=\"w\"> </span><span class=\"nv\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">rest</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">result</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Err</span><span class=\"w\"> </span><span class=\"nv\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">rest</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"kt\">OptionTest2</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">maybe</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">OptionOrNull</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">y</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">maybe2</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">OptionOrNull</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"w\"> </span><span class=\"p\">}</span>\n\n<span class=\"nv\">expect</span>\n<span class=\"w\">    </span><span class=\"nv\">decoded</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Result</span><span class=\"w\"> </span><span class=\"kt\">OptionTest2</span><span class=\"w\"> </span><span class=\"nv\">_</span>\n<span class=\"w\">    </span><span class=\"nv\">decoded</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">        </span><span class=\"s\">\"\"\"</span>\n<span class=\"s\">        {\"</span><span class=\"nv\">y</span><span class=\"s\">\":1,\"</span><span class=\"nv\">maybe</span><span class=\"s\">\":null}</span>\n<span class=\"s\">        \"\"\"</span>\n<span class=\"w\">        </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"nf\">.</span><span class=\"nv\">toUtf8</span>\n<span class=\"w\">        </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Decode</span><span class=\"nf\">.</span><span class=\"nv\">fromBytes</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Core</span><span class=\"nf\">.</span><span class=\"nv\">jsonWithOptions</span><span class=\"p\">{</span><span class=\"nv\">emptyEncodeAsNull</span><span class=\"nf\">:</span><span class=\"kt\">Bool</span><span class=\"nf\">.</span><span class=\"nv\">false</span><span class=\"p\">,</span><span class=\"nv\">nullAsUndefined</span><span class=\"nf\">:</span><span class=\"kt\">Bool</span><span class=\"nf\">.</span><span class=\"nv\">false</span><span class=\"p\">})</span>\n\n<span class=\"w\">    </span><span class=\"nv\">expected</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"p\">({</span><span class=\"w\"> </span><span class=\"nv\">y</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"nv\">u8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">maybe</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">null</span><span class=\"p\">{},</span><span class=\"nv\">maybe2</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">none</span><span class=\"p\">{}}</span><span class=\"w\"> </span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"nv\">isGood</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">        </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">decoded</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">expected</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">            </span><span class=\"p\">(</span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"nv\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"nv\">b</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">                </span><span class=\"nv\">a</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"nv\">b</span>\n\n<span class=\"w\">            </span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Bool</span><span class=\"nf\">.</span><span class=\"nv\">false</span>\n<span class=\"w\">    </span><span class=\"nv\">isGood</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"kt\">Bool</span><span class=\"nf\">.</span><span class=\"nv\">true</span>\n\n<span class=\"err\">#</span><span class=\"w\"> </span><span class=\"kt\">Encode</span><span class=\"w\"> </span><span class=\"kt\">Option</span><span class=\"w\"> </span><span class=\"kt\">None</span><span class=\"w\"> </span><span class=\"nv\">record</span><span class=\"w\"> </span><span class=\"nv\">with</span><span class=\"w\"> </span><span class=\"nv\">null</span>\n<span class=\"nv\">expect</span>\n<span class=\"w\">    </span><span class=\"nv\">encoded</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">        </span><span class=\"nv\">dat</span><span class=\"nf\">:</span><span class=\"kt\">OptionTest2</span>\n<span class=\"w\">        </span><span class=\"nv\">dat</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">maybe2</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">none</span><span class=\"w\"> </span><span class=\"p\">{},</span><span class=\"w\"> </span><span class=\"nv\">maybe</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">null</span><span class=\"w\"> </span><span class=\"p\">{},</span><span class=\"w\"> </span><span class=\"nv\">y</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"kt\">Encode</span><span class=\"nf\">.</span><span class=\"nv\">toBytes</span><span class=\"w\"> </span><span class=\"nv\">dat</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Core</span><span class=\"nf\">.</span><span class=\"nv\">jsonWithOptions</span><span class=\"p\">{</span><span class=\"nv\">emptyEncodeAsNull</span><span class=\"nf\">:</span><span class=\"kt\">Bool</span><span class=\"nf\">.</span><span class=\"nv\">false</span><span class=\"p\">})</span>\n<span class=\"w\">        </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"nf\">.</span><span class=\"nv\">fromUtf8</span>\n\n<span class=\"w\">    </span><span class=\"nv\">expected</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"kt\">Ok</span>\n<span class=\"w\">        </span><span class=\"s\">\"\"\"</span>\n<span class=\"s\">        {\"</span><span class=\"nv\">maybe</span><span class=\"s\">\":null,\"</span><span class=\"nv\">y</span><span class=\"s\">\":1}</span>\n<span class=\"s\">        \"\"\"</span>\n<span class=\"w\">    </span><span class=\"nv\">expected</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"nv\">encoded</span>\n</code></pre></div>\n<p>I would love to hear what some other folks with a lot of experience with web stuff and json apis think of this. </p>\n<p>Should we maybe have our encoders and decoders have an inbuilt concept of Null vs undefined so that this implementation isn't tied to json? The builtin decoder could define opaque types for <code>Null </code>and <code>Undefined</code> and expect a  <code>DecodingFormat</code> to implement them somehow.</p>\n<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> Thoughts?</p>",
+        "id": 430706441,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1712030431
+    },
+    {
+        "content": "<p>I think the null/undefined distinction is reasonably specific to JSON. Some other serialization formats have it too, but not all of them. For instance, the <a href=\"https://github.com/jwoudenberg/rvn\">rvn</a> format I recently worked on doesn't have null, and neither does TOML or XML. I think it'd be a unintuitive for a TOML encoder/decoder to have to deal with null if neither TOML nor Roc support it. Based on that, null being a JSON-specific think makes a certian amount of sense to me.</p>",
+        "id": 430717252,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1712037310
+    },
+    {
+        "content": "<p>Makes sense to me to have something like <code>ValueOrNullOrUndefined</code> lying around in the <code>json</code> library though. I don't like it when an API makes the difference between a null field an a missing field significant, a helper type like the one you have defined would make it super transparent in an implementation what shenanigans the API is up to.</p>",
+        "id": 430717776,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1712037644
+    },
+    {
+        "content": "<p>Yeah I think I mostly agree with that, a type like that as part of the Json library would mostly solve that. </p>\n<p>XML does kind of have null undefined distinction &lt;Maytag/&gt; could be thought of as null</p>",
+        "id": 430718074,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1712037817
+    },
+    {
+        "content": "<p>This is one of those cases where I really want to say, Don't support it. Apis that need to distinguish both are really poorly designed. Just merge them into one concept.....</p>\n<p>But real life use cases may dictate my above opinion as impractical.</p>",
+        "id": 430806468,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712069077
+    },
+    {
+        "content": "<p>It looks bad from our world, but as a JS Dev I think it's natural to think of null and undefined as different things that should have distinct usage.<br>\nThinking back I realise I've actually used an API like this. I'm pretty sure Salesforce has this. Unfortunately I think not supporting it would be a real sore spot for a lot of people.</p>",
+        "id": 430808309,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1712069576
+    },
+    {
+        "content": "<p>Yeah, I think it is required, but I have seen a number of bugs from it.</p>",
+        "id": 430815306,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712071338
+    },
+    {
+        "content": "<p>I might be misunderstanding something, but JSON <a href=\"https://www.json.org/json-en.html\">doesn't have undefined</a>, just null (although JavaScript has both)</p>",
+        "id": 430818731,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712072252
+    },
+    {
+        "content": "<p>are we using \"undefined\" here to mean \"missing field\" or something similar?</p>",
+        "id": 430818818,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712072273
+    },
+    {
+        "content": "<p>I think a js undefined will get encoded as the string \"undefined\"</p>",
+        "id": 430834952,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712077268
+    },
+    {
+        "content": "<p>Right?</p>",
+        "id": 430835009,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712077283
+    },
+    {
+        "content": "<p>Oh, nvm</p>",
+        "id": 430835202,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712077334
+    },
+    {
+        "content": "<p>Undefined -&gt; field missing<br>\nNull -&gt; explicit null value</p>",
+        "id": 430835265,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712077355
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> I feel like there is alot of confusion here. I'll have a think and try to create some user story type explanations of why I think null undefined distinction is important for json (not for builtin into roc or anything, just within json encoding and decoding.</p>",
+        "id": 430981515,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1712144175
+    },
+    {
+        "content": "<p>fair enough, sounds good! <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 430981671,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712144242
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/316715-contributing/topic/How.20to.20handle.20json.20null.20decoding/near/430806468\">said</a>:</p>\n<blockquote>\n<p>This is one of those cases where I really want to say, Don't support it. Apis that need to distinguish both are really poorly designed. Just merge them into one concept.....</p>\n</blockquote>\n<p>I can provide a real life example, described initially here: <a href=\"https://github.com/thoth-org/Thoth.Json/issues/91\">https://github.com/thoth-org/Thoth.Json/issues/91</a></p>\n<blockquote>\n<p>[...] imagine creating a JSON payload of MongoDB update. It's big difference between:<br>\n<code>{ $set: { firstname: \"…\", lastname: null, somethingElse: null } }</code><br>\n and<br>\n<code>{ $set: { firstname: \"…\", somethingElse: null } }</code><br>\nFirst one will change <code>firstname</code> and erase both <code>lastname</code> and <code>somethingElse</code>, the latter will not alter <code>lastname</code> at all.</p>\n</blockquote>",
+        "id": 430983526,
+        "sender_full_name": "witoldsz",
+        "timestamp": 1712144816
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515922\">@witoldsz</span> thankyou. I was going to write out something very similar for a Salesforce database, basically the same api:<br>\nThe accompanying roc code might be:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kt\">PersonUpdate</span><span class=\"nf\">:</span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"nv\">age</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">ValOrNullOrUndefined</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"nv\">firstName</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">ValOrNullOrUndefined</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"nv\">lastName</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">ValOrNullOrUndefined</span><span class=\"w\"> </span><span class=\"kt\">Str</span>\n<span class=\"p\">}</span>\n<span class=\"nv\">updatePerson</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">update</span><span class=\"nf\">-&gt;</span><span class=\"w\">  </span><span class=\"nv\">encodeAndSendToMongo</span><span class=\"w\"> </span><span class=\"nv\">update</span>\n</code></pre></div>\n<p>In essence if I am decoding or encoding a record type \"person\" <code>{age, firstName, lastName}</code><br>\nEach field could have one of three states:<br>\nIt could not exist(undefined), <br>\nIt could be null,<br>\nIt could have a value.</p>\n<p>Whether or not we want to encourage roc users to distinguish between null and undefined, some pretty significant existing systems do, and so to interoperate with them fully we would need to be able to represent <em>all</em> possible states. <br>\nTherefore, whilst most roc code shouldn't need to distinguish between null and undefined we should think about supporting distinguishing between them when encoding and decoding.</p>",
+        "id": 430984790,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1712145207
+    },
+    {
+        "content": "<p>I think this may just be a misalignment of semantics <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 430999454,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1712149669
+    },
+    {
+        "content": "<p>I have a suggestion: what if instead of talking about \"undefined\" we talk about \"missing\" if those are the intended semantics?</p>",
+        "id": 431111064,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712155729
+    },
+    {
+        "content": "<p>I really cannot overemphasize how much of a mistake I think it would be for the word \"undefined\" to appear anywhere in any Roc JSON library <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 431111158,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712155753
+    },
+    {
+        "content": "<p>like if we mean \"this is a value which indicates that the field will not be included\" then we should choose a word that means that, which <code>undefined</code> only does in one programming language in history</p>",
+        "id": 431111288,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712155782
+    },
+    {
+        "content": "<p>or like \"omitted\" maybe</p>",
+        "id": 431111429,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712155804
+    },
+    {
+        "content": "<p>there is definitely a distinction between a field being omitted and the field being present and set to <code>null</code> in JSON, and plenty of APIs rely on that distinction, so I agree that it's important that we support a distinction there</p>",
+        "id": 431111593,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712155851
+    },
+    {
+        "content": "<p>I'm totally happy to use whatever term, 'missing' works fine for me <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span>. To be clear though, I used 'undefined' because JSON is JavaScriptObjectNotation and so it seemed obvious to use JavaScript's term for \"a field that is missing\".</p>",
+        "id": 431173284,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1712177313
+    },
+    {
+        "content": "<p>I might be missing some context, but wouldn't default values be better than 'undefined' ? most of the time I use missing fields for this, and it's (probably) trivial to add your own \"Undefined\" type if needed</p>",
+        "id": 431822266,
+        "sender_full_name": "Pei Yang Ching",
+        "timestamp": 1712529445
+    },
+    {
+        "content": "<p>Undefined, or missing, field is very important - that means omitting of data. You shouldn't just slap any default value in the missing field's place unless maybe you explicitly define it in the Encode ability declaration of your type</p>",
+        "id": 431831868,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1712539001
+    },
+    {
+        "content": "<p>Optionality and nullability should be composable, like </p>\n<div class=\"codehilite\"><pre><span></span><code>{\n    age: Optional (Nullable U8),\n    firstName: Optional Str,\n    lastName: Nullable Str\n}\n</code></pre></div>\n<p>as they are in Javascript:</p>\n<div class=\"codehilite\"><pre><span></span><code>{\n    age?: number | null,\n    firstName?: string,\n    lastName: string | null\n}\n</code></pre></div>",
+        "id": 431832059,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1712539171
+    },
+    {
+        "content": "<p>Yeah, in roc terms, you probably would want the type to be:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"nv\">age</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Result</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">Null</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">Undefined</span><span class=\"p\">],</span>\n<span class=\"w\">    </span><span class=\"nv\">firstName</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Result</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">Undefined</span><span class=\"p\">],</span>\n<span class=\"w\">    </span><span class=\"nv\">lastName</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Result</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">Null</span><span class=\"p\">]</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>I think collapsing it into a single error tag is the cleanest way to represent this in Roc.</p>",
+        "id": 431832403,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712539427
+    },
+    {
+        "content": "<p>And as mentioned above <code>Undefined</code> could be <code>Missing</code> or <code>Omitted</code>. Just a name.</p>",
+        "id": 431832473,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712539463
+    },
+    {
+        "content": "<p>Would that work for Encode and Decode?</p>",
+        "id": 431832513,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1712539520
+    },
+    {
+        "content": "<p>Not presently but that's why this discussion exists. To get ideas as to how we'd like it to work and then see how close we can get/if we need new language features etc</p>",
+        "id": 431832920,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1712539852
+    },
+    {
+        "content": "<p>You probably could hack to to work by making the JSON encoder/decoder special case on the tags <code>Null</code> and <code>Undefined</code>. More likely, some form of opaque type for smarter handling is needed.</p>",
+        "id": 431832924,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712539854
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"654587\">@Karakatiza</span> I have a for k of roc and roc- Json package where This is implemented as an opaque type.</p>",
+        "id": 431833130,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1712540060
+    },
+    {
+        "content": "<p>So, like <code>Optional a [Null, Omitted]</code> ?</p>",
+        "id": 431833135,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1712540075
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"651372\">@Eli Dowling</span> just curious, with current roc, why couldn't it be implemented on an opaque type. What caused the need for the fork?</p>",
+        "id": 431833400,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712540372
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span>  There is no way to decode a record with a field that Is missing. I needed to change the internal decoding derive code so that it tries to decode any missing fields to see if they are okay with decoding an empty array <code>[]</code>.</p>",
+        "id": 431834197,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1712541100
+    }
+]

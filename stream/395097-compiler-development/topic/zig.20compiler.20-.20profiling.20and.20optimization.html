@@ -1,0 +1,360 @@
+<html>
+<head><meta charset="utf-8"><title>zig compiler - profiling and optimization · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html">zig compiler - profiling and optimization</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="505904360"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/505904360" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#505904360">(Mar 16 2025 at 01:35)</a>:</h4>
+<p>So, I have been messing a lot with profiling. Its fun to tinker with the new compiler. Interesting to see some of the tradeoffs.</p>
+<p>Thought I should make a standalone thread cause I assume there will be many findings over time and discussion.</p>
+<hr>
+<h2>A few random findings.</h2>
+<h3>1 million line challenge</h3>
+<p>Parsing and formatting 1 million lines of syntax grab bag.<br>
+zig compiler is ~5x faster and 4x less memory.<br>
+In real terms, the zig compiler took ~300ms to parse and format the million lines.<br>
+It used ~300MB to do so.</p>
+<p>The input file is 21MB.</p>
+<h3>c allocator vs the new zig smp allocator.</h3>
+<p>When dealing with the 100 files of 1000 lines:<br>
+c allocator uses way less memory than the zig smp allocator (~4x less memory)<br>
+That said, it also takes significantly longer runtime to do so (~1.4x slower)</p>
+<p>Definitely something to consider switching to. Though need to test on more cases and such.</p>
+<p>For 1 file of 1 million lines:<br>
+both allocators are essentially equivalent.</p>
+
+
+
+<a name="505904440"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/505904440" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#505904440">(Mar 16 2025 at 01:36)</a>:</h4>
+<p>Note, these numbers are with <a href="https://github.com/roc-lang/roc/issues/7704">#7704</a> which is very important for large file perf.</p>
+
+
+
+<a name="505904628"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/505904628" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#505904628">(Mar 16 2025 at 01:38)</a>:</h4>
+<p><span class="user-mention" data-user-id="406911">@Andrew Kelley</span> might be interested in those findings! <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<a name="505905090"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/505905090" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#505905090">(Mar 16 2025 at 01:45)</a>:</h4>
+<p>Also, I am still very new to the <a href="https://github.com/wolfpld/tracy">tracy profiler</a> (<a href="https://tracy.nereid.pl/">demo</a>), but it is an awesome tool for diving into performance. I think it will be extra useful once we start doing multi-threaded work. It has too many features for me to describe here, but I definitely should give a demo of using it with roc at some point.</p>
+<p>I graciously borrowed how the zig compiler integrates tracy and have it on a branch. At some point soon, I want to make a PR for it. It is relatively non-invasive. Just a sprinkling of trace points, some build config, and an optional allocation tracker.</p>
+
+
+
+<a name="505984888"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/505984888" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#505984888">(Mar 16 2025 at 18:51)</a>:</h4>
+<p>One thing seen clearly from profiling is that container default capacities can save a lot of time by avoiding many reallocations on copies.</p>
+<p>I was thinking of adding a bunch of <code>initCapacity</code> functions to our various datastructures, but realized that in many cases, the capacity wanted is not really known by the caller. I'm thinking of flipping the script and giving the data structures control of their default size. So calling init will simply allocate the default capacity we think is reasonable for a datastructure.</p>
+<p>As an example, instead of adding initCapacity to the small string interner, we would just update the small string interner init function to always allocate enough space for (x strings of a specific size), maybe 1000 strings of 4 characters.</p>
+<p>Thoughts?</p>
+<p>I'm not totally sold on this idea, but it feels like it might be easier to tune on a per data structure level than at a per instance level.</p>
+
+
+
+<a name="505985933"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/505985933" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#505985933">(Mar 16 2025 at 19:00)</a>:</h4>
+<p>I think what they did in the Zig compiler was to do some benchmarks on heuristics and go by that</p>
+
+
+
+<a name="505985999"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/505985999" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#505985999">(Mar 16 2025 at 19:00)</a>:</h4>
+<p>like for example "here's how much to allocate for tokens as a multiple of size of source bytes"</p>
+
+
+
+<a name="505986029"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/505986029" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#505986029">(Mar 16 2025 at 19:01)</a>:</h4>
+<p>not an exact science obviously, but can do heuristics based on measurements in the wild</p>
+
+
+
+<a name="505986059"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/505986059" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#505986059">(Mar 16 2025 at 19:01)</a>:</h4>
+<p>Yeah, that's a good point. A lot of this likely can have simple heuristics that go beyond datastructure specific and into input specific</p>
+
+
+
+<a name="506020538"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506020538" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506020538">(Mar 17 2025 at 01:25)</a>:</h4>
+<p><span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span> how are you generating the input file?</p>
+
+
+
+<a name="506020692"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506020692" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506020692">(Mar 17 2025 at 01:26)</a>:</h4>
+<p>Input is current the syntax grab bag repeated a ton</p>
+
+
+
+<a name="506020753"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506020753" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506020753">(Mar 17 2025 at 01:26)</a>:</h4>
+<p>Also, a roughly equivalent version modified for the old compiler syntax.</p>
+
+
+
+<a name="506020828"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506020828" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506020828">(Mar 17 2025 at 01:27)</a>:</h4>
+<p>Repletion with definitely benefit the interner and lead to less allocating and regrowth though. So it is biased for sure.</p>
+
+
+
+<a name="506020868"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506020868" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506020868">(Mar 17 2025 at 01:27)</a>:</h4>
+<p>I really should update the builtins and/or basic CLI to the new syntax to get a more realistic feel.</p>
+
+
+
+<a name="506021019"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021019" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021019">(Mar 17 2025 at 01:29)</a>:</h4>
+<p>I have a large corpus of all public roc code, but written in the old syntax of course</p>
+
+
+
+<a name="506021031"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021031" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021031">(Mar 17 2025 at 01:29)</a>:</h4>
+<p>("large" is a few tens of mb)</p>
+
+
+
+<a name="506021139"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021139" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021139">(Mar 17 2025 at 01:30)</a>:</h4>
+<p>Been thinking about running that thru the migration formatter in the old compiler (that'll need a bit of work!) and then using that as a somewhat more realistic corpus</p>
+
+
+
+<a name="506021151"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021151" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021151">(Mar 17 2025 at 01:30)</a>:</h4>
+<p>Oh, that would be awesome to work to update and do some benchmarks on. I think we are still a bit away from supporting everything to use that corpus, but would be great</p>
+
+
+
+<a name="506021185"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021185" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021185">(Mar 17 2025 at 01:31)</a>:</h4>
+<p>Can we make that corpus a GitHub repo? And make two branches, one for old and one for new syntax?</p>
+
+
+
+<a name="506021212"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021212" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021212">(Mar 17 2025 at 01:31)</a>:</h4>
+<p>Or otherwise share it?</p>
+
+
+
+<a name="506021277"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021277" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021277">(Mar 17 2025 at 01:32)</a>:</h4>
+<p><a href="http://osprey.biercewarner.com/tarball">http://osprey.biercewarner.com/tarball</a></p>
+
+
+
+<a name="506021359"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021359" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021359">(Mar 17 2025 at 01:32)</a>:</h4>
+<p>Could definitely make it a git repo</p>
+
+
+
+<a name="506021570"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021570" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021570">(Mar 17 2025 at 01:35)</a>:</h4>
+<p>How hard would it be to make the old compiler able to migrate the syntax?</p>
+
+
+
+<a name="506021606"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021606" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021606">(Mar 17 2025 at 01:35)</a>:</h4>
+<p>In theory that's like 90% done, just not hooked up to the command line yet</p>
+
+
+
+<a name="506021670"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021670" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021670">(Mar 17 2025 at 01:36)</a>:</h4>
+<p><a href="https://github.com/roc-lang/roc/blob/main/crates/compiler/fmt/src/migrate.rs">https://github.com/roc-lang/roc/blob/main/crates/compiler/fmt/src/migrate.rs</a></p>
+
+
+
+<a name="506021704"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506021704" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506021704">(Mar 17 2025 at 01:36)</a>:</h4>
+<p>There are a few missing translations there that I know of, and likely some bugs. Basically completely untested.</p>
+
+
+
+<a name="506022532"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506022532" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506022532">(Mar 17 2025 at 01:45)</a>:</h4>
+<p>Of course this is somewhat complicated by the old compiler still depending on zig 13 which breaks the build there, since I've upgraded to 14 for the new compiler <span aria-label="grimacing" class="emoji emoji-1f62c" role="img" title="grimacing">:grimacing:</span></p>
+
+
+
+<a name="506022928"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506022928" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506022928">(Mar 17 2025 at 01:49)</a>:</h4>
+<p>Yeah, I just use nix for old compiler work</p>
+
+
+
+<a name="506027461"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506027461" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506027461">(Mar 17 2025 at 02:37)</a>:</h4>
+<p>How hard would it be to just upgrade the old compiler to zig 14?</p>
+
+
+
+<a name="506027529"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506027529" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506027529">(Mar 17 2025 at 02:38)</a>:</h4>
+<p>Depends on how hard it ends up being to upgrade inkwell and llvm. Occasionally that is trivial. A lot of the time that is a huge hassle.</p>
+
+
+
+<a name="506027588"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506027588" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506027588">(Mar 17 2025 at 02:38)</a>:</h4>
+<p>Oh oof; those are all locked together <span aria-label="grimacing" class="emoji emoji-1f62c" role="img" title="grimacing">:grimacing:</span></p>
+
+
+
+<a name="506027657"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506027657" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506027657">(Mar 17 2025 at 02:39)</a>:</h4>
+<p>Yeah....one of the other huge gains of the new compiler is that we will generate llvm bitcode directly, which gives us much more flexibility to decouple that</p>
+
+
+
+<a name="506027745"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506027745" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506027745">(Mar 17 2025 at 02:40)</a>:</h4>
+<p>I guess keeping separate envs for the old and new compiler it is</p>
+
+
+
+<a name="506028286"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506028286" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506028286">(Mar 17 2025 at 02:46)</a>:</h4>
+<p>I guess you could always just alias/swap out only zig</p>
+
+
+
+<a name="506037427"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506037427" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506037427">(Mar 17 2025 at 04:23)</a>:</h4>
+<p>Some of these optimizations are bespoke tuning that probably won't be kept or need proper heuristics, but otherwise are just simple cleanups to have less allocations overall.</p>
+<div class="spoiler-block"><div class="spoiler-header">
+<p>optimization results (-38% execution time)</p>
+</div><div class="spoiler-content" aria-hidden="true">
+<p>Each executable builds on top of the last and includes all previous optimizations.</p>
+<p>Also, some reason, changes to file loading lead to the smp allocator using way less memory. It doesn't make sense to me. Definitely questioning if I am missing something or if the other case of 4x memory was some weird bug/fluke.</p>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>Benchmark<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="o">(</span><span class="m">31</span><span class="w"> </span>runs<span class="o">)</span>:<span class="w"> </span>./zig-out/bin/roc-base<span class="w"> </span>format<span class="w"> </span>/tmp/new
+<span class="w">  </span>measurement<span class="w">          </span>mean<span class="w"> </span>±<span class="w"> </span>σ<span class="w">            </span>min<span class="w"> </span>…<span class="w"> </span>max<span class="w">           </span>outliers<span class="w">         </span>delta
+<span class="w">  </span>wall_time<span class="w">           </span>159ms<span class="w"> </span>±<span class="w"> </span><span class="m">2</span>.86ms<span class="w">     </span>153ms<span class="w"> </span>…<span class="w">  </span>168ms<span class="w">          </span><span class="m">2</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">6</span>%<span class="o">)</span><span class="w">        </span><span class="m">0</span>%
+<span class="w">  </span>peak_rss<span class="w">            </span>745KB<span class="w"> </span>±<span class="w">    </span><span class="m">0</span><span class="w">       </span>745KB<span class="w"> </span>…<span class="w">  </span>745KB<span class="w">          </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span><span class="m">0</span>%
+<span class="w">  </span>cpu_cycles<span class="w">          </span>170M<span class="w">  </span>±<span class="w"> </span><span class="m">5</span>.79M<span class="w">      </span>156M<span class="w">  </span>…<span class="w">  </span>184M<span class="w">           </span><span class="m">3</span><span class="w"> </span><span class="o">(</span><span class="m">10</span>%<span class="o">)</span><span class="w">        </span><span class="m">0</span>%
+<span class="w">  </span>instructions<span class="w">        </span>321M<span class="w">  </span>±<span class="w">  </span><span class="m">961</span><span class="w">       </span>321M<span class="w">  </span>…<span class="w">  </span>321M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span><span class="m">0</span>%
+<span class="w">  </span>cache_references<span class="w">   </span><span class="m">3</span>.17M<span class="w">  </span>±<span class="w"> </span><span class="m">86</span>.4K<span class="w">     </span><span class="m">3</span>.05M<span class="w">  </span>…<span class="w"> </span><span class="m">3</span>.36M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span><span class="m">0</span>%
+<span class="w">  </span>cache_misses<span class="w">       </span><span class="m">1</span>.82K<span class="w">  </span>±<span class="w"> </span><span class="m">1</span>.38K<span class="w">     </span><span class="m">1</span>.11K<span class="w">  </span>…<span class="w"> </span><span class="m">8</span>.01K<span class="w">           </span><span class="m">2</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">6</span>%<span class="o">)</span><span class="w">        </span><span class="m">0</span>%
+<span class="w">  </span>branch_misses<span class="w">      </span><span class="m">1</span>.10M<span class="w">  </span>±<span class="w"> </span><span class="m">94</span>.2K<span class="w">      </span>858K<span class="w">  </span>…<span class="w"> </span><span class="m">1</span>.24M<span class="w">           </span><span class="m">3</span><span class="w"> </span><span class="o">(</span><span class="m">10</span>%<span class="o">)</span><span class="w">        </span><span class="m">0</span>%
+Benchmark<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="o">(</span><span class="m">35</span><span class="w"> </span>runs<span class="o">)</span>:<span class="w"> </span>./zig-out/bin/roc-buffered-fmt<span class="w"> </span>format<span class="w"> </span>/tmp/new
+<span class="w">  </span>measurement<span class="w">          </span>mean<span class="w"> </span>±<span class="w"> </span>σ<span class="w">            </span>min<span class="w"> </span>…<span class="w"> </span>max<span class="w">           </span>outliers<span class="w">         </span>delta
+<span class="w">  </span>wall_time<span class="w">           </span>144ms<span class="w"> </span>±<span class="w"> </span><span class="m">2</span>.75ms<span class="w">     </span>138ms<span class="w"> </span>…<span class="w">  </span>149ms<span class="w">          </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">9</span>.8%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.9%
+<span class="w">  </span>peak_rss<span class="w">            </span>864KB<span class="w"> </span>±<span class="w">    </span><span class="m">0</span><span class="w">       </span>864KB<span class="w"> </span>…<span class="w">  </span>864KB<span class="w">          </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>💩+<span class="w"> </span><span class="m">15</span>.9%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.0%
+<span class="w">  </span>cpu_cycles<span class="w">          </span>158M<span class="w">  </span>±<span class="w"> </span><span class="m">5</span>.91M<span class="w">      </span>146M<span class="w">  </span>…<span class="w">  </span>167M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">7</span>.2%<span class="w"> </span>±<span class="w">  </span><span class="m">1</span>.7%
+<span class="w">  </span>instructions<span class="w">        </span>308M<span class="w">  </span>±<span class="w">  </span><span class="m">454</span><span class="w">       </span>308M<span class="w">  </span>…<span class="w">  </span>308M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">4</span>.2%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.0%
+<span class="w">  </span>cache_references<span class="w">   </span><span class="m">2</span>.89M<span class="w">  </span>±<span class="w"> </span><span class="m">75</span>.4K<span class="w">     </span><span class="m">2</span>.77M<span class="w">  </span>…<span class="w"> </span><span class="m">3</span>.08M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">9</span>.0%<span class="w"> </span>±<span class="w">  </span><span class="m">1</span>.3%
+<span class="w">  </span>cache_misses<span class="w">       </span><span class="m">1</span>.34K<span class="w">  </span>±<span class="w">  </span><span class="m">646</span><span class="w">       </span><span class="m">979</span><span class="w">   </span>…<span class="w"> </span><span class="m">4</span>.97K<span class="w">           </span><span class="m">1</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">3</span>%<span class="o">)</span><span class="w">          </span>-<span class="w"> </span><span class="m">26</span>.4%<span class="w"> </span>±<span class="w"> </span><span class="m">28</span>.6%
+<span class="w">  </span>branch_misses<span class="w">       </span>997K<span class="w">  </span>±<span class="w">  </span>106K<span class="w">      </span>785K<span class="w">  </span>…<span class="w"> </span><span class="m">1</span>.17M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">9</span>.4%<span class="w"> </span>±<span class="w">  </span><span class="m">4</span>.5%
+Benchmark<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="o">(</span><span class="m">39</span><span class="w"> </span>runs<span class="o">)</span>:<span class="w"> </span>./zig-out/bin/roc-arena<span class="w"> </span>format<span class="w"> </span>/tmp/new
+<span class="w">  </span>measurement<span class="w">          </span>mean<span class="w"> </span>±<span class="w"> </span>σ<span class="w">            </span>min<span class="w"> </span>…<span class="w"> </span>max<span class="w">           </span>outliers<span class="w">         </span>delta
+<span class="w">  </span>wall_time<span class="w">           </span>127ms<span class="w"> </span>±<span class="w"> </span><span class="m">2</span>.93ms<span class="w">     </span>120ms<span class="w"> </span>…<span class="w">  </span>131ms<span class="w">          </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">20</span>.5%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.9%
+<span class="w">  </span>peak_rss<span class="w">            </span>864KB<span class="w"> </span>±<span class="w">    </span><span class="m">0</span><span class="w">       </span>864KB<span class="w"> </span>…<span class="w">  </span>864KB<span class="w">          </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>💩+<span class="w"> </span><span class="m">15</span>.9%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.0%
+<span class="w">  </span>cpu_cycles<span class="w">          </span>154M<span class="w">  </span>±<span class="w"> </span><span class="m">6</span>.73M<span class="w">      </span>140M<span class="w">  </span>…<span class="w">  </span>165M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">9</span>.6%<span class="w"> </span>±<span class="w">  </span><span class="m">1</span>.8%
+<span class="w">  </span>instructions<span class="w">        </span>308M<span class="w">  </span>±<span class="w">  </span><span class="m">454</span><span class="w">       </span>308M<span class="w">  </span>…<span class="w">  </span>308M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">3</span>.9%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.0%
+<span class="w">  </span>cache_references<span class="w">   </span><span class="m">2</span>.61M<span class="w">  </span>±<span class="w"> </span><span class="m">80</span>.5K<span class="w">     </span><span class="m">2</span>.48M<span class="w">  </span>…<span class="w"> </span><span class="m">2</span>.78M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">17</span>.6%<span class="w"> </span>±<span class="w">  </span><span class="m">1</span>.3%
+<span class="w">  </span>cache_misses<span class="w">       </span><span class="m">1</span>.69K<span class="w">  </span>±<span class="w">  </span><span class="m">641</span><span class="w">      </span><span class="m">1</span>.22K<span class="w">  </span>…<span class="w"> </span><span class="m">5</span>.39K<span class="w">           </span><span class="m">2</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">5</span>%<span class="o">)</span><span class="w">          </span>-<span class="w">  </span><span class="m">7</span>.0%<span class="w"> </span>±<span class="w"> </span><span class="m">27</span>.3%
+<span class="w">  </span>branch_misses<span class="w">       </span>976K<span class="w">  </span>±<span class="w">  </span>122K<span class="w">      </span>734K<span class="w">  </span>…<span class="w"> </span><span class="m">1</span>.17M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">11</span>.3%<span class="w"> </span>±<span class="w">  </span><span class="m">4</span>.8%
+Benchmark<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="o">(</span><span class="m">41</span><span class="w"> </span>runs<span class="o">)</span>:<span class="w"> </span>./zig-out/bin/roc-more-cap<span class="w"> </span>format<span class="w"> </span>/tmp/new
+<span class="w">  </span>measurement<span class="w">          </span>mean<span class="w"> </span>±<span class="w"> </span>σ<span class="w">            </span>min<span class="w"> </span>…<span class="w"> </span>max<span class="w">           </span>outliers<span class="w">         </span>delta
+<span class="w">  </span>wall_time<span class="w">           </span>123ms<span class="w"> </span>±<span class="w"> </span><span class="m">2</span>.54ms<span class="w">     </span>117ms<span class="w"> </span>…<span class="w">  </span>130ms<span class="w">          </span><span class="m">2</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">5</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">22</span>.8%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.8%
+<span class="w">  </span>peak_rss<span class="w">            </span>864KB<span class="w"> </span>±<span class="w">    </span><span class="m">0</span><span class="w">       </span>864KB<span class="w"> </span>…<span class="w">  </span>864KB<span class="w">          </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>💩+<span class="w"> </span><span class="m">15</span>.9%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.0%
+<span class="w">  </span>cpu_cycles<span class="w">          </span>153M<span class="w">  </span>±<span class="w"> </span><span class="m">5</span>.80M<span class="w">      </span>140M<span class="w">  </span>…<span class="w">  </span>170M<span class="w">           </span><span class="m">4</span><span class="w"> </span><span class="o">(</span><span class="m">10</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">9</span>.8%<span class="w"> </span>±<span class="w">  </span><span class="m">1</span>.6%
+<span class="w">  </span>instructions<span class="w">        </span>306M<span class="w">  </span>±<span class="w">  </span><span class="m">444</span><span class="w">       </span>306M<span class="w">  </span>…<span class="w">  </span>306M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">4</span>.7%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.0%
+<span class="w">  </span>cache_references<span class="w">   </span><span class="m">2</span>.46M<span class="w">  </span>±<span class="w"> </span><span class="m">48</span>.8K<span class="w">     </span><span class="m">2</span>.38M<span class="w">  </span>…<span class="w"> </span><span class="m">2</span>.60M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">22</span>.5%<span class="w"> </span>±<span class="w">  </span><span class="m">1</span>.0%
+<span class="w">  </span>cache_misses<span class="w">       </span><span class="m">1</span>.69K<span class="w">  </span>±<span class="w">  </span><span class="m">642</span><span class="w">      </span><span class="m">1</span>.18K<span class="w">  </span>…<span class="w"> </span><span class="m">5</span>.46K<span class="w">           </span><span class="m">2</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">5</span>%<span class="o">)</span><span class="w">          </span>-<span class="w">  </span><span class="m">7</span>.0%<span class="w"> </span>±<span class="w"> </span><span class="m">26</span>.7%
+<span class="w">  </span>branch_misses<span class="w">       </span>986K<span class="w">  </span>±<span class="w">  </span>105K<span class="w">      </span>746K<span class="w">  </span>…<span class="w"> </span><span class="m">1</span>.28M<span class="w">           </span><span class="m">4</span><span class="w"> </span><span class="o">(</span><span class="m">10</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">10</span>.4%<span class="w"> </span>±<span class="w">  </span><span class="m">4</span>.3%
+Benchmark<span class="w"> </span><span class="m">5</span><span class="w"> </span><span class="o">(</span><span class="m">43</span><span class="w"> </span>runs<span class="o">)</span>:<span class="w"> </span>./zig-out/bin/roc-file-size<span class="w"> </span>format<span class="w"> </span>/tmp/new
+<span class="w">  </span>measurement<span class="w">          </span>mean<span class="w"> </span>±<span class="w"> </span>σ<span class="w">            </span>min<span class="w"> </span>…<span class="w"> </span>max<span class="w">           </span>outliers<span class="w">         </span>delta
+<span class="w">  </span>wall_time<span class="w">           </span>117ms<span class="w"> </span>±<span class="w"> </span><span class="m">2</span>.96ms<span class="w">     </span>111ms<span class="w"> </span>…<span class="w">  </span>122ms<span class="w">          </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">26</span>.8%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.9%
+<span class="w">  </span>peak_rss<span class="w">            </span>864KB<span class="w"> </span>±<span class="w">    </span><span class="m">0</span><span class="w">       </span>864KB<span class="w"> </span>…<span class="w">  </span>864KB<span class="w">          </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>💩+<span class="w"> </span><span class="m">15</span>.9%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.0%
+<span class="w">  </span>cpu_cycles<span class="w">          </span>150M<span class="w">  </span>±<span class="w"> </span><span class="m">6</span>.47M<span class="w">      </span>137M<span class="w">  </span>…<span class="w">  </span>162M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">12</span>.0%<span class="w"> </span>±<span class="w">  </span><span class="m">1</span>.7%
+<span class="w">  </span>instructions<span class="w">        </span>305M<span class="w">  </span>±<span class="w">  </span><span class="m">954</span><span class="w">       </span>305M<span class="w">  </span>…<span class="w">  </span>305M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">4</span>.9%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.0%
+<span class="w">  </span>cache_references<span class="w">   </span><span class="m">2</span>.37M<span class="w">  </span>±<span class="w"> </span><span class="m">37</span>.3K<span class="w">     </span><span class="m">2</span>.31M<span class="w">  </span>…<span class="w"> </span><span class="m">2</span>.47M<span class="w">           </span><span class="m">3</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">7</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">25</span>.2%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.9%
+<span class="w">  </span>cache_misses<span class="w">       </span><span class="m">1</span>.61K<span class="w">  </span>±<span class="w">  </span><span class="m">327</span><span class="w">       </span><span class="m">832</span><span class="w">   </span>…<span class="w"> </span><span class="m">3</span>.00K<span class="w">           </span><span class="m">3</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">7</span>%<span class="o">)</span><span class="w">          </span>-<span class="w"> </span><span class="m">11</span>.7%<span class="w"> </span>±<span class="w"> </span><span class="m">23</span>.8%
+<span class="w">  </span>branch_misses<span class="w">       </span>924K<span class="w">  </span>±<span class="w">  </span>116K<span class="w">      </span>696K<span class="w">  </span>…<span class="w"> </span><span class="m">1</span>.14M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">16</span>.1%<span class="w"> </span>±<span class="w">  </span><span class="m">4</span>.6%
+Benchmark<span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="o">(</span><span class="m">50</span><span class="w"> </span>runs<span class="o">)</span>:<span class="w"> </span>./zig-out/bin/roc-smp<span class="w"> </span>format<span class="w"> </span>/tmp/new
+<span class="w">  </span>measurement<span class="w">          </span>mean<span class="w"> </span>±<span class="w"> </span>σ<span class="w">            </span>min<span class="w"> </span>…<span class="w"> </span>max<span class="w">           </span>outliers<span class="w">         </span>delta
+<span class="w">  </span>wall_time<span class="w">          </span><span class="m">98</span>.7ms<span class="w"> </span>±<span class="w"> </span><span class="m">2</span>.92ms<span class="w">    </span><span class="m">92</span>.2ms<span class="w"> </span>…<span class="w">  </span>105ms<span class="w">          </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">38</span>.0%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.8%
+<span class="w">  </span>peak_rss<span class="w">            </span>864KB<span class="w"> </span>±<span class="w">    </span><span class="m">0</span><span class="w">       </span>864KB<span class="w"> </span>…<span class="w">  </span>864KB<span class="w">          </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>💩+<span class="w"> </span><span class="m">15</span>.9%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.0%
+<span class="w">  </span>cpu_cycles<span class="w">          </span>147M<span class="w">  </span>±<span class="w"> </span><span class="m">6</span>.21M<span class="w">      </span>133M<span class="w">  </span>…<span class="w">  </span>161M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">13</span>.5%<span class="w"> </span>±<span class="w">  </span><span class="m">1</span>.6%
+<span class="w">  </span>instructions<span class="w">        </span>303M<span class="w">  </span>±<span class="w">  </span><span class="m">960</span><span class="w">       </span>303M<span class="w">  </span>…<span class="w">  </span>303M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w">  </span><span class="m">5</span>.7%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.0%
+<span class="w">  </span>cache_references<span class="w">   </span><span class="m">2</span>.11M<span class="w">  </span>±<span class="w"> </span><span class="m">40</span>.6K<span class="w">     </span><span class="m">2</span>.03M<span class="w">  </span>…<span class="w"> </span><span class="m">2</span>.19M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">33</span>.5%<span class="w"> </span>±<span class="w">  </span><span class="m">0</span>.9%
+<span class="w">  </span>cache_misses<span class="w">       </span><span class="m">1</span>.44K<span class="w">  </span>±<span class="w">  </span><span class="m">533</span><span class="w">      </span><span class="m">1</span>.07K<span class="w">  </span>…<span class="w"> </span><span class="m">4</span>.75K<span class="w">           </span><span class="m">4</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">8</span>%<span class="o">)</span><span class="w">          </span>-<span class="w"> </span><span class="m">20</span>.9%<span class="w"> </span>±<span class="w"> </span><span class="m">23</span>.7%
+<span class="w">  </span>branch_misses<span class="w">       </span>919K<span class="w">  </span>±<span class="w">  </span>107K<span class="w">      </span>675K<span class="w">  </span>…<span class="w"> </span><span class="m">1</span>.13M<span class="w">           </span><span class="m">0</span><span class="w"> </span><span class="o">(</span><span class="w"> </span><span class="m">0</span>%<span class="o">)</span><span class="w">        </span>⚡-<span class="w"> </span><span class="m">16</span>.6%<span class="w"> </span>±<span class="w">  </span><span class="m">4</span>.2%
+</code></pre></div>
+</div></div>
+
+
+
+<a name="506636486"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506636486" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506636486">(Mar 19 2025 at 05:17)</a>:</h4>
+<p><span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span>  -- we're adding a lot of knobs and dials for tuning the compiler. I appreciate these are all things that we can tune later. </p>
+<p>I'm wondering if we should pull all the constants out into a single file.</p>
+
+
+
+<a name="506636608"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506636608" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506636608">(Mar 19 2025 at 05:19)</a>:</h4>
+<p>Maybe one day we have some automated thing that can help us tune these based on real code (i.e. using something like Osprey)... but even manually it would be easier to surface all of these decisions if they are in one place.</p>
+
+
+
+<a name="506639939"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506639939" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506639939">(Mar 19 2025 at 05:52)</a>:</h4>
+<p>Yeah, definitely lots of nobs. I just have been learning tracy and thus tuning a bunch of random ones</p>
+
+
+
+<a name="506639974"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506639974" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506639974">(Mar 19 2025 at 05:53)</a>:</h4>
+<p>Appart for initial capacities, I don't think we'll have too many bespoke constants</p>
+
+
+
+<a name="506639992"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506639992" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506639992">(Mar 19 2025 at 05:53)</a>:</h4>
+<p>And capacities are likely something that should be tune with context</p>
+
+
+
+<a name="506640052"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506640052" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506640052">(Mar 19 2025 at 05:54)</a>:</h4>
+<p>That said, setting a constant somewhere for the default capacity if people don't know what to pick sounds like protentially a good idea.</p>
+
+
+
+<a name="506640330"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506640330" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506640330">(Mar 19 2025 at 05:56)</a>:</h4>
+<p>What I like about putting the constants in a single file is that its easier to track the history of any changes. If we change constants in future based on some profiling... we will include the analysis/evaluation in the PR and so we always have a good point of reference that is easy to find.</p>
+
+
+
+<a name="506640504"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506640504" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506640504">(Mar 19 2025 at 05:58)</a>:</h4>
+<p>I could also imagine a future where different users might want different parameters. Like maybe if I'm using roc in some special way I might want to change things to suit me.</p>
+
+
+
+<a name="506641198"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/zig%20compiler%20-%20profiling%20and%20optimization/near/506641198" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/zig.20compiler.20-.20profiling.20and.20optimization.html#506641198">(Mar 19 2025 at 06:03)</a>:</h4>
+<p>Yeah, makes some sense. I'm not fully sure there are good names for these various constants cause many of them will just be the starting size of arbitrary containers or maybe a ratio from the input source to the size. That is where local reasoning makes a lot of sense. But I totally understand the want to have all nobs in one place.</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

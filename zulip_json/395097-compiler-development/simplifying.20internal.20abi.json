@@ -1,0 +1,158 @@
+[
+    {
+        "content": "<p>As part of planned changes for our llvm c abi, I think I want to first simplify some of our llvm internal abi.</p>\n<p>Currently, we sometimes pass values in registers and sometimes pass them by pointer. When we pass them by pointer, we never pass them <code>byval</code> or <code>byref</code>. Our heuristic for passing in registers is simply based on the size in bytes. This actually leads to some pretty bad code gen. It also is extra work for us that llvm will already do during optimization.</p>\n<p>To break it down...</p>\n<h3>Sometimes passing as aggregate and sometimes passing by pointer</h3>\n<p>This makes it so that we have tons of split code paths. One path to handle the aggregate and one to handle the pointers. We can not simply load the pointer and then handle it like an aggregate. It is <a href=\"https://llvm.org/docs/Frontend/PerformanceTips.html#avoid-creating-values-of-aggregate-type\">considered a bad idea to load aggregates into registers (especially large aggregates)</a>. As such, for the pointer path we use pointer offsets and small loads while for the register version, we just directly extract values.</p>\n<p>This is simply extra code paths and complexity. It also is for ~0 gain. While this does give us finer grain control, llvm passes already have solutions for this that are reasonable.</p>\n<h3>Our heuristic for passing in registers is simply based on the size in bytes</h3>\n<p>This is simply a really naive heuristic and probably ends up hurting pointers very often. When llvm sees an aggregate struct, it will put every single field in its own registers. This means that our naive heuristic can lead to really bad results.</p>\n<p>Consider this roc type:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kt\">RGB</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">r</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">g</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">b</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"kt\">PairRGB</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">RGB</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">RGB</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>Both RGB and PairRGB our under our threshold. As such, we will pass them as aggregate values. This means that on x86_64, a <a href=\"https://llvm.godbolt.org/z/K5TY9Gc9f\">single PairRGB value will immediately consume all registers</a> and everything else will have to be passed on the stack.</p>\n<p>This means that lots of small data that just happens to be many fields can quickly consume tons of registers and really hurt performance.</p>\n<h3>When we pass them by pointer, we never pass them <code>byval</code> or <code>byref</code></h3>\n<p>Simply put, <code>byval</code> pointers are the pointers that are meant to be implicitly passed on the stack. In general, llvm understands how to optimize <code>byval</code> pointers. If they are reasonable to pass in registers, llvm will do that. If a function uses it in a read only way, llvm will avoid copying it over and over again (which should always be the case in roc).</p>\n<p><code>byref</code> pointers are similar to <code>byval</code> but do not make a copy to put them into the next stack frame.</p>\n<p>Given everything is immutable in roc, I think we can pass everything as <code>ptr readonly byref(%type) align(%align)</code>. llvm will then automatically promote to registers if it see fit to do so. On top of that, being <code>byref</code> instead of <code>byval</code> avoids the duplication on the stack required for potential mutation (can still mutate something nested in a pointer like a list).</p>\n<hr>\n<p>Bonus: defining everything as pointers means that we can specify alignment correctly everywhere instead of depending on nesting types like <code>[i128 * 0]</code> to get 16 byte alignment. You can directly specify alignment of pointers and allocas.</p>\n<hr>\n<p>One annoyance. The argpromotion pass is currently set to only promote to pass in registers if the struct is 2 values or less. I want to set that to at least 3 (so string and list can pass as multiple scalars if reasonable for a function call). This is an argument when generating the c++ pass, but I'm not sure if we can set it from inkwell. Especially given we now create our pass pipeline via a giant string of pass names. Need to look into this more. Even If I can't set this now, I would rather simplify everything and figure out setting it later. As a note, it is smart enough to recognize unused fields. So a list where only the pointer and length are accessed is considered only 2 elements.</p>",
+        "id": 489110412,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734292648
+    },
+    {
+        "content": "<p>Hmmm....just realized a problem with my idea. Argpromotion does not deal with return by pointer. So all aggregates would always be returned by pointer instead of being return in registers.....</p>",
+        "id": 489112353,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734294502
+    },
+    {
+        "content": "<p>So unless we don our own packing, this will still be suboptimal</p>",
+        "id": 489112443,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734294584
+    },
+    {
+        "content": "<p>Maybe we just need to consider all function args and returns no matter what as special. Shape them into exactly what we want. Then inside a function always convert to pointers to allocas for structured types so that we can access everything in a uniform way. llvm definitely is good a removing write once and then read only allocas like could be used for arguments..... Then at least all the struct/pointer conversion code can just be for function arguments and returns and everything else can uniformly be pointers.</p>",
+        "id": 489112638,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734294719
+    },
+    {
+        "content": "<p>cc <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> and <span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> for opinions and ideas</p>\n<p>Since I want to fully revamp and fix up c abi, might as well think about cleaning up the fully system.</p>",
+        "id": 489112708,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734294764
+    },
+    {
+        "content": "<p>Also, I was looking at rust and their heuristic seems to be overly simple. 2 items struct: pass as separate args. 3+ arg structs: pass as pointer</p>",
+        "id": 489113004,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734295056
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/simplifying.20internal.20abi/near/489110412\">said</a>:</p>\n<blockquote>\n<p>Given everything is immutable in roc, I think we can pass everything as <code>ptr readonly byref(%type) align(%align)</code>.</p>\n</blockquote>\n<p>hm, but they can be mutated if the refcount is 1, yeah?</p>",
+        "id": 489114567,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1734296578
+    },
+    {
+        "content": "<p>readonly is only top level, not recursive. We pass the list as a readonly pointer. We then read the underlying allocation pointer from the list. That pointer is not read only. We can write to that.</p>",
+        "id": 489114908,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734296886
+    },
+    {
+        "content": "<p>ahh right!</p>",
+        "id": 489116599,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1734298388
+    },
+    {
+        "content": "<p>+1 to reducing code paths, whatever form it takes. This seems reasonable. We have to pass large structs by pointer though, there was a huge regression that was the impetus for that</p>",
+        "id": 489131626,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1734312129
+    },
+    {
+        "content": "<p>Yeah, and the plan here would be to pass all struct by pointer and then leave llvm to change them to by value as an optimization.</p>",
+        "id": 489135749,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734315475
+    },
+    {
+        "content": "<p>makes sense to me.</p>",
+        "id": 489137729,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1734317118
+    },
+    {
+        "content": "<p>By delegating value-ification to llvm, would we avoid the classes of mis-mappings that result in platforms reading non-pointer registers incorrectly? Does that address alignment+packing and solve register selection? Would platform <code>roc_fx_</code> functions still need to choose whether to expect a value or pointer?</p>",
+        "id": 489265081,
+        "sender_full_name": "jan kili",
+        "timestamp": 1734362506
+    },
+    {
+        "content": "<p>Not at all sadly</p>",
+        "id": 489287502,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734367842
+    },
+    {
+        "content": "<p>Llvm does not know how to speak c abi</p>",
+        "id": 489287555,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734367855
+    },
+    {
+        "content": "<p>So for c abi, we still have to do something special</p>",
+        "id": 489287617,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734367871
+    },
+    {
+        "content": "<p>As mentioned above, we could still choose to speak a limited subset of c abi to make our lives a lot easier.</p>",
+        "id": 489287866,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734367928
+    },
+    {
+        "content": "<p>Actually, if we force all structs and unions (minus enums) to be by pointer and all other types to be by value, that would make for very simple valid c abi......I might do that, at least as a starting point. It would be very similar to our <code>_generic</code> function today.</p>\n<p>Compared to proper c abi, this minorly hurts perf for any record or union under 16 bytes. All other primitives would be unchanged.</p>",
+        "id": 489289458,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734368322
+    },
+    {
+        "content": "<p>That said, if we use this restricted API, and let llvm do promotion to values (which is only a little sad due to cutting off at 2 registers instead of 3, without us being able to tune the arg to my knowledge), I think we could actually have the same internal llvm call conv as our external c call conv and that sounds worth it.</p>",
+        "id": 489290386,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734368588
+    },
+    {
+        "content": "<p>Sweet!</p>",
+        "id": 489303382,
+        "sender_full_name": "jan kili",
+        "timestamp": 1734372360
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/simplifying.20internal.20abi/near/489289458\">said</a>:</p>\n<blockquote>\n<p>Compared to proper c abi, this minorly hurts perf for any record or union under 16 bytes.</p>\n</blockquote>\n<p>I imagine that if a platform cared strongly about perf, it could likely pass a single U* value instead, for low cost in app side bit math.</p>",
+        "id": 489303586,
+        "sender_full_name": "jan kili",
+        "timestamp": 1734372414
+    },
+    {
+        "content": "<p>They could try. May not work in a lot of cases due to roc having no sort of unsafe cast.</p>",
+        "id": 489316057,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734374839
+    },
+    {
+        "content": "<p>But also, if we get to the point where a well design platform is hitting perf issues due to this, we can work on a fix then (and if we ever allow platform + app lto, it would likely fix all these issues anyway)</p>",
+        "id": 489316279,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734374904
+    },
+    {
+        "content": "<p>Overall not much of a concern especially given roc never mutates anything</p>",
+        "id": 489316366,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734374935
+    },
+    {
+        "content": "<p>yeah this feels like another case (lambda sets being another) where the volume of bugs has been so high for so long that it definitely feels like intentionally sacrificing some performance for the sake of correctness is the right move, especially when the performance delta we're talking about is this small</p>",
+        "id": 489317324,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1734375219
+    },
+    {
+        "content": "<p>Yeah, the main cost here is a small amount of extra indirection (still highly likely in L1 cache) when calling to/from the host.</p>\n<p>Then internally, if we can't tune the llvm arg promotion pass, passing/returning lists and strings by pointer instead of in registers. I would guess this is actually more likely to be a perf hit than the c abi stuff. That said, I still would bet it is an exceptionally small cost.</p>\n<p>To be even more clear here, in other languages, they have to pass by reference most of the time due to allowing mutation. So this would be no worse than c or rust from the call conv side. It will waste more stack space on stale versions of lists/strings that no longer matter. (Due to us always making a new list/str struct instead of mutating in place).</p>",
+        "id": 489319114,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734375756
+    }
+]

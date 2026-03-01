@@ -1,0 +1,254 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> I think I'd be interested in helping out with implementing <a href=\"#narrow/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions/near/363194052\">refinement of tag unions</a> if I can. I haven't spent much time looking at the type system implementation yet, but I was hoping to do that soon anyway!</p>\n<p>Also, a tiny thing in the <a href=\"https://rwx.notion.site/Union-Refinement-5bef5072afb84675948f89525a25dbb7#6e8a05ecd20b45d2a272188e7674fa59\">proposal</a>: I'm guessing the <code>f : [User, Admin, SuperAdmin]</code> signatures are missing a return type (or should be <code>t : [User, Admin, SuperAdmin]</code>).</p>",
+        "id": 363213151,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1685769823
+    },
+    {
+        "content": "<p>sweet! you're totally right, apologies for the typo, I've went ahead and fixed it. Please let us know if you have any questions about the description in the proposal/implementation.</p>",
+        "id": 363310597,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685799908
+    },
+    {
+        "content": "<p>I would appreciate some help getting started with this.</p>\n<p>My initial thought was that I could start with the type expansion part, since implementing the refinement without that could break working programs.</p>\n<div class=\"codehilite\"><pre><span></span><code>expandError : [Io Str] -&gt; [Io Str, Net Str]\nexpandError = \\e -&gt; when e is\n  error -&gt; error\n</code></pre></div>\n<p>My first idea was that for each identifier introduced in a pattern, I would create a new type variable to represent the possibly expanded version of it. So in this case, the goal is for <code>error_unexpanded</code> to be <code>[Io Str]</code> and <code>error_expanded</code> to be <code>[Io Str, Net Str]</code>. References to <code>error</code> on the right side of the arrow would actually refer to <code>error_expanded</code>. My idea was that I would use <code>unify()</code> with <code>Mode::PRESENT</code>in order to ensure all the tags in the unexpanded variable were present in the expanded variable.</p>\n<p>So I tried that. But it turns out <code>Mode::PRESENT</code> isn't as magical as I naively assumed. It doesn't seem to continuously enforce a relationship between <code>error_unexpanded</code> and <code>error_expanded</code>; it just adds the tags in the <code>error_unexpanded</code> type to <code>error_expanded</code> at the point when <code>unify()</code> is called. (In this case, I think it just decided <code>error_unexpanded</code>and <code>error_expanded</code> were equal.)</p>\n<p>So all that's to say, my initial idea didn't work out, and I'm not really sure how to approach this.</p>",
+        "id": 366683192,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1686888687
+    },
+    {
+        "content": "<p>I wonder if you can perform the inference scheme the following way:</p>\n<ul>\n<li>Determine the type of <code>error</code> on the left-hand side (LHS) of the pattern-match error - as it already happens today. Then, as you describe, create a new type variable <code>error_expanded</code> based on the solved type of error in the LHS.</li>\n<li>The instantiation of <code>error_expanded</code> proceeds in the following way: <ul>\n<li><code>error_expanded = clone(error_unexpanded)</code> (you don't want to unify them, since they are not equivalent).</li>\n<li>Then, if <code>error_expanded</code> is a tag union, it is \"opened\" (an unbound variable is added as its extension type, see the <code>open_tag_union</code> function).</li>\n<li>Now, in the example above, <code>error_expanded</code> should look like <code>[Io Str]&lt;fresh_ext&gt;</code> where <code>fresh_ext</code> is unbound.</li>\n</ul>\n</li>\n<li>Binding the RHS occurrence of <code>error</code> to <code>error_expanded</code> and then solving the RHS of the branches will then instantiate <code>fresh_ext</code> to <code>[Net Str]</code>, yielding the expanded type you want.</li>\n</ul>",
+        "id": 366868524,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1686928977
+    },
+    {
+        "content": "<p>Would that still work if the RHS imposed more restrictions on <code>e</code>? For example</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">expandError</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">e</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">  </span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">f</span><span class=\"w\"> </span><span class=\"nx\">e</span>\n<span class=\"w\">  </span><span class=\"c1\"># Now we know the type of e contains [A].</span>\n<span class=\"w\">  </span><span class=\"k\">when</span><span class=\"w\"> </span><span class=\"nx\">e</span><span class=\"w\"> </span><span class=\"o\">is</span>\n<span class=\"w\">    </span><span class=\"nx\">error</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">      </span><span class=\"c1\"># error_expanded is created before solving the RHS.</span>\n<span class=\"w\">      </span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">g</span><span class=\"w\"> </span><span class=\"nx\">e</span>\n<span class=\"w\">      </span><span class=\"c1\"># Now we know that the type of e also contains [B].</span>\n<span class=\"w\">      </span><span class=\"c1\"># But that restriction doesn't apply to error_expanded since the clone already happened.</span>\n<span class=\"w\">      </span><span class=\"c1\"># So the following doesn't produce a type error, but it should!</span>\n<span class=\"w\">      </span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">h</span><span class=\"w\"> </span><span class=\"nx\">error</span>\n<span class=\"w\">      </span><span class=\"nx\">error</span>\n\n<span class=\"nv\">f</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">A</span><span class=\"p\">]</span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"nv\">g</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">B</span><span class=\"p\">]</span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"nv\">h</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">A</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n</code></pre></div>",
+        "id": 366927397,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1686942998
+    },
+    {
+        "content": "<p>I believe that if the type of the branch pattern is non-exhaustive, then the extension variable of the branch pattern (if it exists) should be shared with the expanded type on the RHS. So in your example above we would have</p>\n<div class=\"codehilite\"><pre><span></span><code>expandError = \\e -&gt;\n  _ = f e # e = [A]x\n  when e is\n    error -&gt; # error_unexpanded = [A]x , error_expanded = [A]x\n      _ = g e # [A]x ~ [B]y =&gt; error_unexpanded = [A, B]y, error_expanded = [A, B]y\n      _ = h error # =&gt; type error\n      error\n</code></pre></div>\n<p>then in a case where refinement happens, like</p>\n<div class=\"codehilite\"><pre><span></span><code>expandError : [A, B, C]a -&gt; {}\nexpandError = \\e -&gt;\n  when e is\n    A -&gt; {}\n    error -&gt;\n      # first we solve : e = [A, B, C]a\n      # then refinement: error_unexpanded = [B, C]a , error_expanded = [B, C]a\n      {}\n</code></pre></div>\n<p>this is still okay. So the extension variable is only freshened if we can't find an extension variable for the unexpanded type.</p>\n<div class=\"codehilite\"><pre><span></span><code>expandError : [A, B, C] -&gt; {}\nexpandError = \\e -&gt;\n  when e is\n    A -&gt; {}\n    error -&gt;\n      # first we solve : e = [A, B, C]\n      # then refinement: error_unexpanded = [B, C] , error_expanded = [B, C]x\n      # at this point only `x` can grow, so this is also sound\n      {}\n</code></pre></div>",
+        "id": 366942441,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1686948051
+    },
+    {
+        "content": "<p>Ok, I think I'm understanding better now. So effectively, that means the expansion only happens if we already know that the unexpanded tag union is closed (i.e., its extension variable is <code>[]</code>).</p>\n<p>Also, does this mean we can't always infer the most general type? Take this example:</p>\n<div class=\"codehilite\"><pre><span></span><code>expandError : [Io Str, Net Str] -&gt; I64\nexpandError = \\e -&gt;\n  when e is\n    Io Str -&gt; 1\n    error -&gt;\n      # first we solve: e = [Io Str, Net Str]\n      # then refinement: error_unexpanded = [Net Str], error_expanded = [Net Str]x\n      # x is inferred to be [Io Str, Timeout Str]\n      f error\n\nf : [Io Str, Net Str, Timeout Str] -&gt; I64\n</code></pre></div>\n<p>But if you remove the annotation, it would infer a different and incompatible type, right?</p>\n<div class=\"codehilite\"><pre><span></span><code>expandError = \\e -&gt;\n  when e is\n    Io Str -&gt; 1\n    error -&gt;\n      # first we solve: e = [Io Str]x\n      # then refinement: error_unexpanded = []x, error_expanded = []x\n      # x is inferred to be [Io Str, Net Str, Timeout Str]\n      f error\n# expandError is inferred to be [Io Str, Net Str, Timeout Str] -&gt; I64\n\nf : [Io Str, Net Str, Timeout Str] -&gt; I64\n</code></pre></div>\n<p>Though I'm not sure if there even is a way to express the most general type of that function.</p>",
+        "id": 367023118,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1686958960
+    },
+    {
+        "content": "<p>that is a good example. I think you're right, it loses principality relative to control flow (since the principal type relative to control flow would be <code>[Io Str] -&gt; I64</code>). But it doesn't lose principality relative to unification (the former function wouldn't type-check relative to unification). Maybe we can find a way to recover principality in general, relative to control flow, but I can't think of a way immediately</p>",
+        "id": 367035552,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1686965435
+    },
+    {
+        "content": "<p>actually, this function has no principal type right? All of <code>[Io Str] -&gt; I64</code>, <code>[Io Str, Net Str] -&gt; I64</code>, <code>[Io Str, Net Str, Timeout Str] -&gt; I64</code> are \"equivalently principal\"</p>",
+        "id": 367037597,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1686966574
+    },
+    {
+        "content": "<p>none of those types are compatible with any other</p>",
+        "id": 367037614,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1686966591
+    },
+    {
+        "content": "<p>so we infer \"a\" principal type, but \"the\" principal type doesn't exist..</p>",
+        "id": 367037717,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1686966632
+    },
+    {
+        "content": "<p>Yeah, I think so</p>",
+        "id": 367037755,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1686966656
+    },
+    {
+        "content": "<p>I think I've implemented the inference scheme you suggested, and it seems to be working: <a href=\"https://github.com/roc-lang/roc/pull/5559\">https://github.com/roc-lang/roc/pull/5559</a></p>",
+        "id": 367043664,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1686970223
+    },
+    {
+        "content": "<p>Though it's still pretty messy, and I still need to do the code gen part</p>",
+        "id": 367043769,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1686970281
+    },
+    {
+        "content": "<p>Do you know why the <code>open_tag_union</code> pattern match doesn't include <code>EmptyTagUnion</code> or <code>FunctionOrTagUnion</code>? <a href=\"https://github.com/roc-lang/roc/blob/0f327d9f38390070b8d774398813b8797897565a/crates/compiler/solve/src/solve.rs#L1910-L1943\">https://github.com/roc-lang/roc/blob/0f327d9f38390070b8d774398813b8797897565a/crates/compiler/solve/src/solve.rs#L1910-L1943</a></p>",
+        "id": 367044931,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1686970873
+    },
+    {
+        "content": "<p>Missing <code>FunctionOrTagUnion</code> is probably an oversight. Missing EmptyTagUnion, I think it is an implicit assumption that EmptyTagUnion does not appear in non-extension-type positions, but that is probably an oversight too.</p>",
+        "id": 367049054,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1686972865
+    },
+    {
+        "content": "<p>Given the impact on type inference, do you think maybe we should discuss the proposal more before moving forward?</p>",
+        "id": 367440685,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1687112706
+    },
+    {
+        "content": "<p>Is the only concern w.r.t. the loss of a single principal type in some circumstances? If so, I personally don't think that's a big deal, as it does not materially impact expressivity, soundness, or correctness - and we retain principality relative to unification. That is, even though there is no principal type in that scenario, the three possible principal types are all incompatible. Moreover the inferred <code>[Io Str, Net Str, Timeout Str]</code>argument  is in a sense the most \"general\" type - in the sense that it admits more instances of polymorphic types than either <code>[Io Str]</code> or <code>[Io Str, Net Str]</code> does. Also, there are other places in the language where a single principal type is undecidable (namely when ability usages are undecidable). All that to say I don't think this observation pokes any holes.</p>",
+        "id": 367454805,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1687119389
+    },
+    {
+        "content": "<p>yeah I think that's fine too <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 367454911,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1687119455
+    },
+    {
+        "content": "<p>the thing I care about is \"you couldn't add a type annotation to make it more general than the type we inferred\"</p>",
+        "id": 367454992,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1687119489
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/316715-contributing/topic/Refinement.20of.20tag.20unions/near/367454992\">said</a>:</p>\n<blockquote>\n<p>the thing I care about is \"you couldn't add a type annotation to make it more general than the type we inferred\"</p>\n</blockquote>\n<p>Here's an example where I think that might happen:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">validate</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">color</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">  </span><span class=\"k\">when</span><span class=\"w\"> </span><span class=\"nx\">color</span><span class=\"w\"> </span><span class=\"o\">is</span>\n<span class=\"w\">    </span><span class=\"nx\">Black</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Err</span><span class=\"w\"> </span><span class=\"s\">\"not a color\"</span>\n<span class=\"w\">    </span><span class=\"nx\">c</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">      </span><span class=\"c1\"># first we solve: color = [Black]x</span>\n<span class=\"w\">      </span><span class=\"c1\"># then refinement: c_unexpanded = []x, c_expanded = []x</span>\n<span class=\"w\">      </span><span class=\"c1\"># x is inferred (because of isBluish) to be [Red, Blue, Teal, White]</span>\n<span class=\"w\">      </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"nx\">isBluish</span><span class=\"w\"> </span><span class=\"nx\">color</span><span class=\"w\"> </span><span class=\"k\">then</span>\n<span class=\"w\">        </span><span class=\"nx\">Err</span><span class=\"w\"> </span><span class=\"s\">\"bluish colors not allowed\"</span>\n<span class=\"w\">      </span><span class=\"k\">else</span>\n<span class=\"w\">        </span><span class=\"nx\">Ok</span><span class=\"w\"> </span><span class=\"nx\">c</span>\n<span class=\"c1\"># validate is inferred to be [Red, Blue, Teal, Black, White][] -&gt; Result [Red, Blue, Teal, White][] Str</span>\n\n<span class=\"nv\">isBluish</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">Red</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Blue</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Teal</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Black</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">White</span><span class=\"p\">][]</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Bool</span>\n</code></pre></div>\n<p>If we add a type annotation, <code>validate</code> can return an open type, which is more general:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">validate</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">Red</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Blue</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Teal</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Black</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">White</span><span class=\"p\">][]</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Result</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">Red</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Blue</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Teal</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">White</span><span class=\"p\">]</span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"nx\">Str</span>\n<span class=\"nv\">validate</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">color</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">  </span><span class=\"k\">when</span><span class=\"w\"> </span><span class=\"nx\">color</span><span class=\"w\"> </span><span class=\"o\">is</span>\n<span class=\"w\">    </span><span class=\"nx\">Black</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Err</span><span class=\"w\"> </span><span class=\"s\">\"not a color\"</span>\n<span class=\"w\">    </span><span class=\"nx\">c</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">      </span><span class=\"c1\"># first we solve: color = [Red, Blue, Teal, Black, White]</span>\n<span class=\"w\">      </span><span class=\"c1\"># then refinement: c_unexpanded = [Red, Blue, Teal, White], error_expanded = [Red, Blue, Teal, White]x</span>\n<span class=\"w\">      </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"nx\">isBluish</span><span class=\"w\"> </span><span class=\"nx\">color</span><span class=\"w\"> </span><span class=\"k\">then</span>\n<span class=\"w\">        </span><span class=\"nx\">Err</span><span class=\"w\"> </span><span class=\"s\">\"bluish colors not allowed\"</span>\n<span class=\"w\">      </span><span class=\"k\">else</span>\n<span class=\"w\">        </span><span class=\"nx\">Ok</span><span class=\"w\"> </span><span class=\"nx\">c</span>\n\n<span class=\"nv\">isBluish</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">Red</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Blue</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Teal</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Black</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">White</span><span class=\"p\">][]</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Bool</span>\n</code></pre></div>\n<p>I’m guessing there aren’t a lot of situations where this would be a problem, and it’s easy enough to just add a type annotation. But technically, I think it means adding an annotation can make the type more general.</p>",
+        "id": 367480777,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1687136661
+    },
+    {
+        "content": "<p>In this case, the latter program does not type-check. A closed tag union cannot become open in that position - unifying an open union with a closed one makes the union closed.</p>",
+        "id": 367483208,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1687137832
+    },
+    {
+        "content": "<p>More generally, the flow-based unification scheme can expand the number of material tags in a union (causing more than one principal type), but I don't think it can unduly close an open union, so we cannot lose generalization where it should be.</p>",
+        "id": 367483410,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1687137917
+    },
+    {
+        "content": "<blockquote>\n<p>unifying an open union with a closed one makes the union closed</p>\n</blockquote>\n<p>I'm not sure if I understand. Are you referring to the unification of <code>[Red, Blue, Teal, White]x</code> (from the expansion) and <code>[Red, Blue, Teal, White]*</code> (from the type annotation)?</p>",
+        "id": 367484304,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1687138405
+    },
+    {
+        "content": "<p>oh, sorry, I misread your example as returning <code>Ok color</code> in the first case. My bad, okay, I see your point.. let me think about this</p>",
+        "id": 367484541,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1687138539
+    },
+    {
+        "content": "<p>Yeah, it's definitely pretty contrived that I used both <code>color</code> and <code>c</code> in that branch</p>",
+        "id": 367485029,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1687138828
+    },
+    {
+        "content": "<p>Though I think maybe this problem could still come up even if the expression that restricts <code>color</code> occurs after the entire <code>when</code> expression</p>",
+        "id": 367485144,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1687138907
+    },
+    {
+        "content": "<p>yeah that's true</p>",
+        "id": 367485688,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1687139223
+    },
+    {
+        "content": "<p>Thanks for bringing all this up. I think I've really internalized the issue now - which is that we have two possible kinds of branches in unification now, points of branches due to refinement control flow, and points of branches do to the order defs/uses of a variable are constrained in. If we fork in one, it might conflict with the other. With that in mind, some observations:</p>\n<ul>\n<li>This issue still means that we always retain principality (\"most general types\") relative to unification. It is true that you can now type a variable to be more general due to control flow, but inference would not infer types any more generally than it would be today. This may seem like a trivial point, but I'll elaborate on it later on.</li>\n<li>If we perform type refinement out-of-band of unification - that, solve e.g. a function definition via unification first, and then do a pass to refine and re-solve applicable variables - I believe that this issue disappears. The reason is that there are no additional constraints that are not already accounted for in the type if we go this route. There are some downsides, two are that (1) it may induce error during unification that refinement would admit, and (2) it is pretty complicated. In pathological cases it might require re-checking a whole function, but I suspect in practice it won't be costly at all. But this feels like a not-very-good option.</li>\n<li>A long time ago I had following idea: suppose we are given condition <code>cond</code> with a branch <code>pat -&gt; ..</code>. We say that <code>typeof(cond) = typeof(pat) = pat_unexpanded = []x</code>, and then create a <code>pat_expanded = [](x + y)</code>, where <code>x</code> is the extension variable used when <code>cond</code> is referenced, and <code>y</code> is used when <code>pat</code> is expanded. This has soundness issues and immediately breaks down, so it's not viable, but maybe there is some derivative design that works.</li>\n<li>The current idiomatic usage of the language means that you cannot eagerly type open tag unions in return positions, and as such, it is possible to return closed tag unions even when it doesn't appear so. For example, given the signature <code>{} -&gt; [A, B]</code>, this is parsed as <code>{} -&gt; [A, B]&lt;x&gt;</code> where <code>x</code> is unbound. The means a definition</li>\n</ul>\n<div class=\"codehilite\"><pre><span></span><code>foo : [A, B] -&gt; [A, B]\nfoo = \\x -&gt; x\n</code></pre></div>\n<p>will indeed be the identity and return <code>[A, B][]</code>, whereas the definition</p>\n<div class=\"codehilite\"><pre><span></span><code>foo : {} -&gt; [A, B]\nfoo = \\{} -&gt; A\n</code></pre></div>\n<p>returns <code>[A, B]*</code>. This was a deliberate decision for developer ergonomics reasons.</p>\n<p>With all that in mind, I think our options here are, if we cannot find another one-pass solving system, are</p>\n<ul>\n<li>Drop the proposal in favor of keeping unrestricted principality</li>\n<li>Figure out a two-pass solving system (strongly opposed, not for perf reasons but for the others listed above)</li>\n<li>Keep the proposal, preserving principality relative to unification (I think this is completely unbroken, but let me know if I'm wrong), and expect that this case never occurs in practice. I am strongly in favor of this option, because (1) it is clear that refinement is the experience many developers prefer, and (2) it is already the case that you cannot explicitly type an open tag union (e.g. <code>[...]*</code>) in a positive position without getting a warning, because the extension is inferred by default.</li>\n</ul>\n<p>Let me know if I'm missing anything here.</p>",
+        "id": 367489934,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1687141915
+    },
+    {
+        "content": "<p>What does principality \"relative to unification\" vs \"relative to control flow\" mean?</p>",
+        "id": 367491076,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1687142639
+    },
+    {
+        "content": "<p>My bad, i should have clarified. By \"relative to unification\" I mean, suppose our system is S. If we infer a function with our system S, do we get the same type that the system would if it only performed unification? (i.e. is the inferred type the same as the principal would be today) For \"relative to control flow\" I mean, is the type inferred by S the actually-principal type, considering the behavior of type refinement?</p>",
+        "id": 367491907,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1687143201
+    },
+    {
+        "content": "<p>Ok, that makes sense. Yeah, I'm pretty sure you're right that we still have principality relative to unification</p>",
+        "id": 367492740,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1687143791
+    },
+    {
+        "content": "<p>I think I agree with your comment above</p>",
+        "id": 367493376,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1687144282
+    },
+    {
+        "content": "<p>I haven't totally thought this through, but what if we did something like this:</p>\n<ul>\n<li>As before, determine the condition type and the type of the unexpanded variable.</li>\n<li>We instantiate the expanded variable to <strong>just be an unbound flex variable</strong></li>\n<li>Solve the RHS</li>\n<li>Make sure the unexpanded variable is a \"subtype\" of the expanded variable:<ul>\n<li>Assuming they're both tag unions, to do this, check that either<ul>\n<li><code>expanded</code> is not closed, or</li>\n<li>all the tags in <code>unexpanded</code> are in <code>expanded</code></li>\n</ul>\n</li>\n<li>If they're not both tag unions, just unify them</li>\n</ul>\n</li>\n</ul>\n<p>I'm not sure whether this would work, especially if there are multiple <code>when</code>s. If it does, my intuition is that it would solve some (but maybe not all) of these problems. Though maybe it would make it harder to generate good error messages</p>",
+        "id": 367495343,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1687145613
+    },
+    {
+        "content": "<p>yeah, I think this could work, but it's not totally clear to me (1) how we localize type errors when they do appear, and (2) if there are cases where in the direct solution we would have inferred a type, but in this model there is a type error (which can happen if expanded is refined, I believe), how to recover the non-erroring type.</p>\n<p>There is also the note that this would not resolve the case in which the condition type is further constrained after the <code>when</code> expression, and to resolve that, we need the two-pass system, and I am afraid that winds up with the downsides previously described.</p>",
+        "id": 367496631,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1687146408
+    },
+    {
+        "content": "<p>Yeah, that all makes sense. Probably better to continue with your original plan then</p>",
+        "id": 367499530,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1687148106
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/316715-contributing/topic/Refinement.20of.20tag.20unions/near/367489934\">said</a>:</p>\n<blockquote>\n<p>Keep the proposal, preserving principality relative to unification (I think this is completely unbroken, but let me know if I'm wrong), and expect that this case never occurs in practice. I am strongly in favor of this option, because (1) it is clear that refinement is the experience many developers prefer, and (2) it is already the case that you cannot explicitly type an open tag union (e.g. <code>[...]*</code>) in a positive position without getting a warning, because the extension is inferred by default.</p>\n</blockquote>\n<p>what if we made that annotation a type mismatch instead of a warning?</p>",
+        "id": 367613009,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1687176367
+    },
+    {
+        "content": "<p>(I'm not saying we should or shouldn't, just wondering what the downsides would be)</p>",
+        "id": 367613083,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1687176379
+    },
+    {
+        "content": "<p>what are the upsides of that? The type annotation may not be wrong (and can catch a bug, sometimes), but in general it is redundant - hence the warning. But if you do <code>foo : [A] -&gt; [A]*; foo = \\x -&gt; x</code>, the type annotation catches a bug in your program.</p>",
+        "id": 367657713,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1687184348
+    },
+    {
+        "content": "<p>hm, fair point</p>",
+        "id": 367674465,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1687187543
+    },
+    {
+        "content": "<p>but if we think that's genuinely valuable, we probably shouldn't make it a warning</p>",
+        "id": 367674524,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1687187558
+    },
+    {
+        "content": "<p>regardless, I agree with the point that it's worth proceeding with Ayaz's proposed plan (regardless of whether we make the annotation a warning, an error, or nothing)</p>",
+        "id": 367749815,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1687208296
+    }
+]

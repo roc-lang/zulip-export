@@ -1,0 +1,144 @@
+<html>
+<head><meta charset="utf-8"><title>Compiler crash from unresolved / unused type variable · bugs · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/index.html">bugs</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html">Compiler crash from unresolved / unused type variable</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="541908425"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/541908425" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yannick <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#541908425">(Sep 28 2025 at 17:49)</a>:</h4>
+<p>Hey, I was just playing around with Abilities and found some crash when I have a unused value that is also still a type variable and not resolved to a concrete type:</p>
+<div class="codehilite"><pre><span></span><code>app [main!] { pf: platform &quot;https://github.com/roc-lang/basic-cli/releases/download/0.20.0/X73hGh05nNTkDHU06FHC0YfFaQB1pimX7gncRcao5mU.tar.br&quot; }
+
+import pf.Stdout
+import pf.Arg exposing [Arg]
+
+ExampleAbility implements
+    unpack : a -&gt; actualValue where a implements ExampleAbility
+
+StringWithAbility := Str implements [ExampleAbility { unpack: readString }]
+readString : StringWithAbility -&gt; Str
+readString = |@StringWithAbility txt| txt
+
+readAbility : anyExampleAbility -&gt; b where anyExampleAbility implements ExampleAbility
+readAbility = |strg| unpack(strg)
+
+main! : List Arg =&gt; Result {} _
+main! = |_args|
+    unpacked = readAbility(@StringWithAbility(&quot;test&quot;))
+    Stdout.line!(&quot;Hello !&quot;)
+</code></pre></div>
+<p>If I hover over <code>unpacked</code> it shows me <code>b</code> as the type. <br>
+The compiler crashes with</p>
+<div class="codehilite"><pre><span></span><code>thread &#39;main&#39; panicked at crates/compiler/mono/src/borrow.rs:361:34:
+internal error: entered unreachable code:
+    No borrow signature for LambdaName { name: `#UserApp.readAbility`, niche: Niche(Captures([])) } layout.
+
+    Tip 1: This can happen when you call a function with fewer arguments than it expects.
+    Like `Arg.list!` instead of `Arg.list! {}`.
+    Tip 2: `roc check yourfile.roc` can sometimes give you a helpful error.
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</code></pre></div>
+<p>As soon as I use the <code>unpacked</code> it is resolved to <code>Str</code> and no crash occurs.</p>
+
+
+
+<a name="541922014"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/541922014" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#541922014">(Sep 28 2025 at 22:14)</a>:</h4>
+<p>Interesting <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="541922117"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/541922117" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#541922117">(Sep 28 2025 at 22:16)</a>:</h4>
+<p>My immediate thoughts:</p>
+<ol>
+<li>Abilities type check in some surprising ways. I would argue that your code shouldn't work at all (b should not be able to converted to Str), but abilities have some surprising flexibility related to late binding and likely some missing type checking</li>
+<li>The borrow signature error is likely due to b being an undefined type and that confusing the compiler unlike the concrete type Str.</li>
+</ol>
+
+
+
+<a name="541922155"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/541922155" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#541922155">(Sep 28 2025 at 22:17)</a>:</h4>
+<p>I think your <code>actualValue</code> needs to be restricted.<br>
+ Either, you need to make it <code>Str</code>, or you need to give it an ability to say what you can validly do with an <code>actualValue</code></p>
+
+
+
+<a name="541922300"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/541922300" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#541922300">(Sep 28 2025 at 22:21)</a>:</h4>
+<p>Think of it like this. If I told you that I am going to give you something, but you have no idea what it would be, what valid actions can you make with what I give you.</p>
+<p>The answer is you can essentially do nothing cause you know nothing about what I am giving you.</p>
+<p>That is the case here with this ability. You are saying that you are return an unknown type variable with no specification. As such, you should not be able to do anything with it. It is actually likely a big that it can become a <code>Str</code> cause there is no guarantee of that.</p>
+<p>The error you should be getting is something like</p>
+<blockquote>
+<p>Type mismatch: Your function requires a <code>Str</code> but you were given a <code>actualValue</code>. <code>actualValue</code> can not be restricted to be a <code>Str</code>.</p>
+</blockquote>
+
+
+
+<a name="541922309"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/541922309" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#541922309">(Sep 28 2025 at 22:21)</a>:</h4>
+<p>Hopefully this makes some sense</p>
+
+
+
+<a name="541922361"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/541922361" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#541922361">(Sep 28 2025 at 22:22)</a>:</h4>
+<p>Anyway, definitely at a minimum, the errors here being bad and some things working are each compiler bugs, but they are for the old rust compiler and likely not worth trying to fix at this point.</p>
+<hr>
+<p>We definitely can help you work around issue like this and build a useful program.</p>
+
+
+
+<a name="541923014"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/541923014" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#541923014">(Sep 28 2025 at 22:38)</a>:</h4>
+<p>Oh, one other point of clarification, because of how binding works for ability type variables. If you type <code>unpacked</code> (or use it in a way that demands a specific type), roc will anchor to that typing. It is kinda like a form of late binding that is special to output types of abilities. This is how <code>Decode</code> is able to work at all. But due to it being a late binding anchor, it has lots of edge cases that can easily be underdefined or fail to type check. (Which is the error case here)</p>
+
+
+
+<a name="541946323"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/541946323" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yannick <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#541946323">(Sep 29 2025 at 05:11)</a>:</h4>
+<p>I see, thank you.<br>
+I would have assumed <code>unpacked</code> can know that it is a <code>str</code> and not a <code>actualValue</code> due to it using the <code>StringWithAbiliy</code>s <code>readString</code>.</p>
+<p>Right now it seems typing it works kind of like an <code>asInstanceOf</code> of a <code>any</code> value. E.g. I can do this and it compiles fine (<code>unpacke</code> is seen as num type):</p>
+<div class="codehilite"><pre><span></span><code>main! = |_args|
+    unpacked = readAbility(@StringWithAbility(&quot;test&quot;))
+    other = Num.to_str(unpacked)
+    Stdout.line!(&quot;Hello ${other}!&quot;)
+</code></pre></div>
+<p>For my usecase, let's say I would want to have an ability "returns the most important value of a record" (of an opaque type).<br>
+<code>mostImportant: record -&gt; a where record implements MostImportantAbility</code> won't work, same as above.<br>
+How would I define this ability? Or does this only make sense in that I also give <code>a</code> an ability that at sometime resolves to a concrete type?</p>
+
+
+
+<a name="542071187"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/542071187" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#542071187">(Sep 29 2025 at 15:24)</a>:</h4>
+<p>Interesting. What is the end goal here?</p>
+<p>Any yeah, that ability will only work if you always type the output when calling it.</p>
+
+
+
+<a name="542076528"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Compiler%20crash%20from%20unresolved%20/%20unused%20type%20variable/near/542076528" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yannick <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Compiler.20crash.20from.20unresolved.20.2F.20unused.20type.20variable.html#542076528">(Sep 29 2025 at 15:46)</a>:</h4>
+<p>I was looking into implementing CRDTs in roc, seemed like an interesting enough use-case to lean more about the language. <br>
+My idea was to define a <code>Mergeable/CRDT</code> ability. Then this could be implemented for a counter or a record and so on.<br>
+Initially I was looking into an API like this</p>
+<div class="codehilite"><pre><span></span><code>Mergeable implements
+    read : a -&gt; actualValue where a implements Mergeable
+    mergeWithRemote : a, remoteUpdate -&gt; a where a implements Mergeable
+    update : a, localUpdate -&gt; (a, remoteUpdate) where a implements Mergeable
+</code></pre></div>
+<p>But now I am not sure anymore if that approach makes sense <span aria-label="slight smile" class="emoji emoji-1f642" role="img" title="slight smile">:slight_smile:</span></p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>

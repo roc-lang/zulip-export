@@ -1,0 +1,619 @@
+<html>
+<head><meta charset="utf-8"><title>fuzz crash - handling malformed tokens and parsing · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html">fuzz crash - handling malformed tokens and parsing</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="526186133"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526186133" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526186133">(Jun 28 2025 at 07:36)</a>:</h4>
+<h2>Problem Description: Formatter Creates Different Parse Errors for Malformed Input</h2>
+<h3>Summary</h3>
+<p>The Roc formatter is failing a fuzz test because it transforms malformed input with tokenization errors into output with different parse errors, violating the expectation that formatting should be stable and preserve error characteristics.</p>
+<h3>Specific Case</h3>
+<p><strong>Input:</strong> <code>module[]0}0.</code><br>
+<strong>Formatted Output:</strong> <code>module []00.</code><br>
+<strong>Issue:</strong> Different error types between input and output</p>
+<h3>Root Cause Analysis</h3>
+<h4>1. Tokenization Behavior</h4>
+<p>Original input <code>module[]0}0.</code> tokenizes as:</p>
+<ul>
+<li><code>KwModule(1:1-1:7)</code> → <code>module</code></li>
+<li><code>OpenSquare(1:7-1:8)</code> → <code>[</code></li>
+<li><code>CloseSquare(1:8-1:9)</code> → <code>]</code></li>
+<li><code>Int(1:9-1:10)</code> → <code>0</code></li>
+<li><code>Float(1:11-1:13)</code> → <code>0.</code> (the <code>}</code> at position 10 is processed as "OverClosedBrace" error and discarded)</li>
+<li><code>EndOfFile(1:13-1:13)</code></li>
+</ul>
+<p>The <code>}</code> character creates a tokenization diagnostic but doesn't appear in the token stream.</p>
+<h4>2. Parsing Behavior</h4>
+<p>The parser sees the token sequence <code>[Int, Float]</code> and creates two separate valid expression nodes:</p>
+<ul>
+<li><code>(e-int @1-9-1-10 (raw "0"))</code></li>
+<li><code>(e-frac @1-11-1-13 (raw "0."))</code></li>
+</ul>
+<p><strong>Key Issue:</strong> The tokenization error (<code>}</code>) doesn't prevent successful parsing of two separate expressions.</p>
+<h4>3. Formatting Behavior</h4>
+<p>The formatter processes each expression independently:</p>
+<ul>
+<li>Integer <code>0</code> → outputs <code>0</code></li>
+<li>Float <code>0.</code> → outputs <code>0.</code></li>
+<li>Combined: <code>00.</code> (no separator because they're parsed as separate statements)</li>
+</ul>
+<h4>4. Re-parsing the Formatted Output</h4>
+<p>When <code>module []00.</code> is parsed:</p>
+<ul>
+<li><code>00</code> tokenizes as <code>Int</code> (with "LeadingZero" warning)</li>
+<li><code>.</code> tokenizes as <code>Dot</code></li>
+<li>Parser creates an integer expression for <code>00</code> but fails to handle the unexpected <code>.</code> token</li>
+<li>Results in <code>(e-malformed @1-12-1-13 (reason "expr_unexpected_token"))</code></li>
+</ul>
+<h3>Error Type Transformation</h3>
+<ul>
+<li><strong>Original:</strong> Tokenization error (<code>OverClosedBrace</code>) + successful parsing (0 parse diagnostics)</li>
+<li><strong>Formatted:</strong> Tokenization warning (<code>LeadingZero</code>) + parse error (<code>expr_unexpected_token</code>)</li>
+</ul>
+<p>The fuzzer expects the formatted output to have the same number of parse diagnostics as the original (0), but gets 1 instead.</p>
+<h3>Technical Details</h3>
+<h4>Fuzzer Test Logic</h4>
+<p>The <code>moduleFmtsStable</code> function in <code>src/fmt.zig</code>:</p>
+<ol>
+<li>Formats the input once</li>
+<li>Attempts to format it again</li>
+<li>The second attempt fails because <code>parseAndFmt</code> expects no parse diagnostics:<br>
+<code>zig
+   std.testing.expectEqualSlices(AST.Diagnostic, &amp;[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {
+       return error.ParseFailed;
+   };
+   </code></li>
+</ol>
+<h4>Information Loss</h4>
+<p>The core issue is that <strong>tokenization errors cause information loss</strong> that makes it impossible for the formatter to recreate something faithful to the original. The <code>}</code> character is completely lost because:</p>
+<ol>
+<li>It's processed as an error during tokenization</li>
+<li>No AST node represents it</li>
+<li>The formatter has no way to know it existed</li>
+</ol>
+<h3>Proposed Solution Direction</h3>
+<p>The fundamental issue is that <strong>malformed syntax should be better represented in the AST</strong> so the formatter can recreate something closer to the original. Specifically:</p>
+<h4>Possible Solution: Token Error Preservation</h4>
+<p>Modify the tokenization/parsing pipeline to preserve error tokens in the AST so they can be reconstructed during formatting.</p>
+<h3>Reproduction</h3>
+<div class="codehilite" data-code-language="Bash"><pre><span></span><code>$<span class="w"> </span>zig<span class="w"> </span>build<span class="w"> </span>repro-parse<span class="w"> </span>--<span class="w"> </span>-b<span class="w"> </span>bW9kdWxlW10wfTAu<span class="w"> </span>-v
+</code></pre></div>
+
+
+
+<a name="526186173"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526186173" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526186173">(Jun 28 2025 at 07:37)</a>:</h4>
+<p><span class="user-mention" data-user-id="453336">@Joshua Warner</span> <span class="user-mention" data-user-id="781658">@Anthony Bullard</span> -- I'm not sure the best way forward on this one. I'm not keen to make a big mess of the tokenizer. I'm hoping you have some advice for me.</p>
+
+
+
+<a name="526186903"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526186903" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526186903">(Jun 28 2025 at 07:52)</a>:</h4>
+<p>Of note, if something is truly broken, the correct solution may be to bail and just verbatim copy the original source.</p>
+
+
+
+<a name="526186932"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526186932" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526186932">(Jun 28 2025 at 07:53)</a>:</h4>
+<p>Of course nicest if we can do that for the minimal chunk and then format everything else</p>
+
+
+
+<a name="526197602"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526197602" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526197602">(Jun 28 2025 at 11:26)</a>:</h4>
+<p>I've never seen a language where the formatter does ANYTHING when there is a parse error</p>
+
+
+
+<a name="526197659"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526197659" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526197659">(Jun 28 2025 at 11:27)</a>:</h4>
+<p>If there is a parse error the formatter should return an error and bail</p>
+
+
+
+<a name="526197728"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526197728" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526197728">(Jun 28 2025 at 11:28)</a>:</h4>
+<p>I understand "Never Block, Always Inform", but I think at a <em>minimum</em> it has to have valid parse tree for the compiler to work with</p>
+
+
+
+<a name="526197911"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526197911" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526197911">(Jun 28 2025 at 11:31)</a>:</h4>
+<p>I would expect treesitter-like parsing. In some cases it's possible to format what is known to be correct and leave unknowns as is</p>
+
+
+
+<a name="526198549"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526198549" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526198549">(Jun 28 2025 at 11:43)</a>:</h4>
+<p>treesitter can do that because of it being a concrete syntax tree, but we are expecting to be able to do something with the output - which is unlikely to be meaningful with parse errors.</p>
+
+
+
+<a name="526198584"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526198584" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526198584">(Jun 28 2025 at 11:43)</a>:</h4>
+<p>We could try to format top level constructs until the first one that contains a malformed, and then just print the original source from there</p>
+
+
+
+<a name="526198608"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526198608" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526198608">(Jun 28 2025 at 11:44)</a>:</h4>
+<p>But once you have a parse error, it's not always possible to output something reasonable from there on out</p>
+
+
+
+<a name="526198656"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526198656" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526198656">(Jun 28 2025 at 11:45)</a>:</h4>
+<p>But I personally like a simple bail out and error (for a specific module) when there is a parse error, along with a good diagnostic so that I can fix it quickly</p>
+
+
+
+<a name="526199366"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199366" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199366">(Jun 28 2025 at 11:59)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="781658">Anthony Bullard</span> <a href="#narrow/channel/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing/near/526197602">said</a>:</p>
+<blockquote>
+<p>I've never seen a language where the formatter does ANYTHING when there is a parse error</p>
+</blockquote>
+<p>I know, and I hate it <span aria-label="laughing" class="emoji emoji-1f606" role="img" title="laughing">:laughing:</span></p>
+
+
+
+<a name="526199410"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199410" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199410">(Jun 28 2025 at 12:00)</a>:</h4>
+<p>it leads to the common experience of "I'm trying to work on this code and everything looks terrible until I stop what I'm doing and hunt down the missing delimiter, then suddenly everything I'd been working on snaps jarringly into place"</p>
+
+
+
+<a name="526199413"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199413" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199413">(Jun 28 2025 at 12:00)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="781658">Anthony Bullard</span> <a href="#narrow/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing/near/526198656">said</a>:</p>
+<blockquote>
+<p>But I personally like a simple bail out and error (for a specific module) when there is a parse error, along with a good diagnostic so that I can fix it quickly</p>
+</blockquote>
+<p>Generally agree, but an often scenario for me is writing a long function not paying attention at formatting. Then format and save. If there was an error during parsing, I'd like to have valid formatting at least up to the first error. This way it's easier for me to read the messy nonsense I wrote.</p>
+
+
+
+<a name="526199469"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199469" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199469">(Jun 28 2025 at 12:01)</a>:</h4>
+<p>I think the better approach is what Zig does, which is where there are certain points that the parser can say "okay we've gotten into an invalid state, but we'll stop being in an invalid state once we get to a certain marker that we can recover from"</p>
+
+
+
+<a name="526199475"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199475" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199475">(Jun 28 2025 at 12:01)</a>:</h4>
+<p>a very simple example of this is an unclosed single-line string literal</p>
+
+
+
+<a name="526199491"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199491" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199491">(Jun 28 2025 at 12:01)</a>:</h4>
+<p>such as:</p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="n">foo</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"missing close quote</span>
+<span class="n">bar</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">"all good"</span>
+</code></pre></div>
+
+
+
+<a name="526199548"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199548" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199548">(Jun 28 2025 at 12:02)</a>:</h4>
+<p>although we're missing the closing quote, we know that it's a single-line string literal, so as soon as we encounter a newline, the parser can end the literal and report a problem</p>
+
+
+
+<a name="526199552"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199552" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199552">(Jun 28 2025 at 12:02)</a>:</h4>
+<p>and then continue as normal</p>
+
+
+
+<a name="526199607"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199607" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199607">(Jun 28 2025 at 12:03)</a>:</h4>
+<p>Yeah, exactly! There are cases with no ambiguity!</p>
+
+
+
+<a name="526199623"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199623" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199623">(Jun 28 2025 at 12:03)</a>:</h4>
+<p>we can adopt this philosophy in other situations too besides string literals</p>
+
+
+
+<a name="526199725"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199725" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199725">(Jun 28 2025 at 12:05)</a>:</h4>
+<p>I'm down with parse error recovery for unambiguous cases like that</p>
+
+
+
+<a name="526199766"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199766" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199766">(Jun 28 2025 at 12:06)</a>:</h4>
+<p>a really useful one is top-level declarations being a boundary</p>
+<p>for example, suppose we hit an unexpected assignment before a literal was closed, e.g. <code>[5, 6, x =</code></p>
+<p>if we look at the <code>x =</code> and discover that there's a newline right before the <code>x =</code> in the source code, then we can helpfully assume it's intended to be a new top-level declaration.</p>
+<p>at that point we can end the current top-level decl we've been parsing (and record it as an error with an unclosed delimiter) and continue parsing the rest of the module instead of giving up</p>
+
+
+
+<a name="526199774"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199774" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199774">(Jun 28 2025 at 12:06)</a>:</h4>
+<p>But for cases like the motivating source at the top of this thread:</p>
+<div class="codehilite"><pre><span></span><code>module[]0}0
+</code></pre></div>
+<p>There is nothing useful for us to do here</p>
+
+
+
+<a name="526199784"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199784" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199784">(Jun 28 2025 at 12:06)</a>:</h4>
+<p>agreed</p>
+
+
+
+<a name="526199830"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199830" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199830">(Jun 28 2025 at 12:07)</a>:</h4>
+<p>But if I forget a comma in a list or record literal, I agree we can probably help there</p>
+
+
+
+<a name="526199857"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199857" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199857">(Jun 28 2025 at 12:08)</a>:</h4>
+<p>But that may be a fair amount of complexity in the formatter - and if that's worth it that's ok!  But we should go into that with clear eyes</p>
+
+
+
+<a name="526199875"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199875" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199875">(Jun 28 2025 at 12:08)</a>:</h4>
+<p>yeah I definitely think it makes the formatter more  complicated, and I also definitely think it's worth it <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="526199885"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199885" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199885">(Jun 28 2025 at 12:08)</a>:</h4>
+<p>to me the analogy is high-quality error messages - more compiler complexity for a nicer end user experience when a mistake has been made</p>
+
+
+
+<a name="526199925"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199925" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199925">(Jun 28 2025 at 12:09)</a>:</h4>
+<p>So we are really saying "in the formatter, if there is an unambiguous case of a syntax error we will fix it for you"</p>
+
+
+
+<a name="526199964"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526199964" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526199964">(Jun 28 2025 at 12:10)</a>:</h4>
+<p>I'm trying to figure out what we could and could not do</p>
+
+
+
+<a name="526200007"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200007" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200007">(Jun 28 2025 at 12:11)</a>:</h4>
+<p>I think it makes sense to support these things on a case by case basis</p>
+
+
+
+<a name="526200026"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200026" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200026">(Jun 28 2025 at 12:11)</a>:</h4>
+<p>Things we definitely COULD do:</p>
+<ol>
+<li>Terminate unclosed string literals</li>
+<li>Terminate unclosed lists/tuples/records that are single line and not deeply nested</li>
+<li>Insert commas into lists/tuples/records/calls</li>
+</ol>
+
+
+
+<a name="526200028"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200028" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200028">(Jun 28 2025 at 12:11)</a>:</h4>
+<p>for example, start with the unclosed string literal one</p>
+
+
+
+<a name="526200058"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200058" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200058">(Jun 28 2025 at 12:12)</a>:</h4>
+<p>I think the top-level decl one is a good one because it can really isolate error scenarios</p>
+
+
+
+<a name="526200067"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200067" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200067">(Jun 28 2025 at 12:12)</a>:</h4>
+<p>also removing redundant commas, e.g. <code>[1, 2,, 3]</code></p>
+
+
+
+<a name="526200069"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200069" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200069">(Jun 28 2025 at 12:12)</a>:</h4>
+<p>Yeah, that's what I was suggesting above</p>
+
+
+
+<a name="526200104"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200104" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200104">(Jun 28 2025 at 12:13)</a>:</h4>
+<p>But the chances of us doing something very wrong, and very irritating goes up  FAST if we try to format after an unrecoverable-from parse error</p>
+
+
+
+<a name="526200153"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200153" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200153">(Jun 28 2025 at 12:15)</a>:</h4>
+<p>Even across that "boundary"</p>
+
+
+
+<a name="526200455"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200455" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200455">(Jun 28 2025 at 12:19)</a>:</h4>
+<p>I think if we pick the right heuristics we'll be ok</p>
+
+
+
+<a name="526200536"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200536" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200536">(Jun 28 2025 at 12:19)</a>:</h4>
+<p>I think heuristics are a tough thing when you are changing someone's source code</p>
+
+
+
+<a name="526200608"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200608" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200608">(Jun 28 2025 at 12:20)</a>:</h4>
+<p>If that heuristic is wrong 2% of the time, there is going to be some very frustrated users</p>
+
+
+
+<a name="526200647"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526200647" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526200647">(Jun 28 2025 at 12:21)</a>:</h4>
+<p>But maybe I'm misunderestimating us <span aria-label="laughing" class="emoji emoji-1f606" role="img" title="laughing">:laughing:</span></p>
+
+
+
+<a name="526201921"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526201921" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526201921">(Jun 28 2025 at 12:47)</a>:</h4>
+<p>Yeah, my complexity spidey sense is tingling here :p</p>
+
+
+
+<a name="526203533"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526203533" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526203533">(Jun 28 2025 at 13:21)</a>:</h4>
+<p>what I mean is that we need to be thoughtful about which things we do and don't choose to recover from</p>
+
+
+
+<a name="526203647"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526203647" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526203647">(Jun 28 2025 at 13:23)</a>:</h4>
+<p>like the unclosed string literal seems super uncontroversial to me</p>
+
+
+
+<a name="526203675"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526203675" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526203675">(Jun 28 2025 at 13:23)</a>:</h4>
+<p>the top level decl one is more likely to have a false positive in theory, but seems so unlikely to me that I'd rather have it than not</p>
+
+
+
+<a name="526203715"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526203715" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526203715">(Jun 28 2025 at 13:24)</a>:</h4>
+<p>in contrast, trying to auto close delimiters inside a given expression sounds much riskier</p>
+
+
+
+<a name="526203728"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526203728" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526203728">(Jun 28 2025 at 13:24)</a>:</h4>
+<p>and by default I'd want to not do that</p>
+
+
+
+<a name="526210211"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526210211" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526210211">(Jun 28 2025 at 15:22)</a>:</h4>
+<p>I think assuming we can find the right closing, it makes sense to format other things. For example, a broken header probably should not affect formatting the main function.</p>
+
+
+
+<a name="526210222"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526210222" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526210222">(Jun 28 2025 at 15:22)</a>:</h4>
+<p>And one function should not affect another</p>
+
+
+
+<a name="526212267"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526212267" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526212267">(Jun 28 2025 at 15:58)</a>:</h4>
+<p>I think both of those are handled by the top-level decl thing</p>
+
+
+
+<a name="526212375"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526212375" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526212375">(Jun 28 2025 at 15:59)</a>:</h4>
+<p>For this specific example, I'd actually suggest three different fixes (defense in depth). This has uncovered multiple separate problems.</p>
+<ol>
+<li>The over-closed brace should be reflected in the token stream and we should let the parser "forward" that error to the parse tree so we can see where in the tree it ends up</li>
+<li>We should make sure that idents/keywords/numbers can never accidentally be merged in the formatter by keeping track of the "kind" of token we last spit into the output, and if we just spit out a ident/keyword/number and we're about to spit another one, we should force a space.</li>
+<li>If the formatter sees a node with a parse error under it, we should _default_ to working out what the range of tokens that corresponds to, and copying that range from the source verbatim. Only if we feel confident in isolating the error and formatting the rest (or fixing the error all together), should we try to format.</li>
+</ol>
+
+
+
+<a name="526217465"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526217465" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526217465">(Jun 28 2025 at 17:26)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="453336">Joshua Warner</span> <a href="#narrow/channel/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing/near/526212375">said</a>:</p>
+<blockquote>
+<p>For this specific example, I'd actually suggest three different fixes (defense in depth). This has uncovered multiple separate problems.</p>
+<ol>
+<li>The over-closed brace should be reflected in the token stream and we should let the parser "forward" that error to the parse tree so we can see where in the tree it ends up</li>
+<li>We should make sure that idents/keywords/numbers can never accidentally be merged in the formatter by keeping track of the "kind" of token we last spit into the output, and if we just spit out a ident/keyword/number and we're about to spit another one, we should force a space.</li>
+<li>If the formatter sees a node with a parse error under it, we should _default_ to working out what the range of tokens that corresponds to, and copying that range from the source verbatim. Only if we feel confident in isolating the error and formatting the rest (or fixing the error all together), should we try to format.</li>
+</ol>
+</blockquote>
+<p>I don't think I understand 1 quite fully.  2 is a great idea, and I think 3 was the consensus we reached.</p>
+
+
+
+<a name="526217610"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526217610" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526217610">(Jun 28 2025 at 17:28)</a>:</h4>
+<p><span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span> I think situations like:</p>
+<div class="codehilite"><pre><span></span><code> module [
+    foo,
+
+bar = 42
+</code></pre></div>
+<p>Are hard to work out.  If we comsume foo and bar and then bail when we see the <code>=</code>, we can't parse the next decl correctly</p>
+
+
+
+<a name="526217669"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526217669" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526217669">(Jun 28 2025 at 17:29)</a>:</h4>
+<p>And it's pretty contentious to work out the intent there through heuristics even though in this example the intent is pretty clear</p>
+
+
+
+<a name="526218056"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218056" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218056">(Jun 28 2025 at 17:35)</a>:</h4>
+<div class="codehilite"><pre><span></span><code> module [
+    foo,
+
+bar = 42
+</code></pre></div>
+<p>That module header has no clear end. We could guess one, but I expect that to break formatting...at least until we hit something that clearly can't be in the header, but full bail is fine.</p>
+<p>Though if an equal sign is not valid in a header, we could start formatting everything after the bar line</p>
+
+
+
+<a name="526218116"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218116" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218116">(Jun 28 2025 at 17:36)</a>:</h4>
+<p>I think we would do that.  we would copy the two spans for the malformed header, and malformed statement and print them verbatim, and then continue down the statements</p>
+
+
+
+<a name="526218128"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218128" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218128">(Jun 28 2025 at 17:36)</a>:</h4>
+<p>On the other hand, if foo was some garbage instead, but the module header has an ending <code>]</code>, we could skip formatting the module header and format everything after</p>
+
+
+
+<a name="526218158"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218158" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218158">(Jun 28 2025 at 17:37)</a>:</h4>
+<p>what's wrong with the heuristic of "we hit a parsing error and noticed that the decl has a \n in front, so we assume it's supposed to be a new top-level decl and proceed accordingly?"</p>
+
+
+
+<a name="526218162"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218162" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218162">(Jun 28 2025 at 17:37)</a>:</h4>
+<p>Yeah, a case like:</p>
+<div class="codehilite"><pre><span></span><code> module [
+    @#&amp;,
+]
+
+bar = 42
+</code></pre></div>
+<p>Is easy</p>
+
+
+
+<a name="526218187"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218187" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218187">(Jun 28 2025 at 17:37)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="781658">Anthony Bullard</span> <a href="#narrow/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing/near/526218116">said</a>:</p>
+<blockquote>
+<p>I think we would do that.  we would copy the two spans for the malformed header, and malformed statement and print them verbatim, and then continue down the statements</p>
+</blockquote>
+<p>Yeah, sounds great....wasn't sure what level we handle currently. The original failing case like shared seemed to suggest that we were still trying to format what is invalid</p>
+
+
+
+<a name="526218188"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218188" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218188">(Jun 28 2025 at 17:37)</a>:</h4>
+<p>Well the formatter doesn't really know about newlines</p>
+
+
+
+<a name="526218201"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218201" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218201">(Jun 28 2025 at 17:38)</a>:</h4>
+<p>I mean in the parser</p>
+
+
+
+<a name="526218235"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218235" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218235">(Jun 28 2025 at 17:38)</a>:</h4>
+<p>it can look at the source byte right before the pattern's region begins</p>
+
+
+
+<a name="526218257"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218257" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218257">(Jun 28 2025 at 17:38)</a>:</h4>
+<p>so this is about parser recoverability more than formatter</p>
+
+
+
+<a name="526218310"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218310" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218310">(Jun 28 2025 at 17:39)</a>:</h4>
+<p>Hmmm....that sounds more complicated than formatter error recovery, and requires state to be passed forward through the parser, no?</p>
+
+
+
+<a name="526218337"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218337" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218337">(Jun 28 2025 at 17:40)</a>:</h4>
+<p>So a lookbehind?</p>
+
+
+
+<a name="526218487"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218487" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218487">(Jun 28 2025 at 17:42)</a>:</h4>
+<p>the benefit is that we can keep checking the rest of the file and give you errors as normal</p>
+
+
+
+<a name="526218508"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218508" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218508">(Jun 28 2025 at 17:42)</a>:</h4>
+<p>if I had to pick between either parser or formatter error tolerance, I'd pick parser for that reason <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="526218626"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218626" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218626">(Jun 28 2025 at 17:44)</a>:</h4>
+<p>I don't think special state handling would be needed; if we've found an <code>=</code>, the parser ends up knowing the lhs and the rhs nodes of that <code>=</code></p>
+
+
+
+<a name="526218669"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218669" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218669">(Jun 28 2025 at 17:45)</a>:</h4>
+<p>so from there we look at the lhs node's region, and that tells us all we need to know where to look for the newline</p>
+
+
+
+<a name="526218709"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526218709" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526218709">(Jun 28 2025 at 17:45)</a>:</h4>
+<p>and the parse error would occur right when we encountered the unexpected <code>=</code></p>
+
+
+
+<a name="526219443"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526219443" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526219443">(Jun 28 2025 at 17:59)</a>:</h4>
+<p>Btw, is there a plan on having an incremental parser?</p>
+
+
+
+<a name="526219612"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526219612" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526219612">(Jun 28 2025 at 18:01)</a>:</h4>
+<p>depends on what you mean by that <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="526219774"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526219774" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kiryl Dziamura <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526219774">(Jun 28 2025 at 18:03)</a>:</h4>
+<p>I suppoae a lot of heuristics would come from deltas. Like, if we know the prev state is stable, and changes introduced a problem - we can narrow the invalid part of the tree</p>
+
+
+
+<a name="526219947"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526219947" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526219947">(Jun 28 2025 at 18:06)</a>:</h4>
+<p>I think the parser should only have full source bytes as its input</p>
+
+
+
+<a name="526219958"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/fuzz%20crash%20-%20handling%20malformed%20tokens%20and%20parsing/near/526219958" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing.html#526219958">(Jun 28 2025 at 18:06)</a>:</h4>
+<p>I don't think we should have a version of the parser that takes "what we parsed to last time" as an input</p>
+
+
+
+<hr><p>Last updated: Mar 01 2026 at 12:20 UTC</p>
+</html>
