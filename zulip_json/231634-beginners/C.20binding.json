@@ -1,0 +1,128 @@
+[
+    {
+        "content": "<p>Hey, I'd like to write a binding for a C library, what would be the steps for that ?</p>",
+        "id": 406928502,
+        "sender_full_name": "Slazaa",
+        "timestamp": 1702123773
+    },
+    {
+        "content": "<p>Hi <span class=\"user-mention\" data-user-id=\"672970\">@Slazaa</span>,<br>\nWe don't yet support automatic generation of glue code for c platforms. If you want,  you can call c functions from a rust platform. We do support automatic generation of rust glue code.</p>",
+        "id": 407068499,
+        "sender_full_name": "Anton",
+        "timestamp": 1702214578
+    },
+    {
+        "content": "<p>How does glue work ? How hard would it be not to use it ?</p>",
+        "id": 407068555,
+        "sender_full_name": "Slazaa",
+        "timestamp": 1702214635
+    },
+    {
+        "content": "<p>Glue allows the platform and roc to talk to each other.<br>\n<a href=\"https://github.com/roc-lang/basic-cli/blob/main/src/src/glue.rs\">example of glue for basic-cli</a></p>\n<blockquote>\n<p>How hard would it be not to use it ?</p>\n</blockquote>\n<p>I have not done this manually myself but from what I've heard, it's very tedious and error prone to do it manually. </p>\n<p>Another possibility is to do all communication between the Roc code and the C platform using a String, like <a href=\"https://github.com/roc-lang/roc/blob/main/examples/platform-switching/c-platform/host.c\">here</a>. Also tedious, but simpler overall.</p>",
+        "id": 407069575,
+        "sender_full_name": "Anton",
+        "timestamp": 1702215439
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> did manage to make the String based communication work quite well with a zig platform but I can't find the repo.</p>",
+        "id": 407069832,
+        "sender_full_name": "Anton",
+        "timestamp": 1702215650
+    },
+    {
+        "content": "<p>This is my attempt at implementing a minimal host.c. I have no idea if any of it is correct:</p>\n<div class=\"codehilite\"><pre><span></span><code>#include &lt;stdlib.h&gt;\n#include &lt;string.h&gt;\n#include &lt;stdio.h&gt;\n\nvoid *roc_alloc(size_t size, unsigned int alignment)\n{\n    return malloc(size);\n}\n\nvoid *roc_realloc(void *ptr, size_t new_size, size_t old_size, unsigned int alignment)\n{\n    return realloc(ptr, new_size);\n}\n\nvoid roc_dealloc(void *ptr, unsigned int alignment)\n{\n    free(ptr);\n}\n\n__attribute__((noreturn)) void roc_panic(void *ptr, unsigned int tag_id)\n{\n}\n\nvoid *roc_memset(void *str, int c, size_t n)\n{\n    return memset(str, c, n);\n}\n\nstruct RocStr { char *bytes; size_t len; size_t capacity; }; // BROKEN!! Missing small-str-optim.!\n\nvoid   roc__mainForHost_1_exposed(char *output); // roc_main\nsize_t roc__mainForHost_1_exposed_size(); // roc_main_size\nvoid   roc__mainForHost_0_caller(const char *flags, const char *closure_data, char *output); // call_Fx\nsize_t roc__mainForHost_0_size(); // size_Fx\nsize_t roc__mainForHost_0_result_size(); // size_Fx_result\n\nint main()\n{\n    size_t size = roc__mainForHost_1_exposed_size();\n    char *returnedFromMain_data_ptr = roc_alloc(size, 1);\n    // calling &quot;main&quot; function in main.roc:\n    roc__mainForHost_1_exposed(returnedFromMain_data_ptr);\n\n    const unsigned char flags = 0;\n    size = roc__mainForHost_0_result_size();\n    char *buffer = roc_alloc(size, 1);\n    // &quot;returnedFromMain_data_ptr&quot; contains a closure, we call it here:\n    roc__mainForHost_0_caller(&amp;flags, returnedFromMain_data_ptr, buffer);\n\n    // Done everything:\n    roc_dealloc(buffer, 1);\n    roc_dealloc(returnedFromMain_data_ptr, 1);\n}\n</code></pre></div>\n<p>I <em>assume</em> that c glue code would look simiilar..</p>",
+        "id": 407075680,
+        "sender_full_name": "Shaiden Spreitzer",
+        "timestamp": 1702219924
+    },
+    {
+        "content": "<p>At first glance that looks reasonable except <code>roc_panic</code> should print a message and call <code>exit</code>.</p>",
+        "id": 407076210,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1702220342
+    },
+    {
+        "content": "<p>Its argument is a <code>RocStr*</code> I think</p>",
+        "id": 407076268,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1702220399
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"431893\">Brian Carroll</span> <a href=\"#narrow/stream/231634-beginners/topic/C.20binding/near/407076210\">said</a>:</p>\n<blockquote>\n<p>At first glance that looks reasonable except <code>roc_panic</code> should print a message and call <code>exit</code>.</p>\n</blockquote>\n<p>I left out the details but my confidence in posting that betrays my confusion:<br>\nThis example:<br>\n<code>const program = roc__mainForHost_1_exposed();</code><br>\n<a href=\"https://github.com/roc-lang/roc/blob/13703eea7da82691a7bc2030f9c069685f6433c8/examples/cli/tui-platform/host.zig#L176\">https://github.com/roc-lang/roc/blob/13703eea7da82691a7bc2030f9c069685f6433c8/examples/cli/tui-platform/host.zig#L176</a><br>\ncalls roc__mainForHost_1_exposed() and then simply THROWS AWAY (!) the result:<br>\n<code>    _ = program;</code><br>\n<a href=\"https://github.com/roc-lang/roc/blob/13703eea7da82691a7bc2030f9c069685f6433c8/examples/cli/tui-platform/host.zig#L194\">https://github.com/roc-lang/roc/blob/13703eea7da82691a7bc2030f9c069685f6433c8/examples/cli/tui-platform/host.zig#L194</a></p>\n<p>I have no idea why! Is it to init the main in main.roc? Why is the result (program) not being used? Wish there was better (or any!) documentation on how to interface with roc!</p>",
+        "id": 407076922,
+        "sender_full_name": "Shaiden Spreitzer",
+        "timestamp": 1702220820
+    },
+    {
+        "content": "<p>Roc is built by volunteers working for free in their spare time. Documentation takes time to write and we are in the process of totally changing how this works.</p>",
+        "id": 407077151,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1702221001
+    },
+    {
+        "content": "<p>I'm not sure why that result is thrown away.</p>",
+        "id": 407077228,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1702221037
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> might know</p>",
+        "id": 407077355,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1702221139
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"431893\">Brian Carroll</span> <a href=\"#narrow/stream/231634-beginners/topic/C.20binding/near/407077151\">said</a>:</p>\n<blockquote>\n<p>Roc is built by volunteers working for free in their spare time. Documentation takes time to write and we are in the process of totally changing how this works.</p>\n</blockquote>\n<p>Yeah I mean just a comment or two would be helpful here! <br>\nOf course I understand this is a volunteer effort. Hope I can learn enough and find the time to contribute in whatever little way I can!!</p>",
+        "id": 407077542,
+        "sender_full_name": "Shaiden Spreitzer",
+        "timestamp": 1702221304
+    },
+    {
+        "content": "<p>ah, we're doing something slightly cheaty here. The zig code assumes that the functions returned by roc's main function are top-level functions, in other words they don't capture anything from their surrounding environment</p>",
+        "id": 407077814,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702221546
+    },
+    {
+        "content": "<p>that is a valid assumption for the applications we write, but in general not entirely correct. (we want to actively enforce this restriction in the future)</p>",
+        "id": 407077847,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702221584
+    },
+    {
+        "content": "<p>so, normally, the result of main would be a struct containing 3 functions, which in practice would be a struct containing for each function the captured values. Because there are none, this is in effect a zero-sized struct: there is no information in it</p>",
+        "id": 407077934,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702221634
+    },
+    {
+        "content": "<p>so we can just ignore it</p>",
+        "id": 407077958,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702221652
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281543\">Folkert de Vries</span> <a href=\"#narrow/stream/231634-beginners/topic/C.20binding/near/407077814\">said</a>:</p>\n<blockquote>\n<p>ah, we're doing something slightly cheaty here. The zig code assumes that the functions returned by roc's main function are top-level functions, in other words they don't capture anything from their surrounding environment</p>\n</blockquote>\n<p>Haha! Does this not contradict the very idea behind bot Roc &amp; Zig? Such as Freedom from Side-effects, Immutability, and No Hidden Control-flow??</p>\n<p>Aside from that, is it possible to split the mainFromHost into three? =&gt; initFromHost, updateFromHost, viewFromHost?? Or do they HAVE to be in a record? Or is this an open issue?</p>",
+        "id": 407078563,
+        "sender_full_name": "Shaiden Spreitzer",
+        "timestamp": 1702222090
+    },
+    {
+        "content": "<p>It's an open issue <a href=\"https://github.com/roc-lang/roc/issues/6115\">https://github.com/roc-lang/roc/issues/6115</a></p>",
+        "id": 407078905,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1702222374
+    },
+    {
+        "content": "<p><a href=\"https://github.com/lukewilliamboswell/roc-graphics-mach/blob/1733ab62562c4bd7b868d9dc23e20a450ce36a66/platform/main.roc#L64\">https://github.com/lukewilliamboswell/roc-graphics-mach/blob/1733ab62562c4bd7b868d9dc23e20a450ce36a66/platform/main.roc#L64</a></p>",
+        "id": 407099522,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1702237721
+    },
+    {
+        "content": "<p>This is how I implemented Model View Update just passing a List U8 between Roc and Zig. It worked ok for that experiment</p>",
+        "id": 407099561,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1702237776
+    }
+]

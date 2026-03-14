@@ -1,0 +1,104 @@
+[
+    {
+        "content": "<p>turns out setjmp/longjmp is broken on windows. I've added some info to an existing issue <a href=\"https://github.com/llvm/llvm-project/issues/72908#issuecomment-1880119269\">https://github.com/llvm/llvm-project/issues/72908#issuecomment-1880119269</a> but I'd say it's unlikely to be resolved given the amount of activity on that issue ...</p>\n<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> how are your LLVM skills at this point? could we figure this out ourselves?</p>",
+        "id": 411617219,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704648575
+    },
+    {
+        "content": "<p>and cc <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> who helped at least find this bug on our side. but I don't think we can fix it on our side</p>",
+        "id": 411617303,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704648634
+    },
+    {
+        "content": "<p>except by using our own inline assembly of course</p>",
+        "id": 411617312,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704648642
+    },
+    {
+        "content": "<p>As much as I work with llvm and mlir, I almost never touch the actual llvm codebase.</p>",
+        "id": 411619046,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1704649897
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281543\">Folkert de Vries</span> <a href=\"#narrow/stream/395097-compiler-development/topic/windows.20setjmp.2Flongjmp.20bug/near/411617303\">said</a>:</p>\n<blockquote>\n<p>I don't think we can fix it on our side</p>\n</blockquote>\n<p>is it possible we could emit assembly or machine instructions there directly somehow?</p>",
+        "id": 411619344,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1704650112
+    },
+    {
+        "content": "<p>yeah we could have zig provide those</p>",
+        "id": 411619423,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704650163
+    },
+    {
+        "content": "<p>we already need a workaround on aarch64 because llvm just does not generate anything for the setjmp/longjmp intrinsics</p>",
+        "id": 411619472,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704650188
+    },
+    {
+        "content": "<p>though that might be fixed now? the issue that ayaz made is still open though</p>",
+        "id": 411619479,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704650200
+    },
+    {
+        "content": "<p>ugh zig inline assembly does not support intel syntax... apparently for good reasons (in 2016) but cmon</p>",
+        "id": 411632640,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704662009
+    },
+    {
+        "content": "<p>chatgpt might be able to translate</p>",
+        "id": 411632778,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1704662156
+    },
+    {
+        "content": "<p>well yes but my eyes!</p>",
+        "id": 411633252,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704662624
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> can you try this one locally when you get a chance <a href=\"https://github.com/roc-lang/roc/pull/6363\">https://github.com/roc-lang/roc/pull/6363</a></p>",
+        "id": 411635771,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704665115
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>        FAIL [   0.915s] test_gen::test_gen gen_panic::crash_in_passed_closure\n\n--- STDOUT:              test_gen::test_gen gen_panic::crash_in_passed_closure ---\n\nrunning 1 test\ntest gen_panic::crash_in_passed_closure - should panic ... FAILED\n\nfailures:\n\n---- gen_panic::crash_in_passed_closure stdout ----\nnote: panic did not contain expected string\n      panic message: `&quot;Unrecognized builtin function: \\&quot;windows_longjmp\\&quot; - if you&#39;re working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md&quot;`,\n expected substring: `&quot;User crash with message: \\&quot;no new even primes\\&quot;&quot;`\n\nfailures:\n    gen_panic::crash_in_passed_closure\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1328 filtered out; finished in 0.89s\n\n\n--- STDERR:              test_gen::test_gen gen_panic::crash_in_passed_closure ---\nthread &#39;gen_panic::crash_in_passed_closure&#39; panicked at &#39;Unrecognized builtin function: &quot;windows_longjmp&quot; - if you&#39;re working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md&#39;, crates\\compiler\\gen_llvm\\src\\llvm\\bitcode.rs:104:28\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n   Canceling due to test failure\n------------\n     Summary [   0.918s] 1 test run: 0 passed, 1 failed, 1328 skipped\n        FAIL [   0.915s] test_gen::test_gen gen_panic::crash_in_passed_closure\n</code></pre></div>",
+        "id": 411637542,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1704666652
+    },
+    {
+        "content": "<p>hmm you may need a construction like this </p>\n<div class=\"codehilite\"><pre><span></span><code>// Zig won&#39;t expose the externs (and hence link correctly) unless we force them to be used.\nfn __roc_force_setjmp(it: [*c]c_int) callconv(.C) c_int {\n    return setjmp(it);\n}\nfn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {\n    longjmp(a0, a1);\n}\n</code></pre></div>\n<p>to force an export?</p>",
+        "id": 411637646,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1704666723
+    },
+    {
+        "content": "<p>What is the syntax of that global assembly in zig? </p>\n<div class=\"codehilite\"><pre><span></span><code> \\\\.global windows_longjmp;\n\\\\.type windows_longjmp, @function; # &lt;&lt;--- do we need something like this??? I added this and its wrong\n\\\\windows_longjmp:\n\\\\  movq 0x00(%rcx), %rdx\n\\\\  movq 0x08(%rcx), %rbx\n</code></pre></div>\n<p>Looking at zig docs I wonder if we need to specify the symbol is a function?</p>",
+        "id": 411643552,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1704671909
+    },
+    {
+        "content": "<p>Fixed <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span> </p>\n<div class=\"codehilite\" data-code-language=\"ps\"><pre><span></span><code>PS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; cargo nextest-gen-llvm gen_panic\n   Compiling test_gen v0.0.1 (C:\\Users\\bosyl\\Documents\\GitHub\\ROC\\crates\\compiler\\test_gen)\n    Finished test [unoptimized + debuginfo] target(s) in 8.44s\n    Starting 4 tests across 1 binary (1325 skipped)\n        PASS [   3.105s] test_gen::test_gen gen_panic::crash_in_passed_closure\n        PASS [   4.193s] test_gen::test_gen gen_panic::crash_variable\n        PASS [   4.380s] test_gen::test_gen gen_panic::crash_literal\n        PASS [   4.422s] test_gen::test_gen gen_panic::crash_in_call\n------------\n     Summary [   4.424s] 4 tests run: 4 passed, 1325 skipped\n</code></pre></div>",
+        "id": 411651733,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1704676937
+    },
+    {
+        "content": "<p>woooooo!!!! <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span>  <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span>  <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span></p>",
+        "id": 411654165,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1704678595
+    }
+]
