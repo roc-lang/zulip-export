@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>I'm currently looking into an issue with await bang desugaring in defs and want to clarify my understanding:</p>\n<p>If suffixed expression is part of another expression - it should be desugared like this:</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    a b!\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    Task.await b \\#!a0 -&gt;\n        a #!a0\n</code></pre></div>\n<p>But if it's a top level bang - it should return an empty record:</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    a!\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    Task.await a \\{} -&gt;\n        Task.ok {}\n</code></pre></div>\n<p>Meaning, the following two snippets have different type signatures (let's assume <code>a</code> is <code>Task U8</code>):</p>\n<div class=\"codehilite\"><pre><span></span><code>main : Task {}\nmain =\n    a!\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>main : Task U8\nmain =\n    a\n</code></pre></div>\n<p>Currently it works inconsistently (can't provide an exhaustive list of problems unfortunately, but <a href=\"https://github.com/roc-lang/roc/issues/6656\">here's the ticket I'm working on</a>). I just want to clarify that my intuition is correct so I can fix this logic in parser and desugaring.</p>",
+        "id": 447964562,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1719658415
+    },
+    {
+        "content": "<blockquote>\n<p>But if it's a top level bang - it should return an empty record:</p>\n</blockquote>\n<p>I think in this case it won't be unwrapped, but just ignored.</p>",
+        "id": 447971871,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719663952
+    },
+    {
+        "content": "<p>In the implementation of <code>apply_task_await</code> there are two functions which should detect this case <code>is_matching_empty_record</code> and <code>is_matching_intermediate_answer</code> and just make this a NOOP</p>",
+        "id": 447972017,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719664081
+    },
+    {
+        "content": "<p>So for these two examples you have shown, the first;</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    Task.await b \\#!a0 -&gt;\n        a #!a0\n</code></pre></div>\n<p>Should hit the <code>is_matching_intermediate_answer</code> and just return the <code>b</code> expr. </p>\n<p>For the second;</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    Task.await a \\{} -&gt;\n        Task.ok {}\n</code></pre></div>\n<p>This should hit the <code>is_matching_empty_record</code> and just return the <code>a</code> expr.</p>",
+        "id": 447972227,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719664211
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/316715-contributing/topic/Await.20bang.20desugaring.20rules/near/447972227\">said</a>:</p>\n<blockquote>\n<p>For the second;</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    Task.await a \\{} -&gt;\n        Task.ok {}\n</code></pre></div>\n<p>This should hit the <code>is_matching_empty_record</code> and just return the <code>a</code> expr.</p>\n</blockquote>\n<p>But it’s not the same. If I wrote it manually, I wouldn’t expect <code>Task.ok {}</code> would become <code>a</code></p>\n<blockquote>\n<p>The first</p>\n</blockquote>\n<p>Could you please elaborate?</p>",
+        "id": 447973473,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1719665280
+    },
+    {
+        "content": "<p>Another way to think about it. I think it should work this way:</p>\n<p>Invalid </p>\n<div class=\"codehilite\"><pre><span></span><code>f : Bool, Task a, Task b -&gt; Task {}\nf = \\x, a, b -&gt;\n    if x then\n        a\n    else\n        b\n</code></pre></div>\n<p>Valid</p>\n<div class=\"codehilite\"><pre><span></span><code>f : Bool, Task a, Task b -&gt; Task {}\nf = \\x, a, b -&gt;\n    if x then\n        a!\n    else\n        b!\n</code></pre></div>",
+        "id": 447983092,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1719671810
+    },
+    {
+        "content": "<p>Ah, this is a question if bang should throw away the result</p>",
+        "id": 447994287,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719677237
+    },
+    {
+        "content": "<p>I think this is a case where the exact semantics of bang are a bit complex</p>",
+        "id": 447994663,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719677343
+    },
+    {
+        "content": "<p>And arguably inconsistent</p>",
+        "id": 447994802,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719677390
+    },
+    {
+        "content": "<p>I think the expected behaviour above is a type mismatch in both cases</p>",
+        "id": 447995071,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719677472
+    },
+    {
+        "content": "<p>These would be correct though<br>\nI think this is the expected behaviour:</p>\n<div class=\"codehilite\"><pre><span></span><code>f : Bool, Task a, Task a -&gt; Task a\nf = \\x, a0, a1 -&gt;\n    if x then\n        a0!\n    else\n        a1!\n\ng : Task a -&gt; Task a\ng = \\a -&gt;\n    a!\n\nh : Bool, Task a, Task a, Task b -&gt; Task b\nh = \\x, a0, a1, b -&gt;\n    if x then\n        a0!\n    else\n        a1!\n\n    b!\n</code></pre></div>",
+        "id": 447995681,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719677670
+    },
+    {
+        "content": "<p>I think the correct mental model is that <code>!</code> always tries to return a result. It does not end with a <code>Task.ok {}</code></p>\n<p>That said, a following bang will throw away the result of the previous bang.</p>",
+        "id": 447995922,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719677737
+    },
+    {
+        "content": "<p>My take is that bang is expression if it’s part of another expression. If it’s top-level (in place of assignment) - it’s a destructuring statement. I.e:</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    a!\n    b!\n    c!\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    {} = a!\n    {} = b!\n    {} = c!\n    {}\n</code></pre></div>",
+        "id": 447996631,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1719677987
+    },
+    {
+        "content": "<p>Desugared with the redundant await (which wouldn't actually be emitted, but I think make the desugaring clearer) these would be:</p>\n<div class=\"codehilite\"><pre><span></span><code>f : Bool, Task a, Task a -&gt; Task a\nf = \\x, a0, a1 -&gt;\n    Task. await (\n        if x then\n            a0\n        else\n            a1\n    ) \\a -&gt; Task.ok a\n\ng : Task a -&gt; Task a\ng = \\a -&gt;\n    Task. await a \\a2 -&gt; Task.ok a2\n\nh : Bool, Task a, Task a, Task b -&gt; Task b\nh = \\x, a0, a1, b -&gt;\n    Task. await (\n        if x then\n            a0\n        else\n            a1\n    ) \\a -&gt;\n        # It can be imgained that there is an igorned `_ = Task.ok a` here.\n        Task.await b \\b2 -&gt; Task.ok b2\n</code></pre></div>",
+        "id": 447996986,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719678172
+    },
+    {
+        "content": "<blockquote>\n<p>My take is that bang is expression if it’s part of another expression</p>\n</blockquote>\n<p>This can be debated in ideas, but the current design is to explicitly allow a trailing <code>!</code> which essentially doesn't actually desugar.</p>",
+        "id": 447997193,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719678265
+    },
+    {
+        "content": "<p>Should create the semantic I show in the desugaring directly above.</p>",
+        "id": 447997233,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719678291
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/issues/6851\">https://github.com/roc-lang/roc/issues/6851</a></p>\n<p>So this fix was correct then?</p>",
+        "id": 447997445,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1719678402
+    },
+    {
+        "content": "<p>I don't know that code enough to tell for sure.</p>\n<p>Fundamentally, with the current design, ending a function with <code>a!</code> or with <code>a</code> should result in the exact same final result.</p>",
+        "id": 447998207,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719678784
+    },
+    {
+        "content": "<p>So in theory, to return an empty record, I’d do it explicitly? (I’m from mobile rn, can’t check)</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    a!\n    b!\n    c!\n    {}\n</code></pre></div>",
+        "id": 448005042,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1719682073
+    },
+    {
+        "content": "<p>I think supporting the final or trailing expression so it doesnt get unwrapped is why we have EmptyDefsFinal.</p>",
+        "id": 448024856,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719692118
+    },
+    {
+        "content": "<p>It currently would need to be:</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    a!\n    b!\n    c!\n    Task.ok {}\n</code></pre></div>\n<p>We talked about removing the need for the <code>Task.ok</code>, don't recall which thread, but I don't think anything was decided around that.</p>",
+        "id": 448028951,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719693387
+    },
+    {
+        "content": "<p>Assuming <code>c!</code> returns a <code>Task c</code> where <code>c</code> is not <code>{}</code></p>",
+        "id": 448029030,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719693431
+    },
+    {
+        "content": "<p>From what I saw in the code, <code>EmptyDefsFinal</code> unwraps into <code>Task.ok {}</code> and is used only if the last statement in defs is the bang. Thus why I started this thread - I removed <code>EmptyDefsFinal</code> completely and it works as <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> outlined. But then I looked at the code again and understood that it was probably a different intention.</p>",
+        "id": 448029191,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1719693486
+    },
+    {
+        "content": "<p>Explicit <code>{}</code> return is reasonable because <code>a!</code> desugared to <code>a</code> is intuitive. As I said, that’s how I expected it to work initially. However, the other way makes sense as well, just another mental model. I’ll describe my thoughts in #ideas later. The current thread is for fixing the bug without introducing breaking changes.</p>",
+        "id": 448030480,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1719694161
+    }
+]

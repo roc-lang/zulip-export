@@ -1,0 +1,290 @@
+[
+    {
+        "content": "<p>Ok, I think I've got some kind of ABI problem.. but I'm not sure. </p>\n<p>In the platform I have </p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code># Effect.roc\nHostColor : {\n    # this is a hack to work around https://github.com/roc-lang/roc/issues/7142\n    unused : I64,\n    unused2 : I64,\n    r : U8,\n    g : U8,\n    b : U8,\n    a : U8,\n}\n\nsetBackgroundColor : HostColor -&gt; Task {} {}\n</code></pre></div>\n<p>This generates the following LLVM IR, which looks like I expect, basically passing a struct by value and geting a tag union back.</p>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"k\">declare</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"k\">x</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">],</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"vg\">@roc_fx_setBackgroundColor</span><span class=\"p\">({</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"w\"> </span><span class=\"p\">})</span>\n</code></pre></div>\n<p>In the host I'm representing the struct as follows</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[repr(C)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">HostColor</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"c1\">// this is a hack to work around https://github.com/roc-lang/roc/issues/7142</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">unused</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">unused2</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">g</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">r</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"cp\">#[no_mangle]</span>\n<span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">roc_fx_setBackgroundColor</span><span class=\"p\">(</span><span class=\"n\">color</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">HostColor</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">RocResult</span><span class=\"o\">&lt;</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">     </span><span class=\"n\">CLEAR_BACKGOUND</span><span class=\"p\">.</span><span class=\"n\">set</span><span class=\"p\">(</span><span class=\"n\">color</span><span class=\"p\">);</span>\n\n<span class=\"w\">    </span><span class=\"n\">RocResult</span><span class=\"p\">::</span><span class=\"n\">ok</span><span class=\"p\">(())</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>And for some reason... the information I'm getting in the host is not initialized. I thought it may be because I should actually be receiving a pointer <code>&amp;HostColor</code> but, I'm pretty sure the LLVM IR is passing the struct by value. Anyway... messing with LLDB I can see the memory is not initialized. </p>\n<div class=\"codehilite\"><pre><span></span><code>* thread #1, name = &#39;main&#39;, stop reason = EXC_BAD_ACCESS (code=1, address=0x0)\n    frame #0: 0x0000000100009084 roc-ray`roc_fx_setBackgroundColor(color=(unused = &lt;parent is NULL&gt;, unused2 = &lt;parent is NULL&gt;, a = &lt;parent is NULL&gt;, b = &lt;parent is NULL&gt;, g = &lt;parent is NULL&gt;, r = &lt;parent is NULL&gt;)) at main.rs:282:5\n   279\n   280  #[no_mangle]\n   281  unsafe extern &quot;C&quot; fn roc_fx_setBackgroundColor(color: glue::HostColor) -&gt; RocResult&lt;(), ()&gt; {\n-&gt; 282      CLEAR_BACKGOUND.set(color);\n   283\n   284      RocResult::ok(())\n   285  }\n</code></pre></div>",
+        "id": 477635917,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729251561
+    },
+    {
+        "content": "<p>From what I can tell from my investigation, it appears the issue may be in roc at the callsite, something related to the ABI.</p>",
+        "id": 477637004,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729251930
+    },
+    {
+        "content": "<p>It's only called in one place... that is in the fastcc wrapper</p>\n<div class=\"codehilite\"><pre><span></span><code>declare { [0 x i8], i8 } @roc_fx_setBackgroundColor({ i64, i64, i8, i8, i8, i8 })\n\ndefine internal fastcc void @roc_fx_setBackgroundColor_fastcc_wrapper({ i64, i64, i8, i8, i8, i8 } %0, ptr %1) {\nentry:\n  %tmp = call { [0 x i8], i8 } @roc_fx_setBackgroundColor({ i64, i64, i8, i8, i8, i8 } %0), !dbg !222\n  store { [0 x i8], i8 } %tmp, ptr %1, align 1, !dbg !222\n  ret void, !dbg !222\n}\n</code></pre></div>",
+        "id": 477637265,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729252001
+    },
+    {
+        "content": "<p>I'm working on this branch <a href=\"https://github.com/lukewilliamboswell/roc-ray/tree/sprites\">https://github.com/lukewilliamboswell/roc-ray/tree/sprites</a></p>\n<p>I was adding the feature for working with Textures.. but this is unrelated.... I got distracted by the set background color function not working as I expected it to.</p>",
+        "id": 477638048,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729252269
+    },
+    {
+        "content": "<p>I'm going to take a break. But I'm thinking I should check what rust is doing with that function and struct using godbolt next.</p>",
+        "id": 477640695,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729253177
+    },
+    {
+        "content": "<p>Yeah looks like a roc bug....I'm actually quite a bit surprised by this one</p>",
+        "id": 477665025,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729260740
+    },
+    {
+        "content": "<p>We should be passing a pointer to that strict due to how large it is</p>",
+        "id": 477665085,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729260763
+    },
+    {
+        "content": "<p>I'm pretty sure rust is automatically converting it to a pointer</p>",
+        "id": 477665138,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729260780
+    },
+    {
+        "content": "<p>This is something I would expect to just work....</p>",
+        "id": 477665175,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729260793
+    },
+    {
+        "content": "<p>Rocs c abi could really use some love</p>",
+        "id": 477665283,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729260827
+    },
+    {
+        "content": "<p>Could it be specifically related to Task or hosted module? Does roc use a different ABI internally? Just looking for any pointers to narrow my search in the compiler... I'm thinking gen_llvm... but I suspect this might be back up in something earlier if it's Task related.</p>",
+        "id": 477714786,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729278577
+    },
+    {
+        "content": "<p>is using RocList&lt;u8&gt; a reliable workaround for this c abi thing and 7142, or would that have the same problems?</p>",
+        "id": 477715127,
+        "sender_full_name": "Dan G Knutson",
+        "timestamp": 1729278721
+    },
+    {
+        "content": "<p>I dont know. Haven't ran into this before with previous platforms. It seems strange. Using a RocList is probably a good workaround because its working elsewhere.</p>",
+        "id": 477715568,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729278902
+    },
+    {
+        "content": "<p>I've still been digging... I'll keep going for a little, but if it's over my head I'll look for a workaround and move on with the features.</p>",
+        "id": 477715820,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729279018
+    },
+    {
+        "content": "<p>I was just wondering if I should change what I was doing</p>",
+        "id": 477716684,
+        "sender_full_name": "Dan G Knutson",
+        "timestamp": 1729279406
+    },
+    {
+        "content": "<p>With what part?</p>",
+        "id": 477716816,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729279447
+    },
+    {
+        "content": "<p>with inputs it seemed like just always passing a list of bytes was nice, so I was considering treating it like a default. if it also avoids this then that's good. I'm not sure if I'm inviting overhead this way (beyond the fat pointer I guess?), but it seems like a reasonable default</p>",
+        "id": 477717437,
+        "sender_full_name": "Dan G Knutson",
+        "timestamp": 1729279723
+    },
+    {
+        "content": "<p>For adding features and avoiding these issues I think that is a great approach.</p>",
+        "id": 477718023,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729279966
+    },
+    {
+        "content": "<p>So back on this issue above... I wanted to know what rust does with something shaped like that. I built the following program.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">main</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">roc_fx_setBackgroundColor</span><span class=\"p\">(</span><span class=\"n\">HostColor</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">a</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"mi\">255</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">b</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"mi\">255</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">g</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"mi\">255</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">r</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"mi\">255</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">};</span>\n<span class=\"p\">}</span>\n\n<span class=\"cp\">#[repr(C)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">HostColor</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">g</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">r</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"cp\">#[no_mangle]</span>\n<span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">roc_fx_setBackgroundColor</span><span class=\"p\">(</span><span class=\"n\">color</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">HostColor</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"fm\">dbg!</span><span class=\"p\">(</span><span class=\"n\">color</span><span class=\"p\">.</span><span class=\"n\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">color</span><span class=\"p\">.</span><span class=\"n\">b</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">color</span><span class=\"p\">.</span><span class=\"n\">g</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">color</span><span class=\"p\">.</span><span class=\"n\">r</span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>And then compiled it using <code>$ RUSTFLAGS=\"--emit=llvm-ir\" cargo build</code> to get the LLVM IR.</p>\n<p>I can see this, </p>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"c\">; asdfasdf::main</span>\n<span class=\"c\">; Function Attrs: uwtable</span>\n<span class=\"k\">define</span><span class=\"w\"> </span><span class=\"k\">internal</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@_ZN8asdfasdf4main17h34e824c37946dda6E</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"k\">unnamed_addr</span><span class=\"w\"> </span><span class=\"vg\">#1</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!392</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"nl\">start:</span>\n<span class=\"w\">  </span><span class=\"nv\">%_2</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"nv\">%HostColor</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">1</span>\n<span class=\"w\">  </span><span class=\"k\">store</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"w\"> </span><span class=\"m\">-1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%_2</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!395</span>\n<span class=\"w\">  </span><span class=\"nv nv-Anonymous\">%0</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">getelementptr</span><span class=\"w\"> </span><span class=\"k\">inbounds</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%_2</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"m\">1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!395</span>\n<span class=\"w\">  </span><span class=\"k\">store</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"w\"> </span><span class=\"m\">-1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%0</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!395</span>\n<span class=\"w\">  </span><span class=\"nv nv-Anonymous\">%1</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">getelementptr</span><span class=\"w\"> </span><span class=\"k\">inbounds</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%_2</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"m\">2</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!395</span>\n<span class=\"w\">  </span><span class=\"k\">store</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"w\"> </span><span class=\"m\">-1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!395</span>\n<span class=\"w\">  </span><span class=\"nv nv-Anonymous\">%2</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">getelementptr</span><span class=\"w\"> </span><span class=\"k\">inbounds</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%_2</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"m\">3</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!395</span>\n<span class=\"w\">  </span><span class=\"k\">store</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"w\"> </span><span class=\"m\">-1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%2</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!395</span>\n<span class=\"w\">  </span><span class=\"nv nv-Anonymous\">%3</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">load</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%_2</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!396</span>\n<span class=\"w\">  </span><span class=\"k\">call</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@roc_fx_setBackgroundColor</span><span class=\"p\">(</span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%3</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!396</span>\n<span class=\"w\">  </span><span class=\"k\">ret</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!397</span>\n<span class=\"p\">}</span>\n\n<span class=\"c\">; Function Attrs: uwtable</span>\n<span class=\"k\">define</span><span class=\"w\"> </span><span class=\"k\">dso_local</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@roc_fx_setBackgroundColor</span><span class=\"p\">(</span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%0</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">unnamed_addr</span><span class=\"w\"> </span><span class=\"vg\">#1</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!398</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"nl\">start:</span>\n<span class=\"w\">  </span><span class=\"nv\">%f.dbg.spill.i28</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span>\n<span class=\"w\">  </span><span class=\"nv\">%x.dbg.spill.i29</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span>\n<span class=\"w\">  </span><span class=\"nv\">%_0.i30</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"nv\">%\"core::fmt::rt::Argument&lt;'_&gt;\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span>\n<span class=\"w\">  </span><span class=\"nv\">%f.dbg.spill.i25</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span>\n<span class=\"w\">  </span><span class=\"nv\">%x.dbg.spill.i26</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span>\n<span class=\"w\">  </span><span class=\"nv\">%_0.i27</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"nv\">%\"core::fmt::rt::Argument&lt;'_&gt;\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span>\n</code></pre></div>\n<p>Which looks to me like Rust is passing that by pointer.</p>",
+        "id": 477725407,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729281178
+    },
+    {
+        "content": "<p>I'm using LLVM instead of machine code here... because I assume that avoids any differences between x64 / aarch64 etc.</p>",
+        "id": 477725524,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729281236
+    },
+    {
+        "content": "<p>That is not passing by pointer</p>",
+        "id": 477737810,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729287420
+    },
+    {
+        "content": "<p>That is passing in a single register as an <code>i64</code></p>",
+        "id": 477737824,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729287427
+    },
+    {
+        "content": "<p>So it is packing the struct into one value</p>",
+        "id": 477737834,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729287435
+    },
+    {
+        "content": "<p>Random aside, do you know why rust represents the u8 as an i8 and assigns -1? Is there anything in that?</p>",
+        "id": 477745072,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729292047
+    },
+    {
+        "content": "<p>Just to clarify, this is a roc bug right?</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>Color : { r : U8, g : U8, b : U8, a : U8 }\n\nsetBackgroundColor : Color -&gt; Task {} {}\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"c\">; WHAT ROC GENERATES</span>\n<span class=\"k\">declare</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"k\">x</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">],</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"vg\">@roc_fx_setBackgroundColor</span><span class=\"p\">({</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"w\"> </span><span class=\"p\">})</span><span class=\"w\"> </span><span class=\"k\">local_unnamed_addr</span>\n\n<span class=\"c\">; WHAT RUST GENERATES</span>\n<span class=\"k\">define</span><span class=\"w\"> </span><span class=\"k\">dso_local</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@roc_fx_setBackgroundColor</span><span class=\"p\">(</span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%0</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">unnamed_addr</span><span class=\"w\"> </span><span class=\"vg\">#1</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!398</span><span class=\"w\"> </span><span class=\"p\">{</span>\n</code></pre></div>\n<p><strong>ChatGPT Summary</strong></p>\n<div class=\"codehilite\" data-code-language=\"Markdown\"><pre><span></span><code>In LLVM IR, <span class=\"sb\">`{ i8, i8, i8, i8 }`</span> and <span class=\"sb\">`i64`</span> are not the same, although they can represent the same amount of data (64 bits). The difference lies in how the data is structured and accessed.\n\n<span class=\"gu\">### `{ i8, i8, i8, i8 }`</span>\n\nThis represents a structure with four 8-bit integers. Each <span class=\"sb\">`i8`</span> is an individual byte, and the structure explicitly defines the layout of these bytes. Accessing each byte would involve accessing the specific field within the structure.\n\n<span class=\"gu\">### `i64`</span>\n\nThis represents a single 64-bit integer. The entire 64 bits are treated as one unit, and accessing individual bytes would typically involve bitwise operations or shifts to isolate specific parts of the 64-bit value.\n\n<span class=\"gu\">### Key Differences</span>\n\n<span class=\"k\">1.</span> <span class=\"gs\">**Data Layout**</span>:\n<span class=\"w\">   </span><span class=\"k\">-</span><span class=\"w\"> </span><span class=\"sb\">`{ i8, i8, i8, i8 }`</span>: The data is laid out as four separate 8-bit fields.\n<span class=\"w\">   </span><span class=\"k\">-</span><span class=\"w\"> </span><span class=\"sb\">`i64`</span>: The data is a single 64-bit field.\n\n<span class=\"k\">2.</span> <span class=\"gs\">**Access Patterns**</span>:\n<span class=\"w\">   </span><span class=\"k\">-</span><span class=\"w\"> </span><span class=\"sb\">`{ i8, i8, i8, i8 }`</span>: Accessing individual bytes is straightforward as each byte is a separate field.\n<span class=\"w\">   </span><span class=\"k\">-</span><span class=\"w\"> </span><span class=\"sb\">`i64`</span>: Accessing individual bytes requires bitwise operations to extract the desired byte.\n\n<span class=\"k\">3.</span> <span class=\"gs\">**Type Semantics**</span>:\n<span class=\"w\">   </span><span class=\"k\">-</span><span class=\"w\"> </span><span class=\"sb\">`{ i8, i8, i8, i8 }`</span>: The type explicitly indicates a structure with four bytes.\n<span class=\"w\">   </span><span class=\"k\">-</span><span class=\"w\"> </span><span class=\"sb\">`i64`</span>: The type indicates a single 64-bit integer.\n</code></pre></div>",
+        "id": 477749782,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729295923
+    },
+    {
+        "content": "<p>This is the same issue as the tag c-abi thread</p>",
+        "id": 477749888,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729296011
+    },
+    {
+        "content": "<p>Specifically this:</p>\n<blockquote>\n<p>Struct and union parameters with sizes of two (eight in case of only SSE fields) pointers or fewer that are aligned on 64-bit boundaries are decomposed into \"eightbytes\" and each one is classified and passed as a separate parameter.[28]: 24  Otherwise they are replaced with a pointer when used as an argument.</p>\n</blockquote>",
+        "id": 477750092,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729296132
+    },
+    {
+        "content": "<p>Can you share the reference for this?</p>",
+        "id": 477750149,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729296200
+    },
+    {
+        "content": "<p>I'm going to try packing the bits into what Rust expects on the roc side. <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 477750167,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729296221
+    },
+    {
+        "content": "<p>That's just from the x86 call conv wikipedia page</p>",
+        "id": 477750227,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729296259
+    },
+    {
+        "content": "<p>Is it the same on aarch64?</p>",
+        "id": 477750247,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729296277
+    },
+    {
+        "content": "<p>Not really, but in this case I think so:</p>\n<blockquote>\n<p>If the argument is a Composite Type, and the size in double-words of the argument is no more than 8 minus NGRN, then the argument is copied into consecutive general-purpose registers, starting at x[NGRN]. The argument is passed as though it had been loaded into the registers from a double-word-aligned address, with an appropriate sequence of LDR instructions that load consecutive registers from memory. The contents of any unused parts of the registers are unspecified by this standard. The NGRN is incremented by the number of registers used. The argument has now been allocated.</p>\n</blockquote>",
+        "id": 477750656,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729296613
+    },
+    {
+        "content": "<p>I tried tricking roc to produce the rust equivalent using this helper. But I'm still not getting the right data out of roc. I can crash and see all <code>255</code>'s but using dbg in rust I'm getting </p>\n<div class=\"codehilite\"><pre><span></span><code>[src/main.rs:284:5] color = HostColor {\n    a: 1,\n    b: 0,\n    g: 0,\n    r: 0,\n}\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>fromRGBA : { r : U8, g : U8, b : U8, a : U8 } -&gt; I64\nfromRGBA = \\{ r, g, b, a } -&gt;\n    Num.shiftLeftBy 24 a\n    |&gt; Num.bitwiseOr (Num.shiftLeftBy 16 b)\n    |&gt; Num.bitwiseOr (Num.shiftLeftBy 8 g)\n    |&gt; Num.bitwiseOr (Num.shiftLeftBy 0 r)\n</code></pre></div>\n<p>I think I'm going to try make my own version and manually pack/unpack from an <code>i64</code> next.</p>",
+        "id": 477750974,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729296961
+    },
+    {
+        "content": "<p>This is fun <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 477751025,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729296982
+    },
+    {
+        "content": "<p>Hey, got it working <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span> <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 477752097,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729298151
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>fromRGBA : { r : U8, g : U8, b : U8, a : U8 } -&gt; U64\nfromRGBA = \\{ r, g, b, a } -&gt;\n    (Num.intCast a |&gt; Num.shiftLeftBy 24)\n    |&gt; Num.bitwiseOr (Num.intCast b |&gt; Num.shiftLeftBy 16)\n    |&gt; Num.bitwiseOr (Num.intCast g |&gt; Num.shiftLeftBy 8)\n    |&gt; Num.bitwiseOr (Num.intCast r)\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">RocColor</span><span class=\"p\">(</span><span class=\"kt\">i64</span><span class=\"p\">);</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">RocColor</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">from_rgba</span><span class=\"p\">(</span><span class=\"n\">r</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">g</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">RocColor</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">color</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">((</span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">&lt;&lt;</span><span class=\"w\"> </span><span class=\"mi\">24</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">((</span><span class=\"n\">b</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">&lt;&lt;</span><span class=\"w\"> </span><span class=\"mi\">16</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">((</span><span class=\"n\">g</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">&lt;&lt;</span><span class=\"w\"> </span><span class=\"mi\">8</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">r</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"n\">RocColor</span><span class=\"p\">(</span><span class=\"n\">color</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">to_rgba</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">u8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">((</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"mi\">24</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"w\"> </span><span class=\"mh\">0xFF</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">((</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"mi\">16</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"w\"> </span><span class=\"mh\">0xFF</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">g</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">((</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"mi\">8</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"w\"> </span><span class=\"mh\">0xFF</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">r</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"w\"> </span><span class=\"mh\">0xFF</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"p\">(</span><span class=\"n\">r</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">g</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Added a bunch of tests, and it's also working nicely with the raylib stuff. <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 477752319,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729298374
+    },
+    {
+        "content": "<p>Yeah, manual packing is a decent workaround</p>",
+        "id": 477753615,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729299406
+    },
+    {
+        "content": "<p>Also, I'm kinda stunned we didn't hit this before. Make me feel like there was a regression at somepoint</p>",
+        "id": 477753638,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729299427
+    },
+    {
+        "content": "<p>Doesn't roc wasm4 use small types like this and not have problems?</p>",
+        "id": 477753657,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729299441
+    },
+    {
+        "content": "<p>I think we stuck to RocStr, and RocList for everything</p>",
+        "id": 477753732,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729299493
+    },
+    {
+        "content": "<p>I think this is the first time I've seen a record passed as an argument</p>",
+        "id": 477753756,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729299524
+    },
+    {
+        "content": "<p>I think it's the same with floats. </p>\n<div class=\"codehilite\"><pre><span></span><code>Vector2 : { x : F32, y : F32 }\n\nsetWindowSize : Vector2 -&gt; Task {} {}\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[repr(C)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">RocVector2</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">f32</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">f32</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"c\">; WHAT ROC GENERATES</span>\n<span class=\"vg\">@roc_fx_setWindowSize</span><span class=\"p\">({</span><span class=\"w\"> </span><span class=\"kt\">float</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">float</span><span class=\"w\"> </span><span class=\"p\">})</span>\n\n<span class=\"c\">; WHAT RUST GENERATES</span>\n<span class=\"vg\">@roc_fx_setWindowSize</span><span class=\"p\">([</span><span class=\"m\">2</span><span class=\"w\"> </span><span class=\"k\">x</span><span class=\"w\"> </span><span class=\"kt\">float</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%0</span><span class=\"p\">)</span>\n</code></pre></div>",
+        "id": 477756172,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729301901
+    },
+    {
+        "content": "<p>In that case, I think roc and rust generate the same thing</p>",
+        "id": 477768062,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729308783
+    },
+    {
+        "content": "<p>I don't think there should be a meaningful difference</p>",
+        "id": 477768068,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729308792
+    },
+    {
+        "content": "<p>If there is, I'm not sure why/how. Both should pass in two float regs I think</p>",
+        "id": 477768084,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729308810
+    },
+    {
+        "content": "<p>I found a bit of a silly workaround... increases the size enough until it gets passed as a pointer.</p>\n<div class=\"codehilite\"><pre><span></span><code>RocRectangle := {\n    x : F32,\n    y : F32,\n    width : F32,\n    height : F32,\n    unused : I64,\n    unused2 : I64,\n    unused3 : I64,\n}\n</code></pre></div>\n<p>When we fix the bug we only need to change it in one part in the host and the platform.</p>",
+        "id": 477768542,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729309230
+    },
+    {
+        "content": "<p>My thoughts are that maybe... LLVM will be smart enough to optimise these unused fields out even.</p>",
+        "id": 477768569,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1729309264
+    },
+    {
+        "content": "<p>It wont</p>",
+        "id": 477771802,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729312200
+    }
+]
