@@ -1,0 +1,116 @@
+[
+    {
+        "content": "<p>I'm getting the following error:</p>\n<div class=\"codehilite\"><pre><span></span><code>── TYPE MISMATCH in src/RustGlue.roc ───────────────────────────────────────────\n\nThis 2nd argument to |&gt; has an unexpected type:\n\n86│          |&gt; List.map generateItemGroup\n                         ^^^^^^^^^^^^^^^^^\n\nThis generateItemGroup value is a:\n\n    ItemGroup -&gt; Str\n\nBut |&gt; needs its 2nd argument to be:\n\n    ItemGroup -&gt; Str\n\n────────────────────────────────────────────────────────────────────────────────\n\n1 error and 1 warning found in 78 ms\n</code></pre></div>\n<p>Is this a known bug?</p>",
+        "id": 480045255,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730464848
+    },
+    {
+        "content": "<p>Kinda,</p>",
+        "id": 480063207,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1730472159
+    },
+    {
+        "content": "<p>Though if you have a small repro, it would be great to collect</p>",
+        "id": 480063264,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1730472190
+    },
+    {
+        "content": "<p>I think the issue is that roc needed to the lambdaset and closure captures (which aren't displayed in the type signature, but are still pretty of the type got functions)</p>",
+        "id": 480063481,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1730472271
+    },
+    {
+        "content": "<p>Thanks for your response!</p>",
+        "id": 480110416,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730491087
+    },
+    {
+        "content": "<p>I eventually found that the compiler uses the name <code>ItemGroup</code> to refer to two slightly different types. This was caused by one function that was able to return a tag that wasn't included in its type annotation. I was able to find a very small repro for the latter phenomenon:</p>",
+        "id": 480110423,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730491091
+    },
+    {
+        "content": "<p>The following code type checks, and the expect test succeeds (even though it shouldn't):</p>\n<div class=\"codehilite\"><pre><span></span><code>module [bug]\n\nbug : U8 -&gt; [A]\nbug = \\i -&gt;\n    when i is\n        1 -&gt; bug 3\n        2 -&gt; A\n        _ -&gt; B # &lt;- should be illegal given the annotation\n\nexpect bug 1 == B\n</code></pre></div>\n<p><code>0 failed and 1 passed in 251 ms.</code></p>",
+        "id": 480110560,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730491159
+    },
+    {
+        "content": "<p>Commenting out the <code>1</code> branch results in the type mismatch you'd expect to see in the previous example:</p>\n<div class=\"codehilite\"><pre><span></span><code>module [bug]\n\nbug : U8 -&gt; [A]\nbug = \\i -&gt;\n    when i is\n        # 1 -&gt; bug 3\n        2 -&gt; A\n        _ -&gt; B\n\nexpect bug 1 == B\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>── TYPE MISMATCH in Bug.roc ────────────────────────────────────────────────────\n\nSomething is off with the body of the bug definition:\n\n3│   bug : U8 -&gt; [A]\n4│   bug = \\i -&gt;\n5│&gt;      when i is\n6│&gt;          # 1 -&gt; bug 3\n7│&gt;          2 -&gt; A\n8│&gt;          _ -&gt; B\n\nThis when expression produces:\n\n    [B, …]\n\nBut the type annotation on bug says it should be:\n\n    […]\n\n────────────────────────────────────────────────────────────────────────────────\n\n1 error and 0 warnings found in 47 ms\n</code></pre></div>",
+        "id": 480111077,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730491348
+    },
+    {
+        "content": "<p>It seems like something about the function being recursive causes the compiler to ignore the type annotation. However, changing the return type to something that's not a tag union does break as expected:</p>\n<div class=\"codehilite\"><pre><span></span><code>module [bug]\n\nbug : U8 -&gt; Str\nbug = \\i -&gt;\n    when i is\n        1 -&gt; bug 3\n        2 -&gt; A\n        _ -&gt; B\n\nexpect bug 1 == B\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>── TYPE MISMATCH in Bug.roc ────────────────────────────────────────────────────\n\nThe 2nd branch of this when does not match all the previous branches:\n\n5│       when i is\n6│           1 -&gt; bug 3\n7│&gt;          2 -&gt; A\n8│           _ -&gt; B\n\nThis A tag has the type:\n\n    [A]\n\nBut all the previous branches have type:\n\n    Str\n\nAll branches of a when must have the same type!\n\n────────────────────────────────────────────────────────────────────────────────\n\n1 error and 0 warnings found in 46 ms\n</code></pre></div>",
+        "id": 480111625,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730491576
+    },
+    {
+        "content": "<p>So the type annotation is not being completely ignored, but the tag union type is being silently extended.</p>",
+        "id": 480112041,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730491781
+    },
+    {
+        "content": "<p>Adding in a second type annotation seems to reintroduce the error also:</p>\n<div class=\"codehilite\"><pre><span></span><code>module [bug, test]\n\nbug : U8 -&gt; [A]\nbug = \\i -&gt;\n    when i is\n        1 -&gt; bug 3\n        2 -&gt; A\n        _ -&gt; B\n\ntest : U8 -&gt; [A]\ntest = bug\n\nexpect bug 1 == B\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>── TYPE MISMATCH in Bug.roc ────────────────────────────────────────────────────\n\nSomething is off with the body of the test definition:\n\n10│  test : U8 -&gt; [A]\n11│  test = bug\n            ^^^\n\nThis bug value is a:\n\n    U8 -&gt; [B, …]\n\nBut the type annotation on test says it should be:\n\n    U8 -&gt; […]\n\n────────────────────────────────────────────────────────────────────────────────\n\n1 error and 0 warnings found in 55 ms\n</code></pre></div>",
+        "id": 480114071,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730492864
+    },
+    {
+        "content": "<p>...but replacing <code>[A]</code> with a type alias for <code>[A]</code> suppresses it again:</p>\n<div class=\"codehilite\"><pre><span></span><code>module [bug, test]\n\nOnlyA : [A]\n\nbug : U8 -&gt; OnlyA\nbug = \\i -&gt;\n    when i is\n        1 -&gt; bug 3\n        2 -&gt; A\n        _ -&gt; B\n\ntest : U8 -&gt; OnlyA\ntest = bug\n\nexpect bug 1 == B\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>0 failed and 1 passed in 186 ms.\n</code></pre></div>",
+        "id": 480114193,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730492928
+    },
+    {
+        "content": "<p>Safe to say I'm puzzled!</p>",
+        "id": 480114805,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730493272
+    },
+    {
+        "content": "<p>Oh wow. This is a great set of minimal repros. Can you file an issue? <span aria-label=\"folded hands\" class=\"emoji emoji-1f64f\" role=\"img\" title=\"folded hands\">:folded_hands:</span></p>",
+        "id": 480124955,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1730499335
+    },
+    {
+        "content": "<p>Sure! I'll file one tomorrow when I'm back at my laptop.</p>",
+        "id": 480215935,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730551413
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/issues/7194\">#7194</a></p>",
+        "id": 480327794,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730658036
+    },
+    {
+        "content": "<p>I've managed to reproduce the simply transcendental error message that led me to find this bug in the first place:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kn\">module</span><span class=\"w\"> </span><span class=\"err\">[</span><span class=\"nc\">bug</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">test</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">wrongAnnotation</span><span class=\"p\">]</span>\n\n<span class=\"kt\">OnlyA</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">A</span><span class=\"p\">]</span>\n\n<span class=\"nv\">bug</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">OnlyA</span>\n<span class=\"nv\">bug</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">i</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"nv\">i</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">        </span><span class=\"mi\">1</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nv\">bug</span><span class=\"w\"> </span><span class=\"mi\">3</span>\n<span class=\"w\">        </span><span class=\"mi\">2</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">A</span>\n<span class=\"w\">        </span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">B</span>\n\n<span class=\"nv\">test</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">OnlyA</span>\n<span class=\"nv\">test</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">bug</span>\n\n<span class=\"nv\">aToC</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">OnlyA</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">C</span><span class=\"p\">]</span>\n<span class=\"nv\">aToC</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"kt\">A</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">C</span>\n\n<span class=\"nv\">wrongAnnotation</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">C</span><span class=\"p\">]</span>\n<span class=\"nv\">wrongAnnotation</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">aToC</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">bug</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"p\">)</span>\n\n<span class=\"nv\">expect</span><span class=\"w\"> </span><span class=\"nv\">bug</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"kt\">B</span>\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>── TYPE MISMATCH in Bug.roc ────────────────────────────────────────────────────\n\nThis 1st argument to aToC has an unexpected type:\n\n19│  wrongAnnotation = aToC (bug 1)\n                             ^^^^^\n\nThis bug call produces:\n\n    OnlyA\n\nBut aToC needs its 1st argument to be:\n\n    OnlyA\n\n────────────────────────────────────────────────────────────────────────────────\n\n1 error and 0 warnings found in 44 ms\n</code></pre></div>",
+        "id": 481087153,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730974985
+    },
+    {
+        "content": "<p>This feels like it might be a good hint as to what's causing this</p>",
+        "id": 481087567,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730975087
+    },
+    {
+        "content": "<p>I've added it to the issue</p>",
+        "id": 481087608,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730975096
+    }
+]

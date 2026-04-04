@@ -1,0 +1,99 @@
+<html>
+<head><meta charset="utf-8"><title>LirCodeGen list · contributing · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/index.html">contributing</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/LirCodeGen.20list.html">LirCodeGen list</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="580902362"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/LirCodeGen%20list/near/580902362" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Norbert Hajagos <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/LirCodeGen.20list.html#580902362">(Mar 22 2026 at 09:24)</a>:</h4>
+<p>Hi! I'm stuck on implementing list_replace_unsafe in the new dev backend. It's done in the interpreter, but I can't really get a grip. I've been looking at other low level builtions, but just realized they aren't wired up to the builtins, so I cannot trust them being the right implementation. Do you have advice on what are the right lowlevel functions to look at as inspiration? Think I only have to do work ing the LirCodeGen's generateLowLevel 's big switch. The unique things of this builtin is that it returns a struct of {list, element}. I've based my work on list_set (uses wrapListReplace almost exactly how I'd need it) and list_split_first (returns a struct). I'm also interested how the refcounting should be handled in LirCodeGen. I see that in wrapListReplace, it is skipped compleatly, so I figured it's already accounted for by the ownership rules specified in LowLevel.zig?</p>
+<p>I'm getting <code>Evaluation error: error.RecordIndexOutOfBounds</code></p>
+
+
+
+<a name="581132595"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/LirCodeGen%20list/near/581132595" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/LirCodeGen.20list.html#581132595">(Mar 23 2026 at 14:36)</a>:</h4>
+<p>Hi Norbert,<br>
+I have a couple of CI issues I need to look at first but I will come back to this after that's done.</p>
+
+
+
+<a name="581429966"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/LirCodeGen%20list/near/581429966" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/LirCodeGen.20list.html#581429966">(Mar 24 2026 at 17:10)</a>:</h4>
+<blockquote>
+<p>I'm getting <code>Evaluation error: error.RecordIndexOutOfBounds</code></p>
+</blockquote>
+<p>Can you share your branch <span class="user-mention" data-user-id="577599">@Norbert Hajagos</span>?</p>
+
+
+
+<a name="581473704"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/LirCodeGen%20list/near/581473704" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Norbert Hajagos <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/LirCodeGen.20list.html#581473704">(Mar 24 2026 at 21:11)</a>:</h4>
+<p>Here it is:<br>
+<a href="https://github.com/roc-lang/roc/tree/list-builtins">https://github.com/roc-lang/roc/tree/list-builtins</a><br>
+There is <code>test/cli/list_replace.roc</code> and <code>test/snapshots/repl/list_replace.md</code> you can use for the testing. I'm on NixOs, x86-64bit. I'm finishing the day, thank you for looking into it.</p>
+
+
+
+<a name="581686722"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/LirCodeGen%20list/near/581686722" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/LirCodeGen.20list.html#581686722">(Mar 25 2026 at 17:54)</a>:</h4>
+<p>This is the core fix for the RecordIndexOutOfBounds:</p>
+<div class="codehilite"><pre><span></span><code>+++ b/src/eval/interpreter.zig
+@@ -2788,7 +2788,7 @@ pub const Interpreter = struct {
+                 var dest = try self.pushRaw(record_layout, 0, result_rt_var);
+                 var acc = try dest.asRecord(&amp;self.runtime_layout_store);
+
+-                const list_field_stack_val = try acc.getFieldByIndex(list_field.idx, list_arg.rt_var);
++                const list_field_stack_val = try acc.getFieldByName(&quot;list&quot;, list_arg.rt_var);
+                 const list_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_field_stack_val.ptr.?));
+
+                 if (self.runtime_layout_store.isZeroSized(list_info.elem_layout)) {
+@@ -2802,7 +2802,7 @@ pub const Interpreter = struct {
+
+                 // Get pointer space for the replaced item
+                 const elem_rt_var = elt_arg.rt_var;
+-                const prev_field_stack_val = try acc.getFieldByIndex(prev_field.idx, elem_rt_var);
++                const prev_field_stack_val = try acc.getFieldByName(&quot;prev&quot;, elem_rt_var);
+</code></pre></div>
+<p>Make sure to rebase on latest main too, that fixes problems that will cause <code>zig build minici</code> to fail otherwise.</p>
+
+
+
+<a name="581687550"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/LirCodeGen%20list/near/581687550" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/LirCodeGen.20list.html#581687550">(Mar 25 2026 at 17:58)</a>:</h4>
+<blockquote>
+<p>I've based my work on list_set (uses wrapListReplace almost exactly how I'd need it) and list_split_first (returns a struct)</p>
+</blockquote>
+<p>Yes, that is the way to go :)</p>
+
+
+
+<a name="581689963"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/LirCodeGen%20list/near/581689963" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/LirCodeGen.20list.html#581689963">(Mar 25 2026 at 18:09)</a>:</h4>
+<p>In LirCodeGen.zig, everything in <code> .list_replace_unsafe =&gt; { ...</code> looks correct.</p>
+
+
+
+<a name="581691513"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/LirCodeGen%20list/near/581691513" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/LirCodeGen.20list.html#581691513">(Mar 25 2026 at 18:16)</a>:</h4>
+<blockquote>
+<p>I'm also interested how the refcounting should be handled in LirCodeGen</p>
+</blockquote>
+<p>Refcounting is handled by the ownership rules (see <code>getArgOwnership</code> in LowLevel.zig), not inside the wrapper.<br>
+The interpreter version does handle refcounting explicitly.</p>
+
+
+
+<a name="581895922"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/LirCodeGen%20list/near/581895922" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Norbert Hajagos <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/LirCodeGen.20list.html#581895922">(Mar 26 2026 at 13:07)</a>:</h4>
+<p>Thank you Anton! There's so much work being done by others that by the time I'm finished with my small changes, the ground has shifted from under me. But it's fun just reading others' code and figuring things out. Hope I can look at it this weekend, maybe even land it. I'll stick with implementing builtins for a while, so that Roc could collect the dividends from my initial learning investments. Would be a waste to stop here now <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<hr><p>Last updated: Apr 04 2026 at 12:24 UTC</p>
+</html>
