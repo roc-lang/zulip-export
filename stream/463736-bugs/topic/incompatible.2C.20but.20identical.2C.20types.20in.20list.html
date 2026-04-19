@@ -1,0 +1,171 @@
+<html>
+<head><meta charset="utf-8"><title>incompatible, but identical, types in list · bugs · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/index.html">bugs</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/incompatible.2C.20but.20identical.2C.20types.20in.20list.html">incompatible, but identical, types in list</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="585040192"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/incompatible%2C%20but%20identical%2C%20types%20in%20list/near/585040192" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lukas Juhrich <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/incompatible.2C.20but.20identical.2C.20types.20in.20list.html#585040192">(Apr 12 2026 at 14:30)</a>:</h4>
+<p>Hi,</p>
+<p>On <code>main</code>(<code>a1a0be36</code>), I'm trying to add type hints to a fairly abstract data type I have typed up ad-hoc in the top level:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/alpha-0/HVZonS7HStbvGwhqvDZE1HreyDfqD6tayzFbi9rAUXYN.tar.zst" }
+
+import pf.Stdin
+import pf.Stdout
+import pf.Stderr
+
+print! = Stdout.line!
+main! = |_args| {
+    print!("datalog!")
+    print!(Str.inspect(program))
+    Ok({})
+}
+
+# TODO add parser, for now let's hard-code this in source
+example =
+    \\ goal :- E(x1, x2), C(x1)
+    \\ C(x2) :- E(x1, x2), B(x1)
+    \\ B(x2) :- E(x1, x2), A(x1)
+    \\ A(x2) :- E(x1, x2), B(x1), A(x1)
+    \\ A(x1) :- E(x1, x1)
+
+list = [A({}), B({})]
+
+# arc monadic datalog rule
+AmdRuleBody(idb, edb, var_) : {
+    edb : (edb, List(var_)),
+    idbs : List((idb, var_)),
+}
+
+AmdRule(idb, edb, var_) : [
+    GoalRule(AmdRuleBody(idb, edb, var_)),
+    IdbRule((idb, var_), AmdRuleBody(idb, edb, var_)),
+]
+
+
+program: {rules: List(AmdRule([A, B, C, ..], [E, ..], [X1, X2, ..]))}
+program = {
+    rules: [
+        {
+            edb = (E, [X1, X2])
+            idbs = [(C, X1)]
+            r : AmdRule([A, B, C, ..], [E, ..], [X1, X2, ..])
+            r = GoalRule({ edb: edb, idbs: idbs })
+            r
+        },
+        {
+            r : AmdRule([A, B, C, ..], [E, ..], [X1, X2, ..])
+            r = IdbRule((C, X2), { edb: (E, [X1, X2]), idbs: [(B, X1)] })
+            r
+        },
+        IdbRule((B, X2), { edb: (E, [X1, X2]), idbs: [(A, X1)] }),
+        IdbRule((A, X2), { edb: (E, [X1, X2]), idbs: [(B, X1), (A, X1)] }),
+        IdbRule((A, X1), { edb: (E, [X1, X1]), idbs: [(B, X1), (A, X1)] }),
+    ],
+}
+</code></pre></div>
+<p>it <code>roc check</code>s correctly, but when I execute it as <code>roc datalog.roc</code>, I get a type mismatch and a comptime crash (which vanishes if I move <code>program</code> into <code>main</code>):</p>
+<div class="codehilite"><pre><span></span><code>❯ roc datalog.roc
+-- TYPE MISMATCH ---------------------------------
+
+The first two elements in this list have incompatible types:
+   ┌─ datalog.roc:46:3
+   │
+46 │            {
+47 │                    r : AmdRule([A, B, C, ..], [E, ..], [X1, X2, ..])
+48 │                    r = IdbRule((C, X2), { edb: (E, [X1, X2]), idbs: [(B, X1)] })
+49 │                    r
+50 │            },
+
+The first element has this type:
+
+    AmdRule([A, B, C, ..], [E, ..], [X1, X2, ..])
+
+However, the second element has this type:
+
+    AmdRule([A, B, C, ..], [E, ..], [X1, X2, ..])
+
+All elements in a list must have compatible types.
+Note: You can wrap each element in a tag to make them compatible.
+To learn about tags, see &lt;https://www.roc-lang.org/tutorial#tags&gt;
+-- COMPTIME CRASH --------------------------------
+
+This definition crashed during compile-time evaluation:
+   ┌─ datalog.roc:37:11
+   │
+37 │ program = {
+38 │    rules: [
+39 │            {
+40 │                    edb = (E, [X1, X2])
+41 │                    idbs = [(C, X1)]
+42 │                    r : AmdRule([A, B, C, ..], [E, ..], [X1, X2, ..])
+43 │                    r = GoalRule({ edb: edb, idbs: idbs })
+44 │                    r
+45 │            },
+46 │            {
+47 │                    r : AmdRule([A, B, C, ..], [E, ..], [X1, X2, ..])
+48 │                    r = IdbRule((C, X2), { edb: (E, [X1, X2]), idbs: [(B, X1)] })
+49 │                    r
+50 │            },
+51 │            IdbRule((B, X2), { edb: (E, [X1, X2]), idbs: [(A, X1)] }),
+52 │            IdbRule((A, X2), { edb: (E, [X1, X2]), idbs: [(B, X1), (A, X1)] }),
+53 │            IdbRule((A, X1), { edb: (E, [X1, X1]), idbs: [(B, X1), (A, X1)] }),
+54 │    ],
+55 │ }
+
+The crash happened with this message:
+
+    e_tag: expected tag_union but got rt=flex:n/a ct=err has_expected=true for tag `IdbRule`
+
+Found 2 error(s) and 0 warning(s) for datalog.roc.
+</code></pre></div>
+<p>I added type hints for the first two expressions to debug my (previously incorrect) annotations.<br>
+what's going on here? is this a bug in the compiler, interpreter, both, or None? Or is the type check message just rendered incorrectly?</p>
+
+
+
+<a name="585040632"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/incompatible%2C%20but%20identical%2C%20types%20in%20list/near/585040632" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lukas Juhrich <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/incompatible.2C.20but.20identical.2C.20types.20in.20list.html#585040632">(Apr 12 2026 at 14:35)</a>:</h4>
+<p>Oh, this must be related to the <code>{ r: type hint; r = blah; r }</code> pattern I used to debug where my type hint goes wrong in detail. if I just say</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>program : { rules : List(AmdRule([A, B, C, ..], [E, ..], [X1, X2, ..])) }
+program = {
+    rules: [
+        GoalRule({ edb: (E, [X1, X2]), idbs: [(C, X1)] }),
+        IdbRule((C, X2), { edb: (E, [X1, X2]), idbs: [(B, X1)] }),
+        IdbRule((B, X2), { edb: (E, [X1, X2]), idbs: [(A, X1)] }),
+        IdbRule((A, X2), { edb: (E, [X1, X2]), idbs: [(B, X1), (A, X1)] }),
+        IdbRule((A, X1), { edb: (E, [X1, X1]), idbs: [(B, X1), (A, X1)] }),
+    ],
+}
+</code></pre></div>
+<p>then everything works.</p>
+
+
+
+<a name="585054559"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/incompatible%2C%20but%20identical%2C%20types%20in%20list/near/585054559" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/incompatible.2C.20but.20identical.2C.20types.20in.20list.html#585054559">(Apr 12 2026 at 18:08)</a>:</h4>
+<p>i think that it has to do with the <code>..</code>. these desugar to <code>..a</code>, <code>..b</code>, etc. i think when you annotated vars in the body, those get assigned new type variables compared to the top level def, causing the mismatch.</p>
+<p>if you change the top level <code>..</code> to be <code>..my_var</code>, then us that same variable <code>my_var</code> in the same position in the body def’s annotation, it think it should work</p>
+
+
+
+<a name="585055384"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/incompatible%2C%20but%20identical%2C%20types%20in%20list/near/585055384" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lukas Juhrich <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/incompatible.2C.20but.20identical.2C.20types.20in.20list.html#585055384">(Apr 12 2026 at 18:21)</a>:</h4>
+<p>Oh, okay, that's a bit surprising to me. If the name of the remainder matters, theb my assumption would have been that [A, B, ..] just means the rest is „unspecified“, and if a term types as both [A, B, ..] and [A, B, ..rest], then we deduce [A, B, ..rest] instead of the bottom type; but if it types as [A, B, ..rest] and [A, B, ..tser] then it would deduce bottom and throw a type error.</p>
+<p>But the crash is a bug, right?</p>
+
+
+
+<a name="585055488"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/incompatible%2C%20but%20identical%2C%20types%20in%20list/near/585055488" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Lukas Juhrich <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/incompatible.2C.20but.20identical.2C.20types.20in.20list.html#585055488">(Apr 12 2026 at 18:23)</a>:</h4>
+<p>Just removing the type hints but leaving the assign-and-return expressions would still cause failure, but I don't recall if it was a crash, type failure, or both.</p>
+
+
+
+<hr><p>Last updated: Apr 19 2026 at 12:30 UTC</p>
+</html>
