@@ -1,0 +1,416 @@
+[
+    {
+        "content": "<p>I wonder how much of the cost of (naive) atomic refcounting is due to the fact that branch predictors assume that a loop condition will be true the first time around, whereas if there's no contention, an atomic refcount's loop condition will actually fail the first time, leading to a branch misprediction</p>",
+        "id": 393128230,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1695683782
+    },
+    {
+        "content": "<p>in other words, I wonder if that strategy would be faster by introducing an extra conditional at the front where it's assumed that the atomic operation succeeded, and then it only falls back on the loop if it failed</p>",
+        "id": 393128676,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1695684008
+    },
+    {
+        "content": "<p>I do think that would help, but I don't think it would make much of a difference. I believe an old version (and slightly faster but technically wrong) version of our code did not have the loop. That said, it was not much faster. Most of the time was just in the atomic read/write and not in the on cpu conditional.</p>",
+        "id": 393129323,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695684423
+    },
+    {
+        "content": "<p>why would you have a cas loop around the refcounter? why not just do an atomic inc/dec. Or, are you talking about loops in the assembly/CPU for lowered atomic ops?</p>",
+        "id": 393129374,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1695684475
+    },
+    {
+        "content": "<p>Oh wait, do we even have a loop currently, looking at the code, I don't see a loop currently.</p>",
+        "id": 393129548,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695684603
+    },
+    {
+        "content": "<p>I think our current code assumes that it is not possible to have enough references to roll over the 64bit count. Cause that would require 64bits worth of 64bit pointers to the object. Which is not possible. So we simplified our atomics to just be a check that the refcount is max (only happens for static values). Then just monotonically increment or decrement.</p>",
+        "id": 393129843,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695684823
+    },
+    {
+        "content": "<p>Also, I think we could remove a conditional in all of our refcounting.</p>",
+        "id": 393129997,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695684925
+    },
+    {
+        "content": "<p>due to limitations in memory space and number of possible references to the same value.</p>",
+        "id": 393130022,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695684952
+    },
+    {
+        "content": "<p>So currently, we can view our refcounting as a value from 0 to (2^63 - 1). When doing anything with refcounts, we first check if the value is (2^63 - 1). If so, we skip all refcounts because this is a constant static value.</p>\n<p>If you pack a 64 bit memory space with 64bit pointers, you get 2^64 / 8 bytes. That is a maximum of 2^61 references. So we have a few bits of references that are never possible to flip. The system will run out of memory first. So what if instead of checking that a refcount is (2^63 - 1), we always just increment and decrement refcounts. For a constant static value, we will just initialize the refcount to (2^62 - 1). Given it is impossible ever increment or decrement that value more than (2 ^ 61) times, that value will always remain a valid refcount. Now refcounting no longer needs a branch to handle constant values. Instead they are handled like any other value. Just with special initialization such that they will never increment or decrement too far. That should remove a branch from all refcounting calls.</p>",
+        "id": 393130929,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695685636
+    },
+    {
+        "content": "<p>Does that sound accurate?</p>",
+        "id": 393131039,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695685732
+    },
+    {
+        "content": "<p>Thinking about this more, we don't have to even initialize constants to (2^62 - 1). We could initialize to just 2. Then when everything is decremented, there will be 1 extra refcount lying around. So we won't try freeing the constant. Then when we next load the constant, we would increment back to 2 again and start the cycle again.</p>",
+        "id": 393132739,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695686949
+    },
+    {
+        "content": "<p>So basically treat constants like normal values but with a single extra refcount so that we never free them. Given we can never increment so much that the counter overflows, that should just work.</p>",
+        "id": 393132837,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695687007
+    },
+    {
+        "content": "<p>So no special constant branch.</p>",
+        "id": 393132862,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695687025
+    },
+    {
+        "content": "<p>whoa, I never thought of that! <span aria-label=\"exploding head\" class=\"emoji emoji-1f92f\" role=\"img\" title=\"exploding head\">:exploding_head:</span></p>",
+        "id": 393144111,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1695693249
+    },
+    {
+        "content": "<p>(earlier, I was thinking we'd need a loop to enforce the lock; I had the misimpression that atomic increment required this, but apparently there are individual instructions for that!)</p>",
+        "id": 393144117,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1695693253
+    },
+    {
+        "content": "<p>that's a really sweet design for constants and I can't think of a reason not to switch to it</p>",
+        "id": 393144390,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1695693443
+    },
+    {
+        "content": "<p>I can think of 1 reason. Current constants can live in the read only sections. If we mess something up and accidentally write to them, the program will crash and the user will file a bug report.</p>\n<p>With the new setup, they must be in a writable data section. If we mess something up, we will silently corrupt the constant and all uses of it afterwards. So the current form is minorly more protected from compiler bugs.</p>",
+        "id": 393146125,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695694440
+    },
+    {
+        "content": "<p>yeah that's fair, although if platform bugs are on the table, it's also always possible today that the platform author could forget to check for the special case</p>",
+        "id": 393149749,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1695696393
+    },
+    {
+        "content": "<p>but either way, it seems like saving a conditional (which will sometimes be mispredicted!) from every single refcount is worth that downside</p>",
+        "id": 393149848,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1695696464
+    },
+    {
+        "content": "<p>Yeah, totally agree, just noting</p>",
+        "id": 393153169,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695698455
+    },
+    {
+        "content": "<p>when talking to Matt Godbolt about this idea, I realized we'd need to store static things in the globals section of the binary instead of readonly, because if we're storing them as refcount = 2 instead of refcount = \"never change this\" then we wouldn't be able to tell that they're immortal anymore</p>",
+        "id": 393979883,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1696010317
+    },
+    {
+        "content": "<p>but that actually seems good, because it means we can skip a check on every single refcount, and have the refcounting logic always be:</p>\n<ul>\n<li>decrement (atomically or not)</li>\n<li>if the refcount is now 0, deallocate</li>\n</ul>\n<p>and that's it!</p>",
+        "id": 393980018,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1696010367
+    },
+    {
+        "content": "<blockquote>\n<p>I realized we'd need to store static things in the globals section of the binary instead of readonly</p>\n</blockquote>\n<p>Yeah, I mentioned that above</p>",
+        "id": 393981630,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1696011002
+    },
+    {
+        "content": "<p>another thought about this: in a world where we do atomic refcounting, couldn't we have contention on our (unnecessary, but done anyway to save a conditional) atomic incr/decr on the global for a static allocation?</p>",
+        "id": 400334629,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699140764
+    },
+    {
+        "content": "<p>if so, that could in some situations end up being a higher runtime cost than a branch</p>",
+        "id": 400334704,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699140850
+    },
+    {
+        "content": "<p>Global would only have issues when growing and needing to reallocate. The rest of the time any number of accesses can happen at once. So only an issue when adding new refcounts and having no space remaining.</p>",
+        "id": 400334707,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699140861
+    },
+    {
+        "content": "<p>sorry, this is a different thread <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 400334722,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699140900
+    },
+    {
+        "content": "<p>(I mean, I intentionally was revisiting a previous thread - this isn't the discussion we've been having earlier today!)</p>",
+        "id": 400334738,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699140938
+    },
+    {
+        "content": "<p>oops my bad</p>",
+        "id": 400334799,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699141006
+    },
+    {
+        "content": "<p>so the specific scenario I'm imagining here is that we always atomically increment or decrement the refcount without first having a branch to see if it's a static allocation...but then in some cases we end up with contention on those static allocations' refcounts, which might be more costly than the branch would have been</p>",
+        "id": 400334816,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699141051
+    },
+    {
+        "content": "<p>yes, yes we could</p>",
+        "id": 400334817,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699141052
+    },
+    {
+        "content": "<p>seems unlikely to happen often, but it's possible I guess</p>",
+        "id": 400334828,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699141070
+    },
+    {
+        "content": "<p>I think it is pretty easy to imagine a program with a global that is referenced all the time but never modified.</p>",
+        "id": 400334890,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699141113
+    },
+    {
+        "content": "<p>that would be a lot of unnecessary atomic updates to access static data</p>",
+        "id": 400334903,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699141134
+    },
+    {
+        "content": "<p>sure...I guess it would depend on how good we could get at eliding refcounts</p>",
+        "id": 400334916,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699141154
+    },
+    {
+        "content": "<p>And the global probably is data that is accessed in every thread.</p>",
+        "id": 400334918,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699141156
+    },
+    {
+        "content": "<p>actually maybe that wouldn't help, like if you wanted to put a global in a bunch of collections on different threads, that would do it</p>",
+        "id": 400334941,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699141202
+    },
+    {
+        "content": "<p>Given atomic refcounts are expensive. Maybe if we are going to do an atomic refount then it is worth adding an extra branch that the pointer location is not in the read only data section?</p>",
+        "id": 400335147,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699141479
+    },
+    {
+        "content": "<p>Or changing the generation completely back to what we currently have</p>",
+        "id": 400335195,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699141559
+    },
+    {
+        "content": "<p>We can pick two totally different schemes here. They don't have to both do the same thing</p>",
+        "id": 400335239,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699141578
+    },
+    {
+        "content": "<p>one thing I wonder: supposing we went with the \"don't branch\" design, and someone actually found themselves in a situation where contention on statics was a problem...what would be the best strategy for them to try to fix the performance problem? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 400336236,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699142629
+    },
+    {
+        "content": "<p>Do something to cause a local clone on all threads</p>",
+        "id": 400336305,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699142666
+    },
+    {
+        "content": "<p>reference that local clone</p>",
+        "id": 400336316,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699142679
+    },
+    {
+        "content": "<p>one potential idea that might be more complicated than it's worth: use the cpuid instruction to get an integer index of what core we're on, use that as an offset to some fixed location in memory (e.g. a global), and then use a branchless cmov to increment either that address (if this is a static) or else the requested one</p>",
+        "id": 400337559,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699143730
+    },
+    {
+        "content": "<p>so that would be even more instructions than a branch, but it would result in no contention for statics because they're always incrementing or decrementing an address that's unique per cpu core</p>",
+        "id": 400337610,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699143780
+    },
+    {
+        "content": "<p>and also no branch mispredictions (unlike the branchy version)</p>",
+        "id": 400337632,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699143800
+    },
+    {
+        "content": "<p>apparently cpuid takes multiple cycles though, so probably not worth it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 400337902,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699143997
+    },
+    {
+        "content": "<p>I think maybe the way to go here is:</p>\n<ul>\n<li>remove the branch</li>\n<li>be open to adding it back with a flag if someone actually runs into a contention problem in practice and there's no local workaround that's feasible</li>\n</ul>",
+        "id": 400390693,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699186856
+    },
+    {
+        "content": "<p>because it's very unclear whether this downside would actually ever come up in practice in a way that would be worth solving, and I don't think there's any other realistic way to find out whether it actually comes up besides just doing the experiment and finding out empirically</p>",
+        "id": 400390805,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699186967
+    },
+    {
+        "content": "<p>separately, I'm coming around to the idea that we might just want to always atomically refcount - unless <em>maybe</em> we want to have a global configuration option platforms can set which opts out of it</p>",
+        "id": 400390903,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699187050
+    },
+    {
+        "content": "<p>I'm increasingly skeptical that fancier designs would actually pay for themselves <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 400391422,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699187593
+    },
+    {
+        "content": "<p>in practice I mean</p>",
+        "id": 400391430,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699187609
+    },
+    {
+        "content": "<p>if there's a way we could do escape analysis internally to skip atomic refcounting if we know it doesn't escape to the platform, that seems reasonable (assuming we can actually pull off such an optimization), although technically the platform does make those allocations, so we'd need to make it clear that they shouldn't share arbitrary opaque roc_alloc allocations across threads, because some of them might be non-atomically refcounted</p>",
+        "id": 400391714,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699187884
+    },
+    {
+        "content": "<p>oh yeah, another consideration is that since atomic increments and decrements only take a few cycles if there's no contention, that both reduces the chance of contention in the first place and also means that the delay caused by contention is smaller</p>",
+        "id": 400392442,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699188626
+    },
+    {
+        "content": "<p>at which point it starts to become important to wonder which causes more delay: contention (to the tune of a few cycles at a time) or branching (where mispredictions also cause a delay of a few cycles at a time)</p>",
+        "id": 400392485,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699188708
+    },
+    {
+        "content": "<p>I can imagine scenarios where either one is much more impactful than the other, but the scenarios where contention is more impactful seem much less likely to come up in practice</p>",
+        "id": 400392587,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699188782
+    },
+    {
+        "content": "<p>one other thing potentially worth noting: I can imagine this not being worth it in practice, but theoretically we could generate additional specializations of functions based on their arguments needing atomic refcounts, non atomic refcounts, or no refcounting (static).</p>\n<p>that would be more work for the compiler to track, and could substantially increase generated binary size</p>",
+        "id": 400392934,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699189139
+    },
+    {
+        "content": "<p>hm, I guess a point in favor of branching is that it reduces memory cache usage <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 400400303,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699196062
+    },
+    {
+        "content": "<p>one branch misprediction per static might be less costly than having to load its refcount into cache</p>",
+        "id": 400400437,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699196187
+    },
+    {
+        "content": "<p>apparently Swift does a branch, and they also call it \"immortal\" memory <a href=\"https://forums.swift.org/t/pitch-core-team-publishes-results-of-performance-study-cooperative-scheduler-just-introduced-plus-compile-for-non-atomic-arc/65632/27\">https://forums.swift.org/t/pitch-core-team-publishes-results-of-performance-study-cooperative-scheduler-just-introduced-plus-compile-for-non-atomic-arc/65632/27</a></p>",
+        "id": 400400481,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699196253
+    },
+    {
+        "content": "<p>I would expect the branch to be far faster than the atomic refcount update (even without contention) on all but Apple M Processor.</p>",
+        "id": 400404007,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699199204
+    },
+    {
+        "content": "<p>With contention, I would expect the branch to always be faster.</p>",
+        "id": 400404073,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699199279
+    },
+    {
+        "content": "<p>This should generally be a trivial to predict branch</p>",
+        "id": 400404125,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699199302
+    },
+    {
+        "content": "<p>yeah unless there's a bunch of alternating refcounts of static and non static <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 400405903,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699200883
+    },
+    {
+        "content": "<p>so maybe we should keep the branch after all</p>",
+        "id": 400405912,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699200892
+    },
+    {
+        "content": "<p>with all that in mind</p>",
+        "id": 400405919,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699200903
+    },
+    {
+        "content": "<p>I guess we only skip the memory load for statics if we can know it's static without looking at the refcount</p>",
+        "id": 400407695,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699202638
+    },
+    {
+        "content": "<p>so for that we'd either need to look at the address of the pointer to see if it's in the readonly range, or else track refcount location separately</p>",
+        "id": 400407753,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699202675
+    },
+    {
+        "content": "<blockquote>\n<p>yeah unless there's a bunch of alternating refcounts of static and non static <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>\n</blockquote>\n<p>I would still expect it to likely be in a predictable form when looking at a long enough global branch history (which modern process do). So I don't think alternating would likely be a problem unless you are constantly reordering the alternating pattern.</p>",
+        "id": 400407869,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699202795
+    }
+]

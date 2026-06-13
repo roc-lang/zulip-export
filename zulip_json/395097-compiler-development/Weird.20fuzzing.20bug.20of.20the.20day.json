@@ -1,0 +1,1442 @@
+[
+    {
+        "content": "<p>If there's a weird way for features to interact, fuzzing seems to reliably find it. So, brain teaser:</p>\n<p>When parsed and formatted, <code>dbg dbg g g</code> yields: <code>dbg (dbg g g)</code></p>\n<p>Is that the same thing? Why or why not?</p>",
+        "id": 482907910,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731888461
+    },
+    {
+        "content": "<p>Why does it add the parens?</p>",
+        "id": 482908225,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731888747
+    },
+    {
+        "content": "<p>Wouldn't that parse as a function call with three arguments?</p>",
+        "id": 482908232,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731888765
+    },
+    {
+        "content": "<p>I would expect that to fail typechecking or something later, but for the sake of parsing/formatting it should be no different to say <code>foo 1 2 3</code> right?</p>",
+        "id": 482908270,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731888812
+    },
+    {
+        "content": "<p>It _is_ different, because there are two different ways <code>dbg</code> is parsed :/</p>",
+        "id": 482908803,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731889299
+    },
+    {
+        "content": "<p>The same thing doesn't happen with <code>foo foo g g</code></p>",
+        "id": 482908815,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731889318
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>* * * AST before formatting:\nExpr(\n    SpaceAfter(\n        Apply(\n            @0-11 Dbg,\n            [\n                @4-11 Apply(\n                    @4-7 Dbg,\n                    [\n                        @8-9 Var {\n                            module_name: &quot;&quot;,\n                            ident: &quot;g&quot;,\n                        },\n                        @10-11 Var {\n                            module_name: &quot;&quot;,\n                            ident: &quot;g&quot;,\n                        },\n                    ],\n                    Space,\n                ),\n            ],\n            Space,\n        ),\n        [\n            Newline,\n        ],\n    ),\n)\n\n* * * AST after formatting:\nExpr(\n    Apply(\n        Dbg,\n        [\n            Apply(\n                Dbg,\n                [\n                    Apply(\n                        Var {\n                            module_name: &quot;&quot;,\n                            ident: &quot;g&quot;,\n                        },\n                        [\n                            Var {\n                                module_name: &quot;&quot;,\n                                ident: &quot;g&quot;,\n                            },\n                        ],\n                        Space,\n                    ),\n                ],\n                Space,\n            ),\n        ],\n        Space,\n    ),\n)\n</code></pre></div>",
+        "id": 482908863,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731889336
+    },
+    {
+        "content": "<p>The key is that <code>dbg</code> in the outer context is parsing as a dbg statement, so it gobbles up the rest of the string - and then prior to formatting (haven't quite identified where...) this gets converted to a Dbg expression, which of course must follow the usual rules for how calls work - and so we introduce parens in the formatter to (try to) preserve that nesting order.</p>",
+        "id": 482908936,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731889430
+    },
+    {
+        "content": "<p>... but unbeknownst to the formatter, adding the parens triggers that inner thing to be a new \"defs\" context, which allows the inner dbg to parse as a dbg statement instead of a dbg expression.</p>",
+        "id": 482909001,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731889475
+    },
+    {
+        "content": "<p>I guess it needs to be parsed as a special keyword because we don't have statements in roc, like user space function call on a line by itself.</p>",
+        "id": 482909129,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731889575
+    },
+    {
+        "content": "<p>I'm looking at </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">dbg_kw</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">impl</span><span class=\"w\"> </span><span class=\"n\">Parser</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Expr</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">EExpect</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"k\">move</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"n\">arena</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"nc\">Bump</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">state</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">State</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">min_indent</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">next_state</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">            </span><span class=\"n\">parser</span><span class=\"p\">::</span><span class=\"n\">keyword</span><span class=\"p\">(</span><span class=\"n\">keyword</span><span class=\"p\">::</span><span class=\"n\">DBG</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">EExpect</span><span class=\"p\">::</span><span class=\"n\">Dbg</span><span class=\"p\">).</span><span class=\"n\">parse</span><span class=\"p\">(</span><span class=\"n\">arena</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">state</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">min_indent</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n\n<span class=\"w\">        </span><span class=\"nb\">Ok</span><span class=\"p\">((</span><span class=\"n\">MadeProgress</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">Expr</span><span class=\"p\">::</span><span class=\"n\">Dbg</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">next_state</span><span class=\"p\">))</span>\n<span class=\"w\">    </span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"p\">.</span><span class=\"n\">trace</span><span class=\"p\">(</span><span class=\"s\">\"dbg_kw\"</span><span class=\"p\">)</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>In the <code>parser::keyword</code> should we prevent two keywords in sequence, like <code>if if</code> or <code>dbg dbg</code>?</p>",
+        "id": 482909271,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731889707
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"453336\">Joshua Warner</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Weird.20fuzzing.20bug.20of.20the.20day/near/482907910\">said</a>:</p>\n<blockquote>\n<p>If there's a weird way for features to interact, fuzzing seems to reliably find it. So, brain teaser:</p>\n<p>When parsed and formatted, <code>dbg dbg g g</code> yields: <code>dbg (dbg g g)</code></p>\n<p>Is that the same thing? Why or why not?</p>\n</blockquote>\n<p>that seems correct, but I don't like that it seems correct <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 482912508,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731892657
+    },
+    {
+        "content": "<p>in the sense that <code>dbg</code> doesn't accept multiple arguments, so whatever comes after it must be its own self-contained expression (hence the parens)</p>",
+        "id": 482912575,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731892702
+    },
+    {
+        "content": "<p>but although it's logical, I don't like it <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 482912586,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731892716
+    },
+    {
+        "content": "<p>The core of the weirdness here is that we have two fundamental the different precedence levels for dbg statements: at the statement level, it has a very low precedence, but if the expression level it has the same precedence as other function applications.</p>",
+        "id": 482913557,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731893484
+    },
+    {
+        "content": "<p>One way to fix that would be to standardize on dbg always having function level precedents - effectively, eliminating the statement level dbg.</p>",
+        "id": 482913635,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731893539
+    },
+    {
+        "content": "<p>On the other hand, we could move even the expression level dbg to have a very low precedence, and operate the same way as the statement level dbg.</p>",
+        "id": 482913673,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731893573
+    },
+    {
+        "content": "<p>Or, if we just want to fix this one particular thing, we can teach the formatter not to introduce parentheses in the case where it would matter and change how this inner statement is parsed. But that feels pretty hacky?</p>",
+        "id": 482913737,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731893640
+    },
+    {
+        "content": "<p>Actually not sure that last option will be very feasible...</p>",
+        "id": 482920744,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731899036
+    },
+    {
+        "content": "<p>personally I'm okay with the status quo</p>",
+        "id": 482921217,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731899433
+    },
+    {
+        "content": "<p>on the grounds that I don't think anyone is likely to ever write it on purpose</p>",
+        "id": 482921230,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731899441
+    },
+    {
+        "content": "<p>also in the parens-and-commas world you'd have to write it like <code>dbg(dbg(g, g))</code> or <code>dbg(dbg, g, g)</code> anyway so there wouldn't be any strangeness</p>",
+        "id": 482921271,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731899479
+    },
+    {
+        "content": "<p>I would like to fix this invariant violation somehow</p>",
+        "id": 482921374,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731899534
+    },
+    {
+        "content": "<p>I do eventually want to get \"fuzz-clean\", which then means we have strong properties that you can trust of the parser and formatter</p>",
+        "id": 482921412,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731899575
+    },
+    {
+        "content": "<p>And after that, move on to fuzzing other areas of the compiler ;)</p>",
+        "id": 482921478,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731899638
+    },
+    {
+        "content": "<p>IMO the status quo is a bit hard to understand because there are two different rules for how you have to parenthesize things in <code>dbg</code>, depending on where it is</p>",
+        "id": 482921564,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731899695
+    },
+    {
+        "content": "<p>Concretely, <code>dbg f g</code> is fine at the top level, and operates like <code>dbg (f g)</code> - but if it's inside an expression somewhere you have to do <code>dbg (f g)</code>.</p>",
+        "id": 482921726,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731899840
+    },
+    {
+        "content": "<p>This fuzzer-found bug is a very round about way of describing that weirdness</p>",
+        "id": 482921755,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731899873
+    },
+    {
+        "content": "<p>a straightforward fix would be to have <code>dbg</code> \"accept\" multiple arguments, like a function call, at the parsing level</p>",
+        "id": 482923306,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731901184
+    },
+    {
+        "content": "<p>and then give a canonicalization error for too many args passed to <code>dbg</code></p>",
+        "id": 482923315,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731901192
+    },
+    {
+        "content": "<p>Yep, and that's how <code>dbg</code> works at the \"expression\" level</p>",
+        "id": 482923371,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731901213
+    },
+    {
+        "content": "<p>yeah so we could do the same at the statement level</p>",
+        "id": 482923379,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731901221
+    },
+    {
+        "content": "<p>Aha yeah; that's what I was thinking as well :)</p>",
+        "id": 482923387,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731901237
+    },
+    {
+        "content": "<p>A slightly further change would be to make us parse <code>dbg</code> identically regardless of the context</p>",
+        "id": 482923418,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731901273
+    },
+    {
+        "content": "<p>Given the thing we just agreed upon above, the remaining difference is that <code>dbg</code> at the statement level can currently introduce a block - e.g.:</p>\n<div class=\"codehilite\"><pre><span></span><code>dbg\n   x = 1\n   x\n</code></pre></div>",
+        "id": 482923484,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731901323
+    },
+    {
+        "content": "<p>That seems much less useful than it is in the <code>expect</code> context, so my initial instinct is to go ahead and remove that ability</p>",
+        "id": 482923515,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731901348
+    },
+    {
+        "content": "<p>Note that you can always do:</p>\n<div class=\"codehilite\"><pre><span></span><code>dbg (\n    x = 1\n    x\n)\n</code></pre></div>\n<p>... if you really need to</p>",
+        "id": 482923533,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731901369
+    },
+    {
+        "content": "<p>why couldn't you do it in the expression? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 482924086,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731901847
+    },
+    {
+        "content": "<p>(moved discussion to <a class=\"stream-topic\" data-stream-id=\"395097\" href=\"/#narrow/channel/395097-compiler-development/topic/Defs.20in.20arbitrary.20expressions\">#compiler development &gt; Defs in arbitrary expressions</a> )</p>",
+        "id": 482925001,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731902564
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"453336\">Joshua Warner</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Weird.20fuzzing.20bug.20of.20the.20day/near/482921412\">said</a>:</p>\n<blockquote>\n<p>I do eventually want to get \"fuzz-clean\", which then means we have strong properties that you can trust of the parser and formatter</p>\n</blockquote>\n<p>It would be cool to have a \"hey did you run the fuzzer\" as a requirement whenever someone updates anything syntax related. I'm guessing at the moment they would immediately run into these kind of issues, and so it wouldn't be as helpful for them?</p>",
+        "id": 482926959,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731903946
+    },
+    {
+        "content": "<p>You could have CI run the fuzzer for 30 seconds or a minute on each pr. Or do it a bit longer each nightly.</p>",
+        "id": 482927268,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731904158
+    },
+    {
+        "content": "<p>Nightly seems best, we don't want to confuse people with failures unrelated to their changes</p>",
+        "id": 482966526,
+        "sender_full_name": "Anton",
+        "timestamp": 1731921097
+    },
+    {
+        "content": "<p>Do we have a script or single command for the fuzzing?</p>",
+        "id": 482966733,
+        "sender_full_name": "Anton",
+        "timestamp": 1731921155
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>$ cd crates/compiler/test_syntax/fuzz\n$ cargo +nightly fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt\n</code></pre></div>\n<p>It's described in <code>crates/compiler/test_syntax/fuzz/README.md</code></p>",
+        "id": 482979412,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731924713
+    },
+    {
+        "content": "<p>Thanks :)</p>",
+        "id": 482981499,
+        "sender_full_name": "Anton",
+        "timestamp": 1731925258
+    },
+    {
+        "content": "<p>Assuming we iron out the current bugs, I think it is much nicer to do a bit per PR. Cause if it caches something it will almost certainly be a real bug from the PR.</p>",
+        "id": 483074475,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731949174
+    },
+    {
+        "content": "<p>Can always bisect instead, but it is more work</p>",
+        "id": 483074526,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731949190
+    },
+    {
+        "content": "<p>Also, if you can, make sure to save the corpus (and probably want to minimize it at the end of runs)</p>",
+        "id": 483074747,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731949234
+    },
+    {
+        "content": "<p>One caveat that I didn't realize immediately with moving _everything_ to use the expr-level <code>dbg</code> is that things like <code>dbg 1 + 1</code> will cease to work, and you'll have to write <code>dbg (1 + 1)</code>.<br>\nThoughts?</p>",
+        "id": 483179330,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1731990200
+    },
+    {
+        "content": "<p>seems reasonable, we'll see if people complain about it <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 483213775,
+        "sender_full_name": "Anton",
+        "timestamp": 1732007358
+    },
+    {
+        "content": "<p>I was also surprised when I first used debug that you didn’t have add parens around expressions like that so I think this just decreases the amount of surprise <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 483286556,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1732029054
+    },
+    {
+        "content": "<p>Given debug works as an expression, I would expect this to print 1:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">x</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">dbg</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"w\"> </span><span class=\"nf\">+</span><span class=\"w\"> </span><span class=\"mi\">1</span>\n</code></pre></div>\n<p>This prints 2</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">x</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">dbg</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"mi\">1</span><span class=\"w\"> </span><span class=\"nf\">+</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>That said, as a statement, I would expect different precedence. Though same precedence is ok. I would expect 2 from this</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">dbg</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"w\"> </span><span class=\"nf\">+</span><span class=\"w\"> </span><span class=\"mi\">1</span>\n</code></pre></div>",
+        "id": 483302292,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1732033252
+    },
+    {
+        "content": "<p>Could we make those use a different syntax?</p>",
+        "id": 483309291,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1732035048
+    },
+    {
+        "content": "<p>I think parens-and-commas fixes this, right?</p>",
+        "id": 483317413,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1732037401
+    },
+    {
+        "content": "<p>Yeah, I think so</p>",
+        "id": 483343582,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1732046631
+    },
+    {
+        "content": "<p>in that case I'd say we can go with whatever design most easily fixes the fuzzing case <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 483347434,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1732048102
+    },
+    {
+        "content": "<p>can always revisit later</p>",
+        "id": 483347450,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1732048110
+    },
+    {
+        "content": "<p>Here's the diff to do that, with some refactoring to make the required transformations in <code>can</code> easier: <a href=\"https://github.com/roc-lang/roc/pull/7239\">https://github.com/roc-lang/roc/pull/7239</a></p>",
+        "id": 483830468,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1732246622
+    },
+    {
+        "content": "<p>This relegates Expr::Defs to only be used between desugaring and the main canonicalization phase, and instead uses Expr::Stmts as the representation that comes out of the parser.</p>",
+        "id": 483830525,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1732246675
+    },
+    {
+        "content": "<p>Note that the list of stmts already existed as an intermediate representation in the parser - so this isn't introducing a new step, it's just moving it around.</p>",
+        "id": 483830629,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1732246745
+    },
+    {
+        "content": "<p>One of the ancillary benefits here is that some things that used to be a parse errors, and thus completely blocked running the code (e.g. missing a final expression in a defs), are now canonicalization errors where they can be non-fatal</p>",
+        "id": 483830810,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1732246886
+    },
+    {
+        "content": "<p>Ok, with that out of the way, I was able to fix a bunch of other bugs found in fuzzing here: <a href=\"https://github.com/roc-lang/roc/pull/7267\">https://github.com/roc-lang/roc/pull/7267</a></p>\n<p>Not yet at the end of it, but I at least feel like it's still finding interesting things that'd be possible for users to hit, rather than trivial problems.</p>\n<p>Was hoping to get fully to \"fuzz clean\" before submitting the next PR - but these fixes have been piling up for too long now.</p>",
+        "id": 485024957,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1732858402
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>...\n#1863400: cov: 47740 ft: 42904 corp: 11904 exec/s 1197 oom/timeout/crash: 0/0/0 time: 397s job: 52 dft_time: 0\n#1936387: cov: 47842 ft: 42918 corp: 11911 exec/s 1351 oom/timeout/crash: 0/0/0 time: 412s job: 53 dft_time: 0\n#1985095: cov: 47873 ft: 42933 corp: 11917 exec/s 885 oom/timeout/crash: 0/0/0 time: 427s job: 54 dft_time: 0\n#2068034: cov: 47874 ft: 42945 corp: 11925 exec/s 1481 oom/timeout/crash: 0/0/0 time: 441s job: 55 dft_time: 0\n#2105228: cov: 47882 ft: 42948 corp: 11928 exec/s 652 oom/timeout/crash: 0/0/0 time: 455s job: 56 dft_time: 0\n#2184903: cov: 47914 ft: 42959 corp: 11937 exec/s 1373 oom/timeout/crash: 0/0/0 time: 471s job: 57 dft_time: 0\n#2262528: cov: 47917 ft: 42960 corp: 11938 exec/s 1315 oom/timeout/crash: 0/0/0 time: 486s job: 58 dft_time: 0\n#2335873: cov: 47986 ft: 42969 corp: 11944 exec/s 1222 oom/timeout/crash: 0/0/0 time: 501s job: 59 dft_time: 0\n#2388073: cov: 48069 ft: 42995 corp: 11954 exec/s 855 oom/timeout/crash: 0/0/0 time: 517s job: 60 dft_time: 0\n#2468634: cov: 48092 ft: 43009 corp: 11962 exec/s 1299 oom/timeout/crash: 0/0/0 time: 534s job: 61 dft_time: 0\n#2548301: cov: 48139 ft: 43018 corp: 11970 exec/s 1264 oom/timeout/crash: 0/0/0 time: 550s job: 62 dft_time: 0\n#2623369: cov: 48172 ft: 43021 corp: 11972 exec/s 1172 oom/timeout/crash: 0/0/0 time: 566s job: 63 dft_time: 0\n#2701742: cov: 48202 ft: 43039 corp: 11983 exec/s 1205 oom/timeout/crash: 0/0/0 time: 583s job: 64 dft_time: 0\n#2748245: cov: 48243 ft: 43046 corp: 11987 exec/s 704 oom/timeout/crash: 0/0/0 time: 601s job: 65 dft_time: 0\nINFO: fuzzed for 601 seconds, wrapping up soon\nINFO: exiting: 0 time: 602s\n</code></pre></div>\n<p>And there is the sweet sweet sound of the fuzzer not having found any problems in 10 minutes of fuzzing.</p>",
+        "id": 485754738,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733201439
+    },
+    {
+        "content": "<p>Yay for arbitrary goals</p>",
+        "id": 485754760,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733201450
+    },
+    {
+        "content": "<p>PR here: <a href=\"https://github.com/roc-lang/roc/pull/7301\">https://github.com/roc-lang/roc/pull/7301</a></p>",
+        "id": 485754998,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733201581
+    },
+    {
+        "content": "<p>Note that one of the changes I'm including here is removing the ability for joining neighboring annotations+bodies if the patterns are not \"equivalent\", discussed here: <a href=\"#narrow/channel/395097-compiler-development/topic/Merging.20non-equivalent.20annotations.20.2B.20bodies.3F/near/485732867\">https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/Merging.20non-equivalent.20annotations.20.2B.20bodies.3F/near/485732867</a></p>",
+        "id": 485755019,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733201592
+    },
+    {
+        "content": "<p>That much is probably worth discussing prior to actually merging. I can fairly easily back that commit out and fix that fuzzing issue separately if need be.</p>",
+        "id": 485755069,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733201617
+    },
+    {
+        "content": "<p>Well done! This is great to see. Feels good</p>",
+        "id": 485755543,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733201863
+    },
+    {
+        "content": "<p>Indeed</p>",
+        "id": 485755554,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733201870
+    },
+    {
+        "content": "<p>That was a long time coming</p>",
+        "id": 485755565,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733201873
+    },
+    {
+        "content": "<p>If I could quickly TL;DR the <a href=\"https://github.com/roc-lang/roc/issues/1\">#1</a> learning here, it's: spaces are \"slippery\", and if they have any room to slide around, chaos ensues.</p>\n<p>For example, and eliding some of the fields of these things, you can have these two trees that are logically equivalent:</p>\n<div class=\"codehilite\"><pre><span></span><code>SpaceBefore(Apply(Dbg, [...]))\nApply(SpaceBefore(Dbg), [...])\n</code></pre></div>\n<p>i.e. both represent having placed the spaces at the same place in the file.</p>\n<p>Or similarly, where each element in a series of Defs has both \"spaces_before\" and \"spaces_after\".</p>\n<p>I'm not sure if the parser would ever produce that exact example, but there definitely are a bunch of other possible cases where spaces can \"slide\" around while still being in logically the same place.</p>\n<p>That's what all the <code>expr_lift_spaces</code>, <code>pattern_lift_spaces</code>, etc stuff in these recent diffs have been: trying to normalize the placing of those spaces, \"lifting\" it up to the highest part of the tree it can be.</p>",
+        "id": 485756343,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733202241
+    },
+    {
+        "content": "<p>This \"sliding\" is particularly prone to happening if the formatter decides to add or remove parentheses</p>",
+        "id": 485756914,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733202535
+    },
+    {
+        "content": "<p>Another footgun in the formatter is that <code>is_multiline()</code> must correctly predict what <code>.format_with_options(...)</code> will do, and if we have some subtle logic that sometimes adds a newline to the output in the <code>.format_with_options(...)</code> impl, it's easy to forget to make <code>.is_multiline()</code> account for that. The rules to format a string as a block string if it contains a newline or quote char have been particularly annoying here.</p>",
+        "id": 485757285,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733202728
+    },
+    {
+        "content": "<p>The solution to both of those that I'm very slowly working towards is to add an intermediate stage of processing that gives a heavily-normalized version of the expression from which <code>is_multiline</code> can be calculated trivially and 100% correctly.</p>",
+        "id": 485757545,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733202893
+    },
+    {
+        "content": "<p>Today that's taking the form of <code>expr_lift_spaces</code>/etc - but there are hints of my eventual plans with <code>ann_lift_to_node</code>: that's the barest sketch of that normalized form. I added that in this case in order to make sure the decision of whether a type annotation needs parens consistent in a couple key spots.</p>",
+        "id": 485757854,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733203059
+    },
+    {
+        "content": "<p>I put up an initial sketch of doing fuzzing in CI here: <a href=\"https://github.com/roc-lang/roc/pull/7316\">https://github.com/roc-lang/roc/pull/7316</a></p>\n<p>Would love some help getting this properly set up since I really don't know what I'm doing, and this is me just flailing around.</p>\n<p>In particular, I'm guessing that we'll have problems with making sure the nightly version of cargo is installed. There may also be problems with nix/</p>",
+        "id": 486620624,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733535741
+    },
+    {
+        "content": "<p>Does the fuzzer work inside nix? I'd just add it as another step for one of our existing nix runs</p>",
+        "id": 486621668,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733536638
+    },
+    {
+        "content": "<p>It doesn't need to run on all the different os/archs</p>",
+        "id": 486621678,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733536654
+    },
+    {
+        "content": "<p>Yeah, no need for different architectures.</p>",
+        "id": 486621736,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733536690
+    },
+    {
+        "content": "<p>Like in <code>.github/workflows/nix_linux_x86_64.yml</code></p>",
+        "id": 486621740,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733536695
+    },
+    {
+        "content": "<p>The only thing I'm not sure about is how to get the nightly compiler working in CI with nix. Fuzzing requires running nightly compiler, and doesn't work on stable.</p>",
+        "id": 486621766,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733536729
+    },
+    {
+        "content": "<p>The rust compiler I mean.</p>",
+        "id": 486621779,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733536747
+    },
+    {
+        "content": "<p>Just copy the commands already there I think</p>",
+        "id": 486621786,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733536760
+    },
+    {
+        "content": "<p><code>nix develop -c</code> ... maybe we add a bash<code>.sh</code> script that runs the fuzzer</p>",
+        "id": 486621805,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733536785
+    },
+    {
+        "content": "<p>I'd give this a try</p>\n<div class=\"codehilite\"><pre><span></span><code>- name: run fuzz tests\n        run: |\n          cd crates/compiler/test_syntax/fuzz\n          nix develop -c cargo +nightly fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60\n</code></pre></div>",
+        "id": 486621951,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733536841
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> may not have the nightly toolchain on the self-hosted machine.. but that should be an easy fix</p>",
+        "id": 486622073,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733536943
+    },
+    {
+        "content": "<p>One reason we might want this to be part of a separate job is so that we can configure it to be not blocking merging of PRs until we're confident that it's very stable.</p>",
+        "id": 486622384,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733537261
+    },
+    {
+        "content": "<p>I'm just throwing ideas around for how to get it working... I think <span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> will definitely have some things to say on this. But the more we can do to set it up and have something working for him, the easier to get to the desired end state is my thinking.</p>",
+        "id": 486622474,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733537331
+    },
+    {
+        "content": "<p>Here's the current failure mode:</p>\n<div class=\"codehilite\"><pre><span></span><code> path &#39;/home/small-ci-user/actions-runner/_work/roc/roc/crates/compiler/test_syntax/fuzz&#39; does not contain a &#39;flake.nix&#39;, searching up\nerror: no such command: `+nightly`\n\n    Cargo does not handle `+toolchain` directives.\n    Did you mean to invoke `cargo` through `rustup` instead?\n</code></pre></div>\n<p>It appears the <code>cargo</code> installed there is actual cargo instead of rustup, so it doesn't understand the <code>+nightly</code> thing.</p>",
+        "id": 486696047,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733598385
+    },
+    {
+        "content": "<p>Can you do <code>rustup +nightly cargo</code> (that might not be the right command, but something like that)</p>",
+        "id": 486696860,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733599094
+    },
+    {
+        "content": "<p>Cause I know we use rustup and the tool chain file</p>",
+        "id": 486696880,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733599111
+    },
+    {
+        "content": "<p>It's Anton's machine, we should just wait for him to jump online.</p>",
+        "id": 486698378,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733600391
+    },
+    {
+        "content": "<p>It's a self hosted runner</p>",
+        "id": 486698441,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733600414
+    },
+    {
+        "content": "<p>Ok, my most recent attempt seems to be getting closest... except the nightly toolchain isn't installed it looks like</p>\n<p>Config:</p>\n<div class=\"codehilite\"><pre><span></span><code>      - name: run fuzz tests\n        run: |\n          cd crates/compiler/test_syntax/fuzz\n          nix develop -c rustup run nightly cargo fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60\n</code></pre></div>\n<p>Output:</p>\n<div class=\"codehilite\"><pre><span></span><code> error: toolchain &#39;nightly-x86_64-unknown-linux-gnu&#39; is not installed\n</code></pre></div>",
+        "id": 486708467,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733608949
+    },
+    {
+        "content": "<p>Our nix rust version comes from <a href=\"https://github.com/roc-lang/roc/blob/861f9c5d47599147824a3732cf7c855ff5400d60/nix/default.nix#L3\">here</a>, getting the nightly in there too would require some fiddling. I recommend starting out with a new workflow using the runner <code>runs-on: [self-hosted, i7-6700K]</code>. I'll install nightly(rust toolchain) nightly-2024-02-03 on there, that one matches our current rust version and that way we don't need to install the latest every day.</p>",
+        "id": 486959264,
+        "sender_full_name": "Anton",
+        "timestamp": 1733740466
+    },
+    {
+        "content": "<p>It's installed, I expect this will work for your command <code>cargo +nightly-2024-02-03 fuzz ...</code></p>",
+        "id": 486962572,
+        "sender_full_name": "Anton",
+        "timestamp": 1733741390
+    },
+    {
+        "content": "<p>I think we'll also need a <code>cargo +nightly-2024-02-03 install cargo-fuzz</code> command as a preparatory step. Or should I put that in the job?</p>",
+        "id": 487288643,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733846898
+    },
+    {
+        "content": "<p>Yeah, you can put that in the job, it'll basically be zero cost if it is already installed</p>",
+        "id": 487293400,
+        "sender_full_name": "Anton",
+        "timestamp": 1733848170
+    },
+    {
+        "content": "<p>Ok, seems to be working! I currently have this in ubuntu_x86_64.yml, which may not be the ideal spot.</p>",
+        "id": 488003845,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733885681
+    },
+    {
+        "content": "<p>that file should be fine <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 488059311,
+        "sender_full_name": "Anton",
+        "timestamp": 1733911485
+    },
+    {
+        "content": "<p>We got our first fuzzer bug in the wild! <span aria-label=\"bug\" class=\"emoji emoji-1f41b\" role=\"img\" title=\"bug\">:bug:</span> <span aria-label=\"ladybug\" class=\"emoji emoji-1f41e\" role=\"img\" title=\"ladybug\">:ladybug:</span> </p>\n<p>In this CI run <a href=\"https://github.com/roc-lang/roc/actions/runs/12287783837/job/34290444406?pr=7335\">https://github.com/roc-lang/roc/actions/runs/12287783837/job/34290444406?pr=7335</a></p>\n<div class=\"codehilite\"><pre><span></span><code>INFO: exiting: 77 time: 33s\n\n────────────────────────────────────────────────────────────────────────────────\n\nFailing input:\n\n    artifacts/fuzz_expr/crash-7f53e1d94350d5255f7f9bfdbedaff7665f10a0b\n\nOutput of `std::fmt::Debug`:\n\n    [50, 45, 52, 10, 46, 116, 10, 10, 33, 10, 10, 38, 112, 122, 50, 112, 122, 46, 116, 10, 10, 33, 10, 38, 112, 114, 118, 111, 105, 100, 101, 115, 33, 61, 61, 101, 74]\n\nReproduce with:\n\n    cargo fuzz run --sanitizer=none fuzz_expr artifacts/fuzz_expr/crash-7f53e1d94350d5255f7f9bfdbedaff7665f10a0b\n\nMinimize test case with:\n\n    cargo fuzz tmin --sanitizer=none fuzz_expr artifacts/fuzz_expr/crash-7f53e1d94350d5255f7f9bfdbedaff7665f10a0b\n\n────────────────────────────────────────────────────────────────────────────────\n\nError: Fuzz target exited with exit status: 77\nError: Process completed with exit code 1.\n</code></pre></div>",
+        "id": 488533999,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733966744
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>2-4\n.t\n\n!\n\n&amp;pz2pz.t\n\n!\n&amp;prvoides!==eJ\n</code></pre></div>",
+        "id": 488534084,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733966792
+    },
+    {
+        "content": "<p>What's our plan if CI fails on a fuzzer bug... and it passes everything else? Merge the PR and log an issue with a repro?</p>",
+        "id": 488534279,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733966954
+    },
+    {
+        "content": "<p>Nvm, it looks like it cancels the rest of the run immediately</p>",
+        "id": 488534387,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733967018
+    },
+    {
+        "content": "<p>We should move fuzzing to the last step in that job, so we can be sure everything else succeeded</p>",
+        "id": 488535784,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733968122
+    },
+    {
+        "content": "<p>And obviously if this gets too noisy we should remove it or move it to a non-blocking job</p>",
+        "id": 488535796,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733968141
+    },
+    {
+        "content": "<p>Will take a look later tonight</p>",
+        "id": 488535814,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733968156
+    },
+    {
+        "content": "<p>The minimal repro here is:</p>\n<div class=\"codehilite\"><pre><span></span><code>4\n!\n&amp;z.t\n</code></pre></div>",
+        "id": 488538367,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733969988
+    },
+    {
+        "content": "<p>(found by putting that in a file called <code>todo</code> and then running <code>cargo run --bin minimize expr todo</code>)</p>",
+        "id": 488538435,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733970021
+    },
+    {
+        "content": "<p>Fixed here: <a href=\"https://github.com/roc-lang/roc/pull/7340\">https://github.com/roc-lang/roc/pull/7340</a></p>",
+        "id": 488540051,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733971184
+    },
+    {
+        "content": "<p>It'll still cancel all the other jobs early in CI Manager though right if this fails? I had a little investigation how to make it not do that, and I wasn't confident I could do it.</p>",
+        "id": 488540392,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733971408
+    },
+    {
+        "content": "<p>I didn't realize it canceled other jobs</p>",
+        "id": 488541467,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733972201
+    },
+    {
+        "content": "<p>Although, I think this is one of the longer running jobs, so maybe it will work out fine.</p>",
+        "id": 488541620,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733972299
+    },
+    {
+        "content": "<p>here's another! <a href=\"https://github.com/roc-lang/roc/actions/runs/12289072630/job/34293972798?pr=7337#step:8:5297\">https://github.com/roc-lang/roc/actions/runs/12289072630/job/34293972798?pr=7337#step:8:5297</a></p>",
+        "id": 488547467,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733976480
+    },
+    {
+        "content": "<p>Ooof</p>",
+        "id": 488547582,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733976532
+    },
+    {
+        "content": "<p>This is a little noisier than I was hoping for :/</p>",
+        "id": 488547590,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733976543
+    },
+    {
+        "content": "<p>I think I'm going to go ahead and disable it for now</p>",
+        "id": 488547602,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733976551
+    },
+    {
+        "content": "<p>That was before merging the other fix into main</p>",
+        "id": 488547645,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733976594
+    },
+    {
+        "content": "<p>could they both be hitting the same failure?</p>",
+        "id": 488547654,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733976600
+    },
+    {
+        "content": "<p>oh, nvm</p>",
+        "id": 488547749,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733976648
+    },
+    {
+        "content": "<p>missed the last commit being merging main</p>",
+        "id": 488547761,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733976658
+    },
+    {
+        "content": "<p>I'll run it for a bit while I'm in a meeting and see if I can find anything</p>",
+        "id": 488547821,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733976702
+    },
+    {
+        "content": "<p>actually my first statement is correct. That failure is before the fix on main. So main may be clean for fuzzing.</p>",
+        "id": 488547881,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733976724
+    },
+    {
+        "content": "<p>I just found a couple more things locally</p>",
+        "id": 488547897,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733976732
+    },
+    {
+        "content": "<p>Definitely not clean</p>",
+        "id": 488547911,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733976752
+    },
+    {
+        "content": "<p>ok</p>",
+        "id": 488547917,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733976755
+    },
+    {
+        "content": "<p>Actually, interesting fuzzing question here</p>",
+        "id": 488548055,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733976850
+    },
+    {
+        "content": "<p>Or perhaps language design question</p>",
+        "id": 488548067,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733976860
+    },
+    {
+        "content": "<p>Here's another </p>\n<div class=\"codehilite\"><pre><span></span><code>x\n!&amp;\n</code></pre></div>",
+        "id": 488548600,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733977104
+    },
+    {
+        "content": "<p>I've been running into a bunch of problems with <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/parse/src/expr.rs#L3192\">this logic</a> that sees what would usually be an Alias followed by a body and turns that into an annotation.</p>\n<p>It's very sensitive to where exactly the whitespace is attached, as well as some details like whether we're adding/removing parens around the pattern in the alias turned annotation.</p>\n<p>I'm not sure I've seen this logic kick in on actual example code. Is that needed/valuable?</p>",
+        "id": 488548665,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733977167
+    },
+    {
+        "content": "<p>Found another </p>\n<div class=\"codehilite\"><pre><span></span><code>1)\n</code></pre></div>",
+        "id": 488549190,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733977418
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> Maybe my 10 minute no-bugs-found run was lucky. And/or because I'm running it on relatively modest hardware (M1 macbook air)</p>",
+        "id": 488549270,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733977459
+    },
+    {
+        "content": "<p>I can make issues instead if you'd prefer <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span></p>",
+        "id": 488549272,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733977459
+    },
+    {
+        "content": "<p>I had to go into the office, for some meetings. I can sit here all afternoon poking at the fuzzer <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 488549337,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733977508
+    },
+    {
+        "content": "<p>This is a task I can excel at</p>",
+        "id": 488549353,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733977523
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> what were the errors those were failing with?</p>",
+        "id": 488549354,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733977523
+    },
+    {
+        "content": "<p>I'll make issues and copy it all in, with the minimisation too</p>",
+        "id": 488549390,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733977553
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/22008/s8crwMVhH9Xw2w3M5bh0SdyA/crash-d8c7b906b169f03d93286cac954573468ff5aae9\">crash-d8c7b906b169f03d93286cac954573468ff5aae9</a><br>\nI lost the history (can't scroll back far enough) for this one.</p>",
+        "id": 488549720,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733977769
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"453336\">Joshua Warner</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Weird.20fuzzing.20bug.20of.20the.20day/near/488548665\">said</a>:</p>\n<blockquote>\n<p>I've been running into a bunch of problems with <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/parse/src/expr.rs#L3192\">this logic</a> that sees what would usually be an Alias followed by a body and turns that into an annotation.</p>\n<p>It's very sensitive to where exactly the whitespace is attached, as well as some details like whether we're adding/removing parens around the pattern in the alias turned annotation.</p>\n<p>I'm not sure I've seen this logic kick in on actual example code. Is that needed/valuable?</p>\n</blockquote>\n<p>I don't think this is something people mess up in any significant amount in practice, so I'd say in this situation it sounds reasonable to change the parser to be more resilient to failure - even if that makes the grammar stricter</p>",
+        "id": 488550424,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733978161
+    },
+    {
+        "content": "<p>Ok, I'm going to try and not post ones that look like duplicates. Just noticing some of these might be for the same thing</p>",
+        "id": 488551064,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733978524
+    },
+    {
+        "content": "<blockquote>\n<p>it sounds reasonable to change the parser to be more resilient to failure</p>\n</blockquote>\n<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> What would you say to requiring parens around the pattern in this case?<br>\ne.g.</p>\n<div class=\"codehilite\"><pre><span></span><code>(UserId x) : [ UserId I64 ]\nUserId x = UserId 42\n</code></pre></div>\n<p>... and have the non-parens equivalent parse strictly as an Alias?</p>",
+        "id": 488551703,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733978948
+    },
+    {
+        "content": "<p>that seems fine for now...I don't think I've ever seen anyone write an annotation like that in practice <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 488553180,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733979899
+    },
+    {
+        "content": "<p>that is a valid annotation?</p>",
+        "id": 488553239,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733979949
+    },
+    {
+        "content": "<p>Can we just ban the parens there?</p>",
+        "id": 488553296,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733979970
+    },
+    {
+        "content": "<p>Not sure what you mean by ban?</p>",
+        "id": 488553371,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733980036
+    },
+    {
+        "content": "<p>Like, give a parse error?</p>",
+        "id": 488553509,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733980130
+    },
+    {
+        "content": "<p>yeah</p>",
+        "id": 488553683,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980247
+    },
+    {
+        "content": "<p>Though I guess roc is permissive...so remove with the formatter I guess...</p>",
+        "id": 488553708,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980265
+    },
+    {
+        "content": "<p>I don't think that actually helps in this situation, but I could be misunderstanding</p>",
+        "id": 488553730,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733980285
+    },
+    {
+        "content": "<p>well there ought to be <em>some</em> way to annotate that if you really want to</p>",
+        "id": 488553832,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733980342
+    },
+    {
+        "content": "<p>I guess, in my mind:</p>\n<p>This is normal code to see:</p>\n<div class=\"codehilite\"><pre><span></span><code>(UserId x) = UserId 42\n</code></pre></div>\n<p>This is abnormal code to see:</p>\n<div class=\"codehilite\"><pre><span></span><code>(UserId x) : [ UserId I64 ]\n</code></pre></div>",
+        "id": 488553840,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980349
+    },
+    {
+        "content": "<p>Why do you have to be able to annotate a pattern match?</p>",
+        "id": 488553930,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980429
+    },
+    {
+        "content": "<p>Right; I think that's what I was getting at earlier...</p>",
+        "id": 488553993,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733980457
+    },
+    {
+        "content": "<p>Like you don't annotate branches of a <code>when ... is</code></p>",
+        "id": 488553994,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980458
+    },
+    {
+        "content": "<p>I don't think you should be able to annotate this</p>",
+        "id": 488554010,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980472
+    },
+    {
+        "content": "<p>hm, that's interesting <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 488554050,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733980507
+    },
+    {
+        "content": "<p>Or you have to annotate it indirectly:</p>\n<div class=\"codehilite\"><pre><span></span><code>y : [ UserId I64 ]\ny = UserId 42\nUserId x = y\n</code></pre></div>",
+        "id": 488554054,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980511
+    },
+    {
+        "content": "<p>I hadn't thought about that perspective, but it would certainly simplify things!</p>",
+        "id": 488554072,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733980525
+    },
+    {
+        "content": "<p>so you can only annotate plain identifiers, not destructures</p>",
+        "id": 488554084,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733980535
+    },
+    {
+        "content": "<p>so you also couldn't annotate like <code>(a, b) =</code></p>",
+        "id": 488554098,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733980548
+    },
+    {
+        "content": "<p>yeah, that would be my take</p>",
+        "id": 488554100,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980549
+    },
+    {
+        "content": "<p>do people annotate destructures? I don't think I have ever seen that happen.</p>",
+        "id": 488554164,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980572
+    },
+    {
+        "content": "<p>given that people seem not to do that anyway, and that it definitely creates parsing problems, I'm on board with that plan</p>",
+        "id": 488554178,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733980584
+    },
+    {
+        "content": "<p>I think there's been plenty enough time of having it be supported to know that it hasn't seen significant use in practice <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 488554200,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733980611
+    },
+    {
+        "content": "<p>Also, when I initially saw this code, I thought it was a weird way to write a type alias.</p>\n<div class=\"codehilite\"><pre><span></span><code>(UserId x) : [ UserId I64 ]\n</code></pre></div>",
+        "id": 488554252,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980657
+    },
+    {
+        "content": "<p>Thought it was the same as:</p>\n<div class=\"codehilite\"><pre><span></span><code>UserId x : [ UserId I64 ]\n</code></pre></div>",
+        "id": 488554269,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733980678
+    },
+    {
+        "content": "<p>FWIW when I first encountered Roc, I was very confused that aliases look so much like annotations.</p>",
+        "id": 488554701,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733980957
+    },
+    {
+        "content": "<p>I didn't know you could annotate a pattern match. My mental model was; Uppercase is an Alias, Lowercase is an Annotation</p>",
+        "id": 488554869,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733981065
+    },
+    {
+        "content": "<p>~30mins on commit <code>9f395e033dfb9ade5c0642567f0dda8bbd1f2e5a</code></p>\n<p><a href=\"/user_uploads/22008/XqziOhICyZCXmTMQ1u6bYx9o/round-20.tar.gz\">round-20.tar.gz</a></p>\n<p><span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span></p>",
+        "id": 492881373,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736488300
+    },
+    {
+        "content": "<p>~12 hours on commit <code>9f395e033dfb9ade5c0642567f0dda8bbd1f2e5a</code></p>\n<p><a href=\"/user_uploads/22008/ODrfz6OqRbYv8HVE95XyhIdO/round-21.tar.gz\">round-21.tar.gz</a></p>",
+        "id": 493015746,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736538556
+    },
+    {
+        "content": "<p>~6 hours on commit <code>0471993428739cc754516c0e6c8a432895dbdaff</code></p>\n<p><a href=\"/user_uploads/22008/uixHdF0ZWkFecd4qgFmmRlBb/round-22.tar.gz\">round-22.tar.gz</a></p>",
+        "id": 493089444,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736595460
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/pull/7500\">https://github.com/roc-lang/roc/pull/7500</a> now has fixes for all these :)</p>",
+        "id": 493120189,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736622472
+    },
+    {
+        "content": "<p>~2 hours on commit <code>875e355b68d15334f13fad616d7fe5d0dbc055ce</code></p>\n<p><a href=\"/user_uploads/22008/meA8n4-xe-b5A7pRvkzsGeiz/round-23.tar.gz\">round-23.tar.gz</a></p>",
+        "id": 493129533,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736631518
+    },
+    {
+        "content": "<p>These are all <code>slow-unit-</code> or <code>oom-</code> results; i.e. the test framework thought those inputs took excessively long or consumed too much memory.</p>\n<p>... but when I run those, I don't see either thing happen <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 493131835,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736633822
+    },
+    {
+        "content": "<p>I think in light of Josh's change....I might just throw away my current PR and focus on <code>||</code> lambda syntax</p>",
+        "id": 493132010,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736634002
+    },
+    {
+        "content": "<p>Do you mean this one? <a href=\"https://github.com/roc-lang/roc/pull/7470\">https://github.com/roc-lang/roc/pull/7470</a></p>",
+        "id": 493132157,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736634142
+    },
+    {
+        "content": "<p>No, <a href=\"https://github.com/roc-lang/roc/pull/7490\">https://github.com/roc-lang/roc/pull/7490</a></p>",
+        "id": 493132179,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736634171
+    },
+    {
+        "content": "<p>And maybe 7470 too</p>",
+        "id": 493132185,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736634180
+    },
+    {
+        "content": "<p>But 7490 on my local is _much larger_ and ambitious</p>",
+        "id": 493132209,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736634218
+    },
+    {
+        "content": "<p>And I think after your change, and Sam's from a day or two ago, it might be hard to rebase and a lot of the assumptions I'm making might not work out</p>",
+        "id": 493132270,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736634257
+    },
+    {
+        "content": "<p>Basically I'm trying to move ALL <code>PncApply</code> likes to Collections, and also Pattern:RecordDestructure to use assignedfield and deprecate the RequiredField and OptionalFiled variants of the Pattern enum.</p>",
+        "id": 493132309,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736634330
+    },
+    {
+        "content": "<p>And just moving to align everything between Pattern and Expr to be more consistent</p>",
+        "id": 493132325,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736634357
+    },
+    {
+        "content": "<p>I definitely like the direction</p>",
+        "id": 493132510,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736634506
+    },
+    {
+        "content": "<p>Anything I can do to help?</p>",
+        "id": 493132775,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736634798
+    },
+    {
+        "content": "<p>Happy to work on fixing conflicts or something</p>",
+        "id": 493132783,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736634812
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> maybe you could help merge this <a href=\"https://github.com/roc-lang/roc/pull/7470\">https://github.com/roc-lang/roc/pull/7470</a></p>",
+        "id": 493133819,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736636012
+    },
+    {
+        "content": "<p>That sounds like the work Anthony is referring to</p>",
+        "id": 493133829,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736636032
+    },
+    {
+        "content": "<p>And I guess the other one too?? <a href=\"https://github.com/roc-lang/roc/pull/7490\">https://github.com/roc-lang/roc/pull/7490</a></p>",
+        "id": 493133898,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736636091
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> I have a lot more going on on my local</p>",
+        "id": 493146246,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736648499
+    },
+    {
+        "content": "<p>The weekend has been hectic,  but I’ll try to make it pushable tomorrow morning</p>",
+        "id": 493146301,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736648532
+    },
+    {
+        "content": "<p>Started finding &amp; fixing some problems in <code>can</code> now!<br>\n<a href=\"https://github.com/roc-lang/roc/pull/7504\">https://github.com/roc-lang/roc/pull/7504</a></p>",
+        "id": 493153913,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736656060
+    },
+    {
+        "content": "<p>~6 hours on commit <code>9ffc671659c2c2fec55e9b0475535e6cd34eb278</code></p>\n<p><a href=\"/user_uploads/22008/gEkoleDsumFVor7OTp6Ueboi/round-24.tar.gz\">round-24.tar.gz</a></p>",
+        "id": 493155024,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736657073
+    },
+    {
+        "content": "<p>That's a big tuple <span aria-label=\"smirk\" class=\"emoji emoji-1f60f\" role=\"img\" title=\"smirk\">:smirk:</span> </p>\n<div class=\"codehilite\"><pre><span></span><code>@0-21 AccessorFunction(\n    TupleIndex(\n        &quot;18888888888888888888&quot;,\n    ),\n),\n</code></pre></div>",
+        "id": 493155317,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736657351
+    },
+    {
+        "content": "<p>Honestly I think we should give the same error for anything more than say 32 or something. In that range it’ll still work with the warning. We can always raise the limit if someone autogenerates code that needs that or something.</p>",
+        "id": 493157231,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736659057
+    },
+    {
+        "content": "<p>~12 hours on commit <code>5ebd6e0884db65f2d099dfb0ebf255d0bdf80c2b</code></p>\n<p><a href=\"/user_uploads/22008/AMqtlanpLruD-HzF3Q6geCfU/round-25.tar.gz\">round-25.tar.gz</a></p>",
+        "id": 493219830,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736713990
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> I push up where I'm at right now.</p>",
+        "id": 493247275,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736737385
+    },
+    {
+        "content": "<p>Still some snapshot failures I'm not happy with, but don't have the brain power to fix right now</p>",
+        "id": 493247294,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736737409
+    },
+    {
+        "content": "<p>But the changes that are in there I'm happy with - for now.  I still need to implement the \"short single-arg\" collapsing</p>",
+        "id": 493247374,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736737444
+    },
+    {
+        "content": "<p>And obviously rebase and figure out some of the new newlines I have</p>",
+        "id": 493247416,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736737494
+    },
+    {
+        "content": "<p>Probably just an artifact of some of the pattern-only variance I removed (Some may need to be added back, some may need to be done in a different way).</p>",
+        "id": 493247461,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736737537
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>stat::number_of_executed_units: 567703\nstat::average_exec_per_sec:     15343\nstat::new_units_added:          9912\nstat::slowest_unit_time_sec:    0\nstat::peak_rss_mb:              602\nINFO: exiting: 19712 time: 240s\n</code></pre></div>\n<p>AST changed after formatting...</p>\n<p>Before formatting:</p>\n<div class=\"codehilite\"><pre><span></span><code>MM//(#\nz\n(#\nw)#\\&quot;\nw)#\\&quot;,/\n\n!\\&quot;\\&quot;aC-\\&quot;\\&quot;\\&quot;!\\&quot;a\\&quot;\\&quot;!CCa\\&quot;a\\&quot;\\&quot;\\&quot;(\n#w)##,(\ninterface\n##w,(\nw)?\n</code></pre></div>\n<p>After formatting:</p>\n<div class=\"codehilite\"><pre><span></span><code>MM\n// ( #\nz\n#\nw # &quot;\nw) # &quot;,/\n\n!&quot;&quot;\n    aC\n    -\n    &quot;&quot;&quot;\n    !&quot;a&quot;&quot;!CCa&quot;a\n    &quot;&quot;&quot;(\n        # w)##,(\n        interface\n            ## w,(\n            w,\n    )?\n</code></pre></div>\n<p>AST diff</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"w\"> </span>Expr(\n<span class=\"w\"> </span>    Defs(\n<span class=\"w\"> </span>        Defs {\n<span class=\"w\"> </span>            tags: [\n<span class=\"w\"> </span>                EitherIndex(2147483648),\n<span class=\"w\"> </span>            ],\n<span class=\"w\"> </span>            regions: [\n<span class=\"w\"> </span>                …,\n<span class=\"w\"> </span>            ],\n<span class=\"w\"> </span>            space_before: [\n<span class=\"w\"> </span>                Slice&lt;roc_parse::ast::CommentOrNewline&gt; { start: 0, length: 0 },\n<span class=\"w\"> </span>            ],\n<span class=\"w\"> </span>            space_after: [\n<span class=\"w\"> </span>                Slice&lt;roc_parse::ast::CommentOrNewline&gt; { start: 0, length: 0 },\n<span class=\"w\"> </span>            ],\n<span class=\"w\"> </span>            spaces: [],\n<span class=\"w\"> </span>            type_defs: [],\n<span class=\"w\"> </span>            value_defs: [\n<span class=\"w\"> </span>                Stmt(\n<span class=\"w\"> </span>                    BinOps(\n<span class=\"w\"> </span>                        [\n<span class=\"w\"> </span>                            (\n<span class=\"w\"> </span>                                Tag(\n<span class=\"w\"> </span>                                    \"MM\",\n<span class=\"w\"> </span>                                ),\n<span class=\"w\"> </span>                                DoubleSlash,\n<span class=\"w\"> </span>                            ),\n<span class=\"w\"> </span>                        ],\n<span class=\"w\"> </span>                        Defs(\n<span class=\"w\"> </span>                            Defs {\n<span class=\"w\"> </span>                                tags: [\n<span class=\"w\"> </span>                                    EitherIndex(2147483648),\n<span class=\"w\"> </span>                                    EitherIndex(2147483649),\n<span class=\"w\"> </span>                                ],\n<span class=\"w\"> </span>                                regions: [\n<span class=\"w\"> </span>                                    …,\n<span class=\"w\"> </span>                                    …,\n<span class=\"w\"> </span>                                ],\n<span class=\"w\"> </span>                                space_before: [\n<span class=\"w\"> </span>                                    Slice&lt;roc_parse::ast::CommentOrNewline&gt; { start: 0, length: 0 },\n<span class=\"w\"> </span>                                    Slice&lt;roc_parse::ast::CommentOrNewline&gt; { start: 0, length: 0 },\n<span class=\"w\"> </span>                                ],\n<span class=\"w\"> </span>                                space_after: [\n<span class=\"w\"> </span>                                    Slice&lt;roc_parse::ast::CommentOrNewline&gt; { start: 0, length: 0 },\n<span class=\"w\"> </span>                                    Slice&lt;roc_parse::ast::CommentOrNewline&gt; { start: 0, length: 0 },\n<span class=\"w\"> </span>                                ],\n<span class=\"w\"> </span>                                spaces: [],\n<span class=\"w\"> </span>                                type_defs: [],\n<span class=\"w\"> </span>                                value_defs: [\n<span class=\"w\"> </span>                                    Stmt(\n<span class=\"w\"> </span>                                        Var {\n<span class=\"w\"> </span>                                            module_name: \"\",\n<span class=\"w\"> </span>                                            ident: \"z\",\n<span class=\"w\"> </span>                                        },\n<span class=\"w\"> </span>                                    ),\n<span class=\"w\"> </span>                                    Stmt(\n<span class=\"w\"> </span>                                        Var {\n<span class=\"w\"> </span>                                            module_name: \"\",\n<span class=\"w\"> </span>                                            ident: \"w\",\n<span class=\"w\"> </span>                                        },\n<span class=\"w\"> </span>                                    ),\n<span class=\"w\"> </span>                                ],\n<span class=\"w\"> </span>                            },\n<span class=\"w\"> </span>                            Var {\n<span class=\"w\"> </span>                                module_name: \"\",\n<span class=\"w\"> </span>                                ident: \"w\",\n<span class=\"w\"> </span>                            },\n<span class=\"w\"> </span>                        ),\n<span class=\"w\"> </span>                    ),\n<span class=\"w\"> </span>                ),\n<span class=\"w\"> </span>            ],\n<span class=\"w\"> </span>        },\n<span class=\"gd\">-        Apply(</span>\n<span class=\"gd\">-            UnaryOp(</span>\n<span class=\"gd\">-                Str(</span>\n<span class=\"gd\">-                    PlainLine(</span>\n<span class=\"gd\">-                        \"\",</span>\n<span class=\"gd\">-                    ),</span>\n<span class=\"gd\">-                ),</span>\n<span class=\"gd\">-                Not,</span>\n<span class=\"gd\">-            ),</span>\n<span class=\"gi\">+        BinOps(</span>\n<span class=\"w\"> </span>            [\n<span class=\"gd\">-                Var {</span>\n<span class=\"gd\">-                    module_name: \"\",</span>\n<span class=\"gd\">-                    ident: \"aC\",</span>\n<span class=\"gd\">-                },</span>\n<span class=\"gd\">-                UnaryOp(</span>\n<span class=\"gd\">-                    TrySuffix(</span>\n<span class=\"gd\">-                        PncApply(</span>\n<span class=\"gi\">+                (</span>\n<span class=\"gi\">+                    Apply(</span>\n<span class=\"gi\">+                        UnaryOp(</span>\n<span class=\"w\"> </span>                            Str(\n<span class=\"w\"> </span>                                PlainLine(\n<span class=\"gd\">-                                    \"!\\\"a\\\"\\\"!CCa\\\"a\",</span>\n<span class=\"gi\">+                                    \"\",</span>\n<span class=\"w\"> </span>                                ),\n<span class=\"w\"> </span>                            ),\n<span class=\"gd\">-                            [</span>\n<span class=\"gd\">-                                Apply(</span>\n<span class=\"gd\">-                                    Var {</span>\n<span class=\"gd\">-                                        module_name: \"\",</span>\n<span class=\"gd\">-                                        ident: \"interface\",</span>\n<span class=\"gd\">-                                    },</span>\n<span class=\"gd\">-                                    [</span>\n<span class=\"gd\">-                                        Var {</span>\n<span class=\"gd\">-                                            module_name: \"\",</span>\n<span class=\"gd\">-                                            ident: \"w\",</span>\n<span class=\"gd\">-                                        },</span>\n<span class=\"gd\">-                                    ],</span>\n<span class=\"gd\">-                                    Space,</span>\n<span class=\"gd\">-                                ),</span>\n<span class=\"gd\">-                            ],</span>\n<span class=\"gi\">+                            Not,</span>\n<span class=\"w\"> </span>                        ),\n<span class=\"gi\">+                        [</span>\n<span class=\"gi\">+                            Var {</span>\n<span class=\"gi\">+                                module_name: \"\",</span>\n<span class=\"gi\">+                                ident: \"aC\",</span>\n<span class=\"gi\">+                            },</span>\n<span class=\"gi\">+                        ],</span>\n<span class=\"gi\">+                        Space,</span>\n<span class=\"w\"> </span>                    ),\n<span class=\"gd\">-                    Negate,</span>\n<span class=\"gi\">+                    Minus,</span>\n<span class=\"w\"> </span>                ),\n<span class=\"w\"> </span>            ],\n<span class=\"gd\">-            Space,</span>\n<span class=\"gi\">+            TrySuffix(</span>\n<span class=\"gi\">+                PncApply(</span>\n<span class=\"gi\">+                    Str(</span>\n<span class=\"gi\">+                        PlainLine(</span>\n<span class=\"gi\">+                            \"!\\\"a\\\"\\\"!CCa\\\"a\",</span>\n<span class=\"gi\">+                        ),</span>\n<span class=\"gi\">+                    ),</span>\n<span class=\"gi\">+                    [</span>\n<span class=\"gi\">+                        Apply(</span>\n<span class=\"gi\">+                            Var {</span>\n<span class=\"gi\">+                                module_name: \"\",</span>\n<span class=\"gi\">+                                ident: \"interface\",</span>\n<span class=\"gi\">+                            },</span>\n<span class=\"gi\">+                            [</span>\n<span class=\"gi\">+                                Var {</span>\n<span class=\"gi\">+                                    module_name: \"\",</span>\n<span class=\"gi\">+                                    ident: \"w\",</span>\n<span class=\"gi\">+                                },</span>\n<span class=\"gi\">+                            ],</span>\n<span class=\"gi\">+                            Space,</span>\n<span class=\"gi\">+                        ),</span>\n<span class=\"gi\">+                    ],</span>\n<span class=\"gi\">+                ),</span>\n<span class=\"gi\">+            ),</span>\n<span class=\"w\"> </span>        ),\n<span class=\"w\"> </span>    ),\n<span class=\"w\"> </span>)\n</code></pre></div>",
+        "id": 493610932,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736868669
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/22008/YrVvUAm9k_82ag7ompMzz2rX/crash-e5c5f2279bb018c4128ff6a25ca5e1130aae4952\">crash-e5c5f2279bb018c4128ff6a25ca5e1130aae4952</a></p>",
+        "id": 493611279,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736868762
+    },
+    {
+        "content": "<p>That one's fixed in <a href=\"https://github.com/roc-lang/roc/pull/7510\">https://github.com/roc-lang/roc/pull/7510</a></p>",
+        "id": 493619121,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736870919
+    },
+    {
+        "content": "<p>~12 hours on <code>9c340302e2b83246ad3857337b7f5d22fcd58a7f</code></p>\n<p><a href=\"/user_uploads/22008/n9z5Ea0FlVzGLLBfkWy3uV38/round-26.tar.gz\">round-26.tar.gz</a></p>",
+        "id": 493666291,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736887178
+    },
+    {
+        "content": "<p>~ 1 min on commit <code>d42af0b763440176e829d67f0646b5c59c3f0f6d</code></p>\n<p><a href=\"/user_uploads/22008/FsnbWtADYloZKGGKU5Goo047/round-27.tar.gz\">round-27.tar.gz</a></p>",
+        "id": 494330762,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737110257
+    },
+    {
+        "content": "<p>That was all one bug; pushed a fix to <a href=\"https://github.com/roc-lang/roc/pull/7510\">https://github.com/roc-lang/roc/pull/7510</a></p>",
+        "id": 494599092,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737258449
+    },
+    {
+        "content": "<p>(pretty easy-to-hit problem with pipe-based closures)</p>",
+        "id": 494599162,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737258491
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"781658\">@Anthony Bullard</span> (or perhaps <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span>) - that could use a re-review if you have some time :)</p>",
+        "id": 494599168,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737258501
+    },
+    {
+        "content": "<p>~3 hours on commit <code>300412a4da46d81c6f40d196d968045fb0ad973f</code></p>\n<p><a href=\"/user_uploads/22008/zfKjuYUvxuChk8kvUnfbmA0M/round-28.tar.gz\">round-28.tar.gz</a></p>",
+        "id": 494616554,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737272410
+    },
+    {
+        "content": "<p>That, plus a pretty key oversight in the implementation of and/or, are fixed in <a href=\"https://github.com/roc-lang/roc/pull/7535\">https://github.com/roc-lang/roc/pull/7535</a></p>",
+        "id": 494943295,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737421286
+    },
+    {
+        "content": "<p>I think &gt;= 50% of the recent bugs I've fixed have been regressions introduced with recent parser changes</p>",
+        "id": 494943349,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737421318
+    },
+    {
+        "content": "<p>Some of them have been caught either directly on the fuzzing job on the PR itself, or in a fuzzing job on some subsequent PR</p>",
+        "id": 494943492,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737421387
+    },
+    {
+        "content": "<p>Maybe it's time to start paying more attention to the fuzzing happening in CI?</p>",
+        "id": 494943576,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737421431
+    },
+    {
+        "content": "<p>Ahk that's good to know. I thought we might be mostly ignoring that until we get a solid run out of the fuzzer without issues.</p>",
+        "id": 494947168,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737423211
+    },
+    {
+        "content": "<p>I haven't seen it run for more than 10mins yet without a crash - edit after the recent PNC changes etc</p>",
+        "id": 494947192,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737423228
+    },
+    {
+        "content": "<p>But I guess I'm only running each time you've been putting a new syntax related PR in.</p>",
+        "id": 494947270,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737423249
+    },
+    {
+        "content": "<p>There was a stretch of time where it was going a few hours without a crash</p>",
+        "id": 494947271,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737423249
+    },
+    {
+        "content": "<p>Yeah, we were really close</p>",
+        "id": 494947295,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737423260
+    },
+    {
+        "content": "<p>It definitely feels like we're almost back there again.</p>",
+        "id": 494947328,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737423283
+    },
+    {
+        "content": "<p>Yeah we need to stabilize again after some pretty rapid</p>",
+        "id": 494947330,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737423284
+    },
+    {
+        "content": "<p>Maybe if there is a crash we should make it a policy to:</p>\n<ul>\n<li>Run the minimizer on it (shouldn't be hard to make this automatic)</li>\n<li>Eyeball it to see if it looks related to that PR or perhaps a recent PR</li>\n</ul>",
+        "id": 494947409,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737423331
+    },
+    {
+        "content": "<p>A fuzzing crash found in CI, I mean</p>",
+        "id": 494947430,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737423343
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> would you prefer pushing a fix into a PR for new syntax, or landing that PR in main and then following up with any syntax/fuzzer related fixes?</p>",
+        "id": 494947634,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737423437
+    },
+    {
+        "content": "<p>If it does look related to the PR, we should probably be bugging the PR author to look at it :)</p>",
+        "id": 494947691,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737423473
+    },
+    {
+        "content": "<p>We've been moving a lot faster than usual and trying to land the breaking changes staged to unblock things.</p>",
+        "id": 494947740,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737423483
+    },
+    {
+        "content": "<p>Keeping master bug-free-ish is a nice-to-have. Agree rapid collaboration is important (particularly recently)</p>",
+        "id": 494947846,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737423537
+    },
+    {
+        "content": "<p>I'm not too picky if the fix goes in the same PR or a following one</p>",
+        "id": 494947893,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737423567
+    },
+    {
+        "content": "<p>(at least, supposing the breakage isn't to something fairly obvious!)</p>",
+        "id": 494947939,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737423593
+    },
+    {
+        "content": "<p>I've been a little more relaxed because I know the nightlies are paused, and you've been very effective at cleaning things up. So it's been a way to collaborate faster, by merging things into main and not backing up merge conflicts</p>",
+        "id": 494948034,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737423622
+    },
+    {
+        "content": "<p>Yeah I think for better or worse we’ve been in move fast and break things mode - but I think that’s going to slow down now.  We can work as a team and smash the fuzzer issues</p>",
+        "id": 494948182,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737423701
+    },
+    {
+        "content": "<p>I think there is a lot of dissonance (much of it surely caused by me) between the parse grammar and the formatter</p>",
+        "id": 494948276,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737423735
+    },
+    {
+        "content": "<p>I’m happy to put down my current projects and jump on to help with that</p>",
+        "id": 494948308,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737423751
+    },
+    {
+        "content": "<p>If we see a legitimate crash - it shouldn’t be on you alone Josh, despite being a wizard - write up issues for these and mark them as P:Medium</p>",
+        "id": 494948451,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737423832
+    },
+    {
+        "content": "<p>And maybe tag them as nightly blocker</p>",
+        "id": 494948517,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737423845
+    },
+    {
+        "content": "<p>Haha fair point :)</p>",
+        "id": 494948529,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737423849
+    },
+    {
+        "content": "<p>And feel free to assign the guilty party</p>",
+        "id": 494948565,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737423865
+    },
+    {
+        "content": "<p>I await the flood of issues…</p>",
+        "id": 494948581,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1737423874
+    },
+    {
+        "content": "<p>Adding auto-minimization to the fuzzer in ci: <a href=\"https://github.com/roc-lang/roc/pull/7537\">https://github.com/roc-lang/roc/pull/7537</a></p>",
+        "id": 494974383,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1737438950
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/22008/6wAayUc_md0xc0f8I0SAyOeo/crash-fd9fabc49ffdbd93271a9f8d8e75ad416b7f9d83\">crash-fd9fabc49ffdbd93271a9f8d8e75ad416b7f9d83</a></p>",
+        "id": 495021941,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737457471
+    },
+    {
+        "content": "<p>~12 hours on commit <code>5b4c8e70d873e7f5e30f995aedea0199bf1f99b1</code></p>\n<p><a href=\"/user_uploads/22008/GRxmOPe6HG2xbA2AxlTox2yO/round-29.tar.gz\">round-29.tar.gz</a></p>",
+        "id": 495134675,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737489659
+    }
+]

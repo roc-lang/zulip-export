@@ -1,0 +1,184 @@
+<html>
+<head><meta charset="utf-8"><title>Return an error on allocation error · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html">Return an error on allocation error</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="468999615"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/468999615" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#468999615">(Sep 10 2024 at 06:47)</a>:</h4>
+<p>I watched the [talk]https://www.youtube.com/watch?v=zMRfCZo8eAc from <span class="user-mention" data-user-id="281543">@Folkert de Vries</span> at software you can love and it was fascinating. My question is, what would be necessary to change in roc, to make a pattern like this more accessible for other platforms.</p>
+<p>There is already the idea to pass around an allocator. Here is the <a href="https://github.com/roc-lang/roc/issues/6382">issue</a>.</p>
+<p>With this change, it would be possible for <code>roc_alloc</code> to save an error to the context, so that when roc crashes, you could find out, that roc has to be called again with more memory.</p>
+<p>But there still is the problem, that roc would just crash, when roc_alloc returns a zero pointer.</p>
+<p>What do you think about the idea, that roc would not crash, but returns that error to the caller?</p>
+<p>This would mean, that functions like <code>roc__mainForHost_0_caller</code> or <code>roc__mainForHost_1_exposed_generic</code> would need to return something. I guess, that an int value would be sufficient. A problem would be <code>roc__mainForHost_1_exposed</code> that already returns a value. But maybe, this function could be removed in favour of always using <code>roc__mainForHost_1_exposed_generic</code>.</p>
+<p><span class="user-mention" data-user-id="281543">@Folkert de Vries</span> do you think with the allocator idea and an error-value from <code>roc_alloc</code> it would be possible to build a platform, that never allocates without <code>longjmp</code>?</p>
+
+
+
+<a name="469072480"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469072480" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469072480">(Sep 10 2024 at 12:11)</a>:</h4>
+<p>that would not just work. Without longjump, you'd have to do what is called unwinding the stack: bubble the error upwards until you catch it at some point</p>
+
+
+
+<a name="469072667"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469072667" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469072667">(Sep 10 2024 at 12:12)</a>:</h4>
+<p>this is similar to the fallible allocation in rust: what do you do when you run out of memory? likely the thing you attempted was fine, and the excessive memory usage happened much earlier and is not the fault of the allocation that broke the camel's back</p>
+
+
+
+<a name="469094386"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469094386" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469094386">(Sep 10 2024 at 13:39)</a>:</h4>
+<p>When I understand your talk correctly, then you are basically calling:</p>
+<div class="codehilite"><pre><span></span><code>when setjump(ctx) is
+  0 -&gt;
+    threadlocal_memory_bucket = small_memory_bucket
+    roc__mainForHost_1_exposted_generic( ...)
+  1 -&gt;
+   log()
+    threadlocal_memory_bucket = bigger_memory_bucket
+    roc__mainForHost_1_exposted_generic(...)
+
+roc_alloc(...) {
+  ptr = alloc_from_bucket(threadlocal_memory_bucket )
+  if ptr == 0 then
+    longjump(ctx, 1)
+ else
+    return ptr
+}
+</code></pre></div>
+<p>When <code>roc__mainForHost_1_exposted_generic</code> would return 1, when any call to roc_alloc returns 0, then this should do the same:</p>
+<div class="codehilite"><pre><span></span><code>threadlocal_memory_bucket = small_memory_bucket
+err = roc__mainForHost_1_exposted_generic(...)
+if err == 1 then
+  log()
+  threadlocal_memory_bucket = bigger_memory_bucket
+  roc__mainForHost_1_exposted_generic(...)
+</code></pre></div>
+<p>I think it is not necessary to unwind the stack, when all functions just return an error code as a value.</p>
+<p>I you start <code>roc__mainForHost_1_exposted_generic</code> with an empty bucket, then the excessive memory usage has to be somewhere in roc. You use <code>longjmp</code> to call roc again, but shouldn't it be possible to do the same thing by returning an error code as a value?</p>
+<p>Is there something I misunderstand?</p>
+
+
+
+<a name="469109179"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469109179" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469109179">(Sep 10 2024 at 14:28)</a>:</h4>
+<p>well, you still pass through all the stack frames if they all return right? But yes if you still do the memory management with the buckets then that can work on a technical level. A complication is that all functions then do need to return an error code, also any stdlib function that can (transitively) allocate</p>
+
+
+
+<a name="469112777"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469112777" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469112777">(Sep 10 2024 at 14:38)</a>:</h4>
+<p>So this is the idea. And since <span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span> has to touch all functions anyway to include the allocator, maybe he could also add a return value <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="469117701"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469117701" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469117701">(Sep 10 2024 at 14:49)</a>:</h4>
+<p>Do you want it to be cleaning up the stack and all roc allocations as it returns? Basically like a full exception unwind in c++?</p>
+
+
+
+<a name="469118499"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469118499" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469118499">(Sep 10 2024 at 14:52)</a>:</h4>
+<p>If the platform knows all the resources roc could have allocated, panic + longjmp + cleanup will likely be much much faster. Also simply crashing for platforms that want it will be much faster as well.</p>
+<p>If the platform doesn't know the resources roc could allocate. This could make sense as a more proper clean up. Though you probably would want to do it with exceptions and libunwind to minimize costs to the happy case.</p>
+
+
+
+<a name="469118564"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469118564" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469118564">(Sep 10 2024 at 14:52)</a>:</h4>
+<p>I am not familiar with the necessary code. Maybe what I am thinking about is not possible.</p>
+<p>What I am thinking about is no exception at all, but to return an error as a value. Like a <code>Result a [OutOfMemory]</code> in roc, or an <code>(foo, error)</code> in go.</p>
+
+
+
+<a name="469119152"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469119152" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469119152">(Sep 10 2024 at 14:53)</a>:</h4>
+<p>Sure, but my two questions are:</p>
+<ol>
+<li>What is the actual underlying goal?</li>
+<li>Does roc need to cleanup everything it has access to? (Basically deal with all refcount decrements and dealloc calls)</li>
+</ol>
+
+
+
+<a name="469120783"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469120783" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469120783">(Sep 10 2024 at 14:57)</a>:</h4>
+<p>The goal is to get a zero-allocation platform, but without <code>longjmp</code>. For example, I don't think <code>longjmp</code> is possible in a go platform. If the memory bucket is full, then I have to inform the callside somehow, that roc has to be restarted with a bigger bucket. So instead of a crash, an "OutOfMemory" error would be nicer.</p>
+<p>It is probably saver, if roc would cleanup everything it has access to. But I am not sure if this is really necessary.</p>
+
+
+
+<a name="469122015"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469122015" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469122015">(Sep 10 2024 at 15:01)</a>:</h4>
+<p>I see....hmmm <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="469122883"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469122883" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469122883">(Sep 10 2024 at 15:03)</a>:</h4>
+<p>I totally get the goal, but my gut feeling is that it isn't something we would want to support. Crashes are meant to be exceptional and are really better handled with exception related mechanisms like longjmp and libunwind. Those would have a much smaller perf impact on the common case of no exception being raised.</p>
+
+
+
+<a name="469123126"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469123126" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469123126">(Sep 10 2024 at 15:04)</a>:</h4>
+<p>Like if we were to implement this is roc today, I think we would implement it via setjmp and longjmp.</p>
+
+
+
+<a name="469123250"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469123250" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469123250">(Sep 10 2024 at 15:04)</a>:</h4>
+<p>Then just return a final error</p>
+
+
+
+<a name="469123789"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469123789" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469123789">(Sep 10 2024 at 15:05)</a>:</h4>
+<p>I also think that unwinding for most platforms wouldn't be needed. The platform likely can use an arena for roc and track the resources that roc opens. As such, the platform can quickly reset the arena and free all the resources if roc happens to crash. No need for any slow unwind.</p>
+
+
+
+<a name="469129489"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469129489" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Oskar Hahn <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469129489">(Sep 10 2024 at 15:27)</a>:</h4>
+<p>Ok. I get it. I though the performance is not an issue, since an OutOfMemory does not happens often. But when I understand you correctly, then the performance is worth in the happy case. I get, that this would be bad.</p>
+<p>What I don't get is, why <span class="user-mention" data-user-id="281543">@Folkert de Vries</span> needed <code>longjmp</code>.  Why couldn't he use the solution you propose? I though he sad in his talk, that a unwind above ffi is a problem. But you are saying, that it does not even need an unwind?</p>
+
+
+
+<a name="469134257"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469134257" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469134257">(Sep 10 2024 at 15:47)</a>:</h4>
+<p>I would need to look at NEA again to remember all of the details. That said, my proposed solution would use longjmp still.</p>
+<p>For unwind, yeah, it doesn't necessarily work over ffi. So it would need to be done within roc. Essentially for unwind, to work, it would be something like:</p>
+<ol>
+<li>alloc would fail</li>
+<li>the platform would let roc know via a result</li>
+<li>roc would run lib unwind internally</li>
+<li>Roc would catch the exception and end the unwind</li>
+<li>Roc would return a result of the failure to the host.</li>
+</ol>
+
+
+
+<a name="469141690"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469141690" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469141690">(Sep 10 2024 at 16:08)</a>:</h4>
+<p>setjmp/longjmp was simpler and faster. But also it's dangerous and cursed</p>
+
+
+
+<a name="469167881"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Return%20an%20error%20on%20allocation%20error/near/469167881" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Return.20an.20error.20on.20allocation.20error.html#469167881">(Sep 10 2024 at 17:46)</a>:</h4>
+<p>100%</p>
+<p>Though I don't know enough about libunwind to know how cursed it is under the hood</p>
+
+
+
+<hr><p>Last updated: Jun 13 2026 at 13:18 UTC</p>
+</html>

@@ -1,0 +1,502 @@
+<html>
+<head><meta charset="utf-8"><title>Ability definition syntax · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html">Ability definition syntax</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="274309437"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274309437" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274309437">(Mar 06 2022 at 14:45)</a>:</h4>
+<p>This has been brought up in this thread a couple times before, but I think we should consider another syntax or stricter rules for defining new abilities.</p>
+<p>Recall that the current proposed syntax for the definition of an ability <code>Eq</code> is</p>
+<div class="codehilite"><pre><span></span><code>Eq has { isEq, isNotEq }
+
+isEq : val, val -&gt; Bool where val has Eq
+
+isNotEq : val, val -&gt; Bool where val has Eq
+</code></pre></div>
+<p>the current rules are just that you need the <code>Eq has ...</code> line, and the functions defining the ability must be defined on the top-level.</p>
+<p>This means that definitions can be non-local, which I believe makes it harder for humans and computers (the compiler) to understand. A few concerns the syntax introduces include:</p>
+<ol>
+<li>It is harder for both a human and computer to find the relevant definitions of the ability functions "at a glance". That is, when I see <code>Eq</code>, I may have to search the rest of the file to figure out what <code>isEq</code> and what <code>isNotEq</code> look like, since there may be any number of intermediate top-level definitions between them and the <code>Eq has ...</code> line.</li>
+<li>A consequence of (1) is that refactoring is harder. A user can't just pull out the <code>Eq has ...</code> definition, they must also find the relevant <code>isEq</code> and <code>isNotEq</code> definitions, which can be cumbersome if they are far away. This is mostly an issue in a plain text editor; we can certainly do better in the editor which is designed to deal with scenario. However,</li>
+<li>The editor (and compiler in general) will have a hard(er) time with this. The reason is that if someone asks the question, "what do the functions composing <code>Eq</code> look like?", we wouldn't be able to answer that question just by looking at the <code>Eq has ...</code> definition. In general, we would always have to do more work than if <code>isEq</code> and <code>isNotEq</code> were defined inside <code>Eq</code> itself. Whether this makes a measurable difference during re-analysis between file changes is something we won't know for a while, though.</li>
+<li>Ambiguity is more likely to arise, and will be undecidable. I couldn't think of a realistic use case for this, so maybe it's esoteric and non-concerning. But the idea is, let's say I have this code</li>
+</ol>
+<div class="codehilite"><pre><span></span><code>Embed has { embed }
+
+# other defs here
+
+embed : a, b -&gt; Str where a has embed
+
+# other defs here
+
+embed : a, b -&gt; Str where b has embed
+</code></pre></div>
+<p>which definition of <code>embed</code> is the one that <code>Embed has { embed }</code> is referencing? The compiler couldn't know, and worse yet, the author may not know. Again I'm not sure if this would actually arise ("default implementations" are more likely to arise, but those are unambiguous), but it's something to consider.</p>
+<p>Anyway, I do think 1-3 are large enough concerns that it may be worth considering an alternative here. Here are a couple suggestions:</p>
+<ol>
+<li>Require the signature of functions defining an ability to be specified in the ability signature. So we would have something like</li>
+</ol>
+<div class="codehilite"><pre><span></span><code>Eq has
+  {
+    isEq : val, val -&gt; Bool,
+    isNotEq : val, val -&gt; Bool
+  } where val has Eq
+</code></pre></div>
+<p>or</p>
+<div class="codehilite"><pre><span></span><code>Eq has
+  isEq : val, val -&gt; Bool where val has Eq
+  isNotEq : val, val -&gt; Bool where val has Eq
+</code></pre></div>
+<p>(I prefer the second). This lessens the concerns (1)-(3) and eliminates the ambiguity component - it now enough to parse the <code>Eq has</code> block, and you have all you need to know about what the definition of <code>Eq</code> is.</p>
+<p>One evident disadvantage of this is that it makes it less clear that <code>isEq</code> and <code>isNotEq</code> sit on the top-level of the module they are defined in. That might be something we can get away with teaching, but it is a concern.</p>
+<ol start="2">
+<li>Require that signatures of functions defining abilities immediately follow the ability definition. So now</li>
+</ol>
+<div class="codehilite"><pre><span></span><code>Eq has { isEq, isNotEq }
+
+# other defs
+
+isEq : val, val -&gt; Bool where val has Eq
+
+# other defs
+
+isNotEq : val, val -&gt; Bool where val has Eq
+</code></pre></div>
+<p>is illegal, we must explicitly do</p>
+<div class="codehilite"><pre><span></span><code>Eq has { isEq, isNotEq }
+
+isEq : val, val -&gt; Bool where val has Eq
+
+isNotEq : val, val -&gt; Bool where val has Eq
+</code></pre></div>
+<p>This doesn't actually resolve the problems above, it just warns the author that they should order their definitions in this way. The reason I say this is because we'd still want the compiler to do the work to find interspersed and possibly-ambiguous definitions even if they are defined out-of-band, so that user experience doesn't suffer. At the very least, we'd need to invest in good error messages that say something like "Did you mean to host this definition of <code>isNotEq</code> defined &lt;here&gt; up?".</p>
+<p>The upside of this is that it still remains very clear that isEq, isNotEq are on the top-level.</p>
+<p>Okay, apologies for the wall of text :) I don't intend this to be an armchair exercise - in the design and implementation, I do think it's a legitimate concern. I think we should have the computer do as much work as possible to figure out stuff for the author, but not when the author must also do more work.</p>
+
+
+
+<a name="274314659"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274314659" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> jan kili <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274314659">(Mar 06 2022 at 16:32)</a>:</h4>
+<p>Maybe-noob-y question: why do/should those ability functions still sit at the top level? Are other things referencing them?</p>
+
+
+
+<a name="274315137"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274315137" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274315137">(Mar 06 2022 at 16:44)</a>:</h4>
+<p>So that if <code>Eq</code> is defined in the <code>Bool</code> module, you could do <code>Bool.isEq</code> rather than <code>Bool.Eq.isEq</code></p>
+
+
+
+<a name="274315752"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274315752" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> jan kili <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274315752">(Mar 06 2022 at 16:52)</a>:</h4>
+<p>Makes sense, thanks!</p>
+
+
+
+<a name="274332992"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274332992" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274332992">(Mar 06 2022 at 22:51)</a>:</h4>
+<p>I moved this from the <a class="stream-topic" data-stream-id="304641" href="/#narrow/stream/304641-ideas/topic/Abilities">#ideas &gt; Abilities</a> thread, since that topic ended up going in a different direction</p>
+
+
+
+<a name="274333010"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333010" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333010">(Mar 06 2022 at 22:51)</a>:</h4>
+<p>so in the initial draft of the abilities doc, I actually had something more like #1 above!</p>
+
+
+
+<a name="274333059"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333059" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333059">(Mar 06 2022 at 22:52)</a>:</h4>
+<p>so like</p>
+<div class="codehilite"><pre><span></span><code>Eq has {
+    isEq : val, val -&gt; Bool,
+    isNotEq : val, val -&gt; Bool
+} where val has Eq
+</code></pre></div>
+
+
+
+<a name="274333062"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333062" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333062">(Mar 06 2022 at 22:52)</a>:</h4>
+<p>here's the problem though: how does that interact with <code>exposes</code>?</p>
+
+
+
+<a name="274333077"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333077" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333077">(Mar 06 2022 at 22:52)</a>:</h4>
+<p>for example:</p>
+<div class="codehilite"><pre><span></span><code>interface Eq
+    exposes [ Eq, isEq, isNotEq ]
+    imports []
+
+Eq has {
+    isEq : val, val -&gt; Bool,
+    isNotEq : val, val -&gt; Bool
+} where val has Eq
+</code></pre></div>
+
+
+
+<a name="274333091"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333091" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333091">(Mar 06 2022 at 22:53)</a>:</h4>
+<p>if I can write <code>exposes [ isEq ]</code> then that must mean <code>isEq</code> is in scope at the top level, right?</p>
+
+
+
+<a name="274333150"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333150" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333150">(Mar 06 2022 at 22:54)</a>:</h4>
+<p>which in turn means I should be able to call it from the top level, like so:</p>
+<div class="codehilite"><pre><span></span><code>interface Eq
+    exposes [ Eq, isEq, isNotEq ]
+    imports []
+
+Eq has {
+    isEq : val, val -&gt; Bool,
+    isNotEq : val, val -&gt; Bool
+} where val has Eq
+
+blah = isEq foo bar
+</code></pre></div>
+
+
+
+<a name="274333174"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333174" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333174">(Mar 06 2022 at 22:55)</a>:</h4>
+<p>so at that point, we effectively have <code>isEq</code> being essentially a top-level declaration for all intents and purposes except syntactically <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="274333192"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333192" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333192">(Mar 06 2022 at 22:55)</a>:</h4>
+<p>that said, maybe that's fine!</p>
+
+
+
+<a name="274333727"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333727" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333727">(Mar 06 2022 at 23:05)</a>:</h4>
+<p>yeah that’s really the only downside of this approach i could think of</p>
+
+
+
+<a name="274333782"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333782" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333782">(Mar 06 2022 at 23:06)</a>:</h4>
+<p>but tbh i feel like it’s fine, we only need to teach it once and it kind of aligns with type classes in haskell (though i’m not saying that’s the model we should shoot for)</p>
+
+
+
+<a name="274333801"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333801" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333801">(Mar 06 2022 at 23:06)</a>:</h4>
+<p>I think the readability and refactoring advantages of this outweigh the downside of being “weird” that it’s on the top level</p>
+
+
+
+<a name="274333822"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274333822" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274333822">(Mar 06 2022 at 23:07)</a>:</h4>
+<p>also another option is the indented form, which could syntactically look more like the functions are on the top level compared to the record-like syntax</p>
+
+
+
+<a name="274338961"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274338961" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274338961">(Mar 07 2022 at 01:04)</a>:</h4>
+<p>Regarding this syntax:</p>
+<div class="codehilite"><pre><span></span><code>Eq has {
+    isEq : val, val -&gt; Bool,
+    isNotEq : val, val -&gt; Bool
+} where val has Eq
+</code></pre></div>
+<p>I suggest an alternative to the where clause - a scoped alias:</p>
+<div class="codehilite"><pre><span></span><code>Eq has
+  alias val = has Eq
+  isEq : val, val -&gt; Bool
+  isNotEq : val, val -&gt; Bool
+</code></pre></div>
+<p>Here it aliases <code>val</code> to a type-declaration, in  a way, but it can also do simple name aliasing (e.g. <code>alias L = List</code>).<br>
+The same syntax can be useful in a function, for example to shorten a long type name because you're gonna be mentioning it a lot.<br>
+It makes it feel and look more like a variable rather than a constraint on the definition, and I do think of it as a variable - not of data but of a type.</p>
+
+
+
+<a name="274338968"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274338968" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274338968">(Mar 07 2022 at 01:04)</a>:</h4>
+<p>also the {}'s can be dropped, that's nice</p>
+
+
+
+<a name="274339541"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274339541" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274339541">(Mar 07 2022 at 01:17)</a>:</h4>
+<p>I like this one from earlier:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">Eq</span><span class="w"> </span><span class="nv">has</span><span class="w"></span>
+<span class="w">    </span><span class="nv">isEq</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="nv">val</span><span class="p">,</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Bool</span><span class="w"> </span><span class="nf">|</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nv">has</span><span class="w"> </span><span class="kt">Eq</span><span class="w"></span>
+<span class="w">    </span><span class="nv">isNotEq</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="nv">val</span><span class="p">,</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Bool</span><span class="w"> </span><span class="nf">|</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nv">has</span><span class="w"> </span><span class="kt">Eq</span><span class="w"></span>
+</code></pre></div>
+<p>a nice thing about it is that we have the exact type signature that can be used in documentation</p>
+
+
+
+<a name="274339614"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274339614" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274339614">(Mar 07 2022 at 01:19)</a>:</h4>
+<p>here's another possible direction:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="p">{</span><span class="w"></span>
+<span class="w">    </span><span class="nv">isEq</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="nv">val</span><span class="p">,</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Bool</span><span class="w"> </span><span class="nf">|</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nv">has</span><span class="w"> </span><span class="kt">Eq</span><span class="nf">.</span><span class="w"></span>
+<span class="w">    </span><span class="nv">isNotEq</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="nv">val</span><span class="p">,</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Bool</span><span class="w"> </span><span class="nf">|</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nv">has</span><span class="w"> </span><span class="kt">Eq</span><span class="p">,</span><span class="w"></span>
+<span class="p">}</span><span class="w"> </span><span class="nf">=&gt;</span><span class="w"> </span><span class="kt">Eq</span><span class="w"></span>
+</code></pre></div>
+
+
+
+<a name="274339669"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274339669" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274339669">(Mar 07 2022 at 01:20)</a>:</h4>
+<p>kinda weird to have the thing you're defining at the end though <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="274339764"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274339764" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Derek Gustafson <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274339764">(Mar 07 2022 at 01:22)</a>:</h4>
+<p>The more I think about it, the weirder it seems that we use Eq in the definition of Eq</p>
+
+
+
+<a name="274339786"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274339786" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274339786">(Mar 07 2022 at 01:23)</a>:</h4>
+<p>recursion! <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<a name="274339846"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274339846" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Derek Gustafson <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274339846">(Mar 07 2022 at 01:24)</a>:</h4>
+<p>But we aren't defining something recursive!</p>
+
+
+
+<a name="274339848"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274339848" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Derek Gustafson <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274339848">(Mar 07 2022 at 01:24)</a>:</h4>
+<p>If it was recursive, I'd be okay with it</p>
+
+
+
+<a name="274340026"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274340026" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> jan kili <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274340026">(Mar 07 2022 at 01:28)</a>:</h4>
+<p>Is this a useful idea?</p>
+<div class="codehilite"><pre><span></span><code>Eq a has
+    isEq : a, a -&gt; Bool
+    isNotEq : a, a -&gt; Bool
+</code></pre></div>
+<p>Here, <code>a</code> signifies "some type with the <code>Eq</code> ability"</p>
+
+
+
+<a name="274340037"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274340037" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> jan kili <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274340037">(Mar 07 2022 at 01:28)</a>:</h4>
+<p>(inspired by type parameters... is this an ability parameter? Idk why there would ever be any quantity other than one...)</p>
+
+
+
+<a name="274340038"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274340038" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274340038">(Mar 07 2022 at 01:28)</a>:</h4>
+<p>haha in some sense it is recursive though!<br>
+the definition of <code>Eq</code> literally involves providing two functions that both involve the <code>Eq</code> ability</p>
+
+
+
+<a name="274340061"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274340061" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274340061">(Mar 07 2022 at 01:29)</a>:</h4>
+<p>I think <code>Eq a</code> makes it look like <code>Eq</code> has a type parameter though <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="274340822"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274340822" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> jan kili <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274340822">(Mar 07 2022 at 01:49)</a>:</h4>
+<p>Syntax solution? <code>Eq for a means ...</code>? hehehe semi-joking</p>
+
+
+
+<a name="274341141"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274341141" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274341141">(Mar 07 2022 at 01:56)</a>:</h4>
+<p>I like “for a” or “of a”</p>
+
+
+
+<a name="274341191"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274341191" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274341191">(Mar 07 2022 at 01:57)</a>:</h4>
+<p>The <code>| constraints</code> syntax is great for a one-off or situations where constraints are just different across your methods, the alias syntax is great for when the same constraint is reused around a lot.<br>
+We can even take this a step further and say it aliases the whole signature (but then naming gets a bit hard):</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">Eq</span><span class="w"> </span><span class="nv">has</span><span class="w"></span>
+<span class="w">  </span><span class="kr">alias</span><span class="w"> </span><span class="kt">FnSig</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nv">val</span><span class="p">,</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Bool</span><span class="w"> </span><span class="nf">|</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nv">has</span><span class="w"> </span><span class="kt">Eq</span><span class="w"></span>
+<span class="w">  </span><span class="nv">isEq</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">FnSig</span><span class="w"></span>
+<span class="w">  </span><span class="nv">isNotEq</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">FnSig</span><span class="w"></span>
+</code></pre></div>
+
+
+
+<a name="274341255"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274341255" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274341255">(Mar 07 2022 at 01:58)</a>:</h4>
+<p>In any case it sounds like we’re roughly in agreement about the definition of function signatures within the ability definition so I’ll proceed with that. that’s the biggest impact to the language implementation/user ergonomics, the other stuff we can change pretty easily without impacting semantics</p>
+
+
+
+<a name="274341648"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274341648" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274341648">(Mar 07 2022 at 02:05)</a>:</h4>
+<p>yeah I'd go with this syntax for now:</p>
+<div class="codehilite"><pre><span></span><code>Eq has
+    isEq : val, val -&gt; Bool | val has Eq
+    isNotEq : val, val -&gt; Bool | val has Eq
+</code></pre></div>
+
+
+
+<a name="274341714"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274341714" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274341714">(Mar 07 2022 at 02:06)</a>:</h4>
+<p>I don't want to optimize for ability definition syntax being as concise as possible; I'd rather optimize for quality of documentation (e.g. the signature you write out is exactly what appears in the docs)</p>
+
+
+
+<a name="274341723"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274341723" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274341723">(Mar 07 2022 at 02:06)</a>:</h4>
+<p>especially because defining new abilities should be one of the rarest things people do in Roc</p>
+
+
+
+<a name="274341739"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274341739" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274341739">(Mar 07 2022 at 02:07)</a>:</h4>
+<p>I think the typical project should define 0 new abilities</p>
+
+
+
+<a name="274341743"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274341743" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274341743">(Mar 07 2022 at 02:07)</a>:</h4>
+<p>and that's true whether it's a library or application!</p>
+
+
+
+<a name="274341792"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274341792" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274341792">(Mar 07 2022 at 02:08)</a>:</h4>
+<p>(0 is the number for all Elm code bases, and that ecosystem is the nicest I've ever used...my #1 biggest fear with introducing Abilities to Roc is that the feature will be overused in a way that degrades the ecosystem!)</p>
+
+
+
+<a name="274341900"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274341900" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274341900">(Mar 07 2022 at 02:11)</a>:</h4>
+<p>it adds information to the signature but it still doesn't contain all the information you might need, like what is <code>Bool</code> or <code>Eq</code> (not the best example here)</p>
+
+
+
+<a name="274342029"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274342029" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274342029">(Mar 07 2022 at 02:14)</a>:</h4>
+<p>saying the constraints are more important for the docs than what data <code>Bool</code> has (imagine its <code>Person</code> instead) because they are specified on the method might not always be true</p>
+
+
+
+<a name="274342161"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274342161" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274342161">(Mar 07 2022 at 02:16)</a>:</h4>
+<p>sorry, I don't follow - can you write out a code example?</p>
+
+
+
+<a name="274342165"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274342165" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274342165">(Mar 07 2022 at 02:17)</a>:</h4>
+<p>sure</p>
+
+
+
+<a name="274342687"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274342687" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274342687">(Mar 07 2022 at 02:28)</a>:</h4>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">Hashable</span><span class="w"> </span><span class="nv">has</span><span class="w"></span>
+<span class="w">    </span><span class="nv">getHash</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Hash</span><span class="w">    </span><span class="err">#</span><span class="w"> </span><span class="nv">not</span><span class="w"> </span><span class="nv">sure</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="nv">thats</span><span class="w"> </span><span class="nv">correct</span><span class="w"> </span><span class="nv">syntax</span><span class="w"> </span><span class="nv">for</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="nv">arguments</span><span class="w"></span>
+
+<span class="kt">HashableWithSauce</span><span class="w"> </span><span class="nv">has</span><span class="w"></span>
+<span class="w">    </span><span class="nv">getHash</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="nv">sauce</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Hash</span><span class="w"> </span><span class="nf">|</span><span class="w"> </span><span class="nv">sauce</span><span class="w"> </span><span class="nv">has</span><span class="w"> </span><span class="kt">Hashable</span><span class="w"></span>
+</code></pre></div>
+<p>The docs for <code>HashableWithSauce</code> would make me look at what is Hash and what is Hashable anyways. If <code>Hash</code> is a concept worth naming it is probably worth being intoduced to as well (per project). On the same logic, if the <code>| sauce has Hashable</code> constraint was something that was used a lot and was worth naming <code>Sauce</code> one way or another, one would need to be introduced to the <code>Sauce</code> concept. Then reading the docs you either know <code>Sauce</code> or you look it up, just like with <code>Hash</code> or <code>Hashable</code>. Here the concept is only used once so those details are indeed relevant to the method <code>HashableWithSauce.getHash</code> itself, so I would want to see the whole signature of it including the constraints. The docs are as specific as the signature.</p>
+
+
+
+<a name="274342877"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274342877" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274342877">(Mar 07 2022 at 02:30)</a>:</h4>
+<p>but if the constraint IS used a lot throughout the ability, it would become noisy in the docs instead of being introduced to some named concept once</p>
+
+
+
+<a name="274342975"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274342975" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274342975">(Mar 07 2022 at 02:33)</a>:</h4>
+<p>my point is that naming a constraint is useful</p>
+
+
+
+<a name="274343040"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274343040" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274343040">(Mar 07 2022 at 02:34)</a>:</h4>
+<p>(or defining it for the whole scope, like with the <code>where</code> or <code>alias</code>, so it only has to be mentioned once)</p>
+
+
+
+<a name="274343049"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274343049" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274343049">(Mar 07 2022 at 02:35)</a>:</h4>
+<p>supporting both things seems good</p>
+
+
+
+<a name="274343642"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274343642" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274343642">(Mar 07 2022 at 02:48)</a>:</h4>
+<p>so 0-argument functions don't actually exist in Roc, because a pure function with 0 arguments always gives the same answer...so the only reason to ever have one is to delay evaluation in case the function takes a long time to compute that one answer <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span> </p>
+<div class="codehilite"><pre><span></span><code>Hashable has
+    getHash : {} -&gt; Hash
+</code></pre></div>
+
+
+
+<a name="274343649"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274343649" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274343649">(Mar 07 2022 at 02:49)</a>:</h4>
+<p>you could do that</p>
+
+
+
+<a name="274343655"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274343655" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274343655">(Mar 07 2022 at 02:49)</a>:</h4>
+<p>but I don't understand what that ability would do <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="274343734"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274343734" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274343734">(Mar 07 2022 at 02:50)</a>:</h4>
+<p>importantly, there's no implicit <code>this</code> or <code>self</code> involved here - not sure if that was clear!</p>
+
+
+
+<a name="274343810"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274343810" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274343810">(Mar 07 2022 at 02:52)</a>:</h4>
+<p>in fact I think the compiler should ideally give an error for any ability function that doesn't have a type variable with that ability constraining it (e.g. <code>a</code> in the <code>Eq</code> example above) because then the function isn't (and can't possibly be) using the ability at all!</p>
+
+
+
+<a name="274344872"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274344872" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274344872">(Mar 07 2022 at 03:13)</a>:</h4>
+<p>yeah it wasn't clear to me hehe.<br>
+anyhow the logic of that ability isn't too relevant either (plus I'm horrible at examples), the point was how you'd interact with the docs around  constraints, and how often its worth mentioning them.</p>
+
+
+
+<a name="274344939"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274344939" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274344939">(Mar 07 2022 at 03:14)</a>:</h4>
+<p>sometimes its worth per function, but other times not</p>
+
+
+
+<a name="274345147"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274345147" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274345147">(Mar 07 2022 at 03:18)</a>:</h4>
+<p>for example in the <code>isEq</code> and <code>isNotEq</code> example I would expect those functions to have the same constraints by nature, whatever they are. and I'm thinking about cases where more than just 2 functions would have some [partially] common constraints - if the coder decided to make things more concise, that decision should probably be carried out to the docs as well.</p>
+
+
+
+<a name="274345172"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Ability%20definition%20syntax/near/274345172" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Yorye Nathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Ability.20definition.20syntax.html#274345172">(Mar 07 2022 at 03:19)</a>:</h4>
+<p>so supporting the <code>where</code> or <code>alias</code> as a way to cut down on repetition over constraints can be beneficial to the docs too</p>
+
+
+
+<hr><p>Last updated: Jun 13 2026 at 13:18 UTC</p>
+</html>

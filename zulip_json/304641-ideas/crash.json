@@ -1,0 +1,554 @@
+[
+    {
+        "content": "<p>I've been thinking more about having a <code>crash</code> keyword (like <code>panic!</code> in Rust, except with a name that more strongly discourages reaching for it) since that discussion last week about why Roc isn't (and shouldn't be) total</p>",
+        "id": 302000918,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664775483
+    },
+    {
+        "content": "<p>I've convinced myself that the package ecosystem would most likely be fine in practice if the language had a <code>crash</code> keyword, because:</p>\n<ol>\n<li>Rust has <code>panic!</code> but it's successfully become a cultural norm that packages typically base APIs around <code>Result</code> instead of panicking. I think this is in significant part because panic doesn't have try/catch, so <code>Result</code> is actually the nicest way to make an API where callers can do custom error handling. The same incentive structure would be true in Roc.</li>\n<li>It's already the case that most Roc code can crash (e.g. heap allocations can fail, stack overflows can happen), so it's not like we can have a \"no crash\" guarantee anyway. People ought to be aware of that possibility even if it's rare in practice.</li>\n<li>Because Roc involves more custom data structures than Elm, it seems to come up more often that having an <code>unreachable</code> equivalent is optimal for performance, and there's value in making that more debuggable than the \"build your own <code>crash</code> using overflow\" approach</li>\n</ol>",
+        "id": 302001640,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664776017
+    },
+    {
+        "content": "<p>so I'm curious what people think of the idea of adding this to the language:</p>\n<ul>\n<li>Running the expression <code>crash \"uh oh\"</code> immediately ends the program, in the same way that a failed heap allocation or an integer overflow would (under the hood it would run the host's <code>roc_panic</code>, which we'd probably rename to <code>roc_crash</code> in this world)</li>\n<li>You get a compiler warning if you try to pass a <code>crash</code> expression as an argument to a function or assign it to a variable. (Because this is basically always a mistake - e.g. <code>Result.withDefault (crash \"blah\")</code> will not do what you might think it would at first glance!)</li>\n<li><code>crash</code> is always available, including in the package ecosystem (e.g. unlike Elm's <code>Debug.crash</code>) and there is no way to tell the compiler to give an error if any of your code uses it, or to segment the package ecosystem based on packages which do or don't use it</li>\n</ul>",
+        "id": 302002062,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664776354
+    },
+    {
+        "content": "<p>what do people think about the idea of adding this keyword to the language?</p>",
+        "id": 302002253,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664776536
+    },
+    {
+        "content": "<p>Whew, this is actually not easy to answer.<br>\nComing to Roc from Elm (with previous experience in Haskell and Rust among others), I really like the fact that it is hard to crash Elm.<br>\nThe escape hatches in Elm are basically the same but I have not seen it abused there, and it does not seem to be common to run into stack overflows or infinite loops in practice. I am also not sure how Roc has more custom types that would need failing (or an <code>unreachable</code>) than Elm? I generally use a <em>lot</em> of custom types in Elm and being unable to fail in some cases more often than not made me aware of a weakness in my modeling.<br>\nSo I was going to write my opinion against adding this keyword, <em>but then...</em></p>\n<p>Thinking about how Roc integrates with platforms, the escape hatches there are much simpler. As far as I understand it, there is nothing stopping you from implementing your own <code>thisDefinitelyWontFail</code> function that calls <code>panic!</code> in the background, and many operations might do this implicitly. Given this, it might not be bad to have <em>one</em> method to panic inside Roc, so the compiler safeguards you mentioned in your post can be implemented there, giving at least <em>some</em> guidance.</p>\n<p>I do, however, think that this mainly applies to code written specifically for interacting with a platform. So I would suggest thinking about doing <code>crash</code> somewhat like Elm does ports. Allowed in application code, but not in library code.<br>\nThis would give library users the confidence that their calls most likely won't spontaneously combust the runtime and, like in Elm, the downsides for modeling seem minor. This seems especially important for a language that might handle resources with the need for cleanup (say, open files) but does not support a <code>drop</code> mechanism for when the runtime panics.</p>",
+        "id": 302028532,
+        "sender_full_name": "Gabriel Pickl",
+        "timestamp": 1664789521
+    },
+    {
+        "content": "<p>Just to give a simple example of a library that would make sense to have crash. I have a Roc flat hash map library that attempts to implement the equivalent of the c++ absl::flat_hasj_map. This is so users could have the option to use an extremely fast hash map. The roc standard library does/will have it's own dictionary, but it will make specific tradeoffs around ordering and hash flooding that will effect performance in some cases. As such, a package with a hash map (or other similar data structure could be quite useful).</p>\n<p>With a hash map library, there are many list looks up and checks that can never fail (assuming no bugs). So this is a library where crash makes a lot of sense. Without crash, there are 3 other options:</p>\n<ol>\n<li>Use some other way to force a crash. I generally underflow an unsigned number type. (This is the current state)</li>\n<li>Dealing with bubbling up results. (This has a performance cost and makes the API much worse).</li>\n<li>Use some sort of default value (many cases this may not be possible due to not knowing how it construct one. Even if it is possible, when this happens, you would be hiding bugs)</li>\n</ol>",
+        "id": 302066691,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664804718
+    },
+    {
+        "content": "<p>I think generally speaking, when I want crash in an application, it is because I don't feel like dealing with errors or bubbling up errors got complex (lists in lists with results). Occasionally it is a truely impossible state, but that is pretty rare.</p>\n<p>When I want crash in a library, it is because a state is unreachable and it doesn't make sense to return an error. Also, handling the case would have more of a performance cost than crashing.</p>",
+        "id": 302067415,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664804952
+    },
+    {
+        "content": "<blockquote>\n<p>When I want crash in a library, it is because a state is unreachable and it doesn't make sense to return an error. Also, handling the case would have more of a performance cost than crashing.</p>\n</blockquote>\n<p>This is my thought process too - either this, or the user of my API has used it in a way that breaks the API contract. A rich type system does it make it easier to express an exact API surface and helps make the barrier-to-entry for something like <code>crash</code> high, but in the end all type systems are over-estimations and so you can't always express exactly what you want without allowing for some wiggle room. The wiggle room is where you want to disallow usage at runtime by crashing</p>",
+        "id": 302068139,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664805203
+    },
+    {
+        "content": "<p>I do feel like the entry cost should be pretty high though. The compiler warnings/restrictions are a good idea, but I think it needs to be a social (ecosystem-driven) thing too to have a certain discipline about what crashing means.</p>",
+        "id": 302068391,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664805275
+    },
+    {
+        "content": "<p>Another advantage to explicitly crashing, in my eyes, is it makes the DX of handling states you thought were unreachable, or not exposed by your API surface, much, much easier to find. With something like <code>crash</code> the compiler can insert instructions to print back where a crash occurred, and why. By forcing an infinite loop or integer overflow to induce a crash, it's much harder to get that. You can get it to some extent with an <code>expect</code>, but it would be a silent notification by default - you'd need to set up log collection and alerts on logs to see when an expect did not meet its condition.</p>",
+        "id": 302068816,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664805424
+    },
+    {
+        "content": "<p>I would question whether an API contract should be an <code>expect</code> or a <code>crash</code>, but otherwise totally agree with the sentiment.</p>",
+        "id": 302071267,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664806190
+    },
+    {
+        "content": "<p>Does the type system know about crash? E.g. can I write this?</p>\n<div class=\"codehilite\"><pre><span></span><code>unwrap : Result ok err -&gt; ok\nunwrap = \\result -&gt;\n  when result is\n    Ok value -&gt; value\n    Err e -&gt; crash e\n</code></pre></div>",
+        "id": 302080252,
+        "sender_full_name": "Tommy Graves",
+        "timestamp": 1664808846
+    },
+    {
+        "content": "<p>I think ideally we would have</p>\n<div class=\"codehilite\"><pre><span></span><code>crash : Str -&gt; a\n</code></pre></div>\n<p>so <span class=\"user-mention\" data-user-id=\"465225\">@Tommy Graves</span> your example would work only if <code>err = Str</code>. Or maybe there is some ability like <code>Display</code> (<a href=\"#narrow/stream/304641-ideas/topic/display.20and.20log\">https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/display.20and.20log</a>) for <code>err</code>, and <code>crash</code> is <code>crash : msg -&gt; a | msg has Display</code></p>",
+        "id": 302083417,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664809782
+    },
+    {
+        "content": "<p>worth noting you can kind of emulate this today by forcing an infinite loop:</p>\n<div class=\"codehilite\"><pre><span></span><code>crash : Str -&gt; a\ncrash = \\msg -&gt;\n  expect msg != msg\n\n  diverge = \\{} -&gt; diverge {}\n  diverge {}\n</code></pre></div>\n<p>but this is silent</p>",
+        "id": 302084142,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664809984
+    },
+    {
+        "content": "<p>Oh yeah -- I was less interested in that part and more in making sure the compiler knows the branch with a crash doesn't affect the return type of the function</p>",
+        "id": 302084922,
+        "sender_full_name": "Tommy Graves",
+        "timestamp": 1664810210
+    },
+    {
+        "content": "<p>yeah if the return type of <code>crash</code> is an unbound type variable it adds no information so it won't make the return type any larger</p>",
+        "id": 302086326,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664810633
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>» crash : * -&gt; *\n…\n… unwrap : Result ok err -&gt; ok\n… unwrap = \\result -&gt;\n…   when result is\n…     Ok value -&gt; value\n…     Err e -&gt; crash e\n…\n… unwrap\n\n&lt;function&gt; : Result ok err -&gt; ok\n</code></pre></div>",
+        "id": 302086436,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664810657
+    },
+    {
+        "content": "<p>yeah this is how Elm's old <a href=\"https://package.elm-lang.org/packages/elm-lang/core/5.1.1/Debug#crash\"><code>Debug.crash</code></a> worked</p>",
+        "id": 302107194,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664816767
+    },
+    {
+        "content": "<p>I think it would be better to have it be a keyword instead of a first class function though</p>",
+        "id": 302107249,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664816790
+    },
+    {
+        "content": "<p>because it doesn't really work like other functions in terms of control flow, which makes it easy to accidentally make mistakes with (e.g. <code>Result.withDefault (crash \"blah\")</code>)</p>",
+        "id": 302107454,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664816850
+    },
+    {
+        "content": "<p>Other than making it easier to restrict where you can type it, a keyword vs function would not change the semantics though right</p>",
+        "id": 302107776,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664816959
+    },
+    {
+        "content": "<p>right</p>",
+        "id": 302112078,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664818431
+    },
+    {
+        "content": "<p>from a type system perspective I think we can treat it like a function with that type</p>",
+        "id": 302112170,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664818453
+    },
+    {
+        "content": "<p>what if you make the rule really strict, like you can only execute crash as a unary expression in a scope (that is, as the only expression in a function, a <code>when</code> branch or conditional branch)? I think that covers the cases you would actually want to use this.</p>",
+        "id": 302112557,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664818588
+    },
+    {
+        "content": "<p>that would mean you couldn't build up a message string using intermediate defs?</p>",
+        "id": 302113164,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664818816
+    },
+    {
+        "content": "<p>what if it was like expects:</p>\n<div class=\"codehilite\"><pre><span></span><code>crash\n  prefix = ..\n  msg = ...\n  Str.concat prefix msg\n</code></pre></div>\n<p>?</p>",
+        "id": 302114370,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664819224
+    },
+    {
+        "content": "<p>It's not as convenient but maybe it shouldn't be?</p>",
+        "id": 302114626,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664819290
+    },
+    {
+        "content": "<p>I think this is a good idea. It happens very commonly that e.g. something is constructed using a constant value as parameter, so you know beforehand whether the outcome will be OK.</p>\n<p>I have no strong preferences over it being a keyword or a function. I'm not entirely convinced yet that restricting its usage to a particular place (with it as a keyword) really has enough advantages to make it worthwhile. If you have more examples of where it should/shouldn't be allowed to help user friendlyness, I'd be very interested in them.</p>\n<p>I do think that we need a longer and more scary name than <code>crash</code>.</p>",
+        "id": 302117959,
+        "sender_full_name": "Qqwy / Marten",
+        "timestamp": 1664820272
+    },
+    {
+        "content": "<p>I've always liked the name <code>accursedUnutterablePerformIO</code> for example, (though arguably it has gone slightly too far in its naming <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> ).</p>",
+        "id": 302118326,
+        "sender_full_name": "Qqwy / Marten",
+        "timestamp": 1664820402
+    },
+    {
+        "content": "<p>That you write <code>panic!</code> in Rust rather than plain <code>panic</code> is another example of helping readers to see that there is something special going on here and that it should not be taken lightly.</p>",
+        "id": 302118523,
+        "sender_full_name": "Qqwy / Marten",
+        "timestamp": 1664820473
+    },
+    {
+        "content": "<p>What about a name like <code>unreachableOrCrash</code>?</p>",
+        "id": 302119885,
+        "sender_full_name": "Qqwy / Marten",
+        "timestamp": 1664820893
+    },
+    {
+        "content": "<p>A related thing to think about: When we introduce this, we inevitably need a way to recover from them. Not for everyday code, but for:</p>\n<ul>\n<li>testing;</li>\n<li>running 'supervisor' style programs that need to recover from anything. (Like for instance a web server where a crash in one response should not bring the whole program down);</li>\n</ul>",
+        "id": 302121441,
+        "sender_full_name": "Qqwy / Marten",
+        "timestamp": 1664821335
+    },
+    {
+        "content": "<p>I think <code>roc_panic</code> is where the host can handle recovery (e.g. in the web server scenario) as needed. Imo the roc programmer should not have any way to manage recovery here</p>",
+        "id": 302122114,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664821552
+    },
+    {
+        "content": "<p>Also not for testing?</p>",
+        "id": 302123115,
+        "sender_full_name": "Qqwy / Marten",
+        "timestamp": 1664821866
+    },
+    {
+        "content": "<p>Probably <code>roc expect</code> can tell you when a test crashed. But I don't think you'd want to test for a crash occurring; that seems like a smell to me. If you can get your program into such a state in a realistic scenario, you should probably use error handling there?</p>",
+        "id": 302123916,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664822116
+    },
+    {
+        "content": "<p>did we discuss yet how <code>crash</code> would expose evaluation order, and whetehr/how we should deal with that? </p>\n<p>e.g if I have</p>\n<div class=\"codehilite\"><pre><span></span><code>a = crash &quot;foo&quot;\nb = crash &quot;bar&quot;\n</code></pre></div>\n<p>then according to our semantics the result is non-deterministic</p>",
+        "id": 302127183,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1664823150
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/304641-ideas/topic/crash/near/302123916\">said</a>:</p>\n<blockquote>\n<p>Probably <code>roc expect</code> can tell you when a test crashed. But I don't think you'd want to test for a crash occurring; that seems like a smell to me. If you can get your program into such a state in a realistic scenario, you should probably use error handling there?</p>\n</blockquote>\n<p>Once you use <code>crash</code> in cases of \"someone is using my API wrong\", then that is something that should be tested IMHO.</p>",
+        "id": 302127465,
+        "sender_full_name": "Qqwy / Marten",
+        "timestamp": 1664823245
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281543\">Folkert de Vries</span> <a href=\"#narrow/stream/304641-ideas/topic/crash/near/302127183\">said</a>:</p>\n<blockquote>\n<p>did we discuss yet how <code>crash</code> would expose evaluation order, and whetehr/how we should deal with that? </p>\n<p>e.g if I have</p>\n<div class=\"codehilite\"><pre><span></span><code>a = crash &quot;foo&quot;\nb = crash &quot;bar&quot;\n</code></pre></div>\n<p>then according to our semantics the result is non-deterministic</p>\n</blockquote>\n<p>I'm in the camp of \"we should not deal with it\" (but of course document that this indeed <em>is</em> non-deterministic).</p>",
+        "id": 302127696,
+        "sender_full_name": "Qqwy / Marten",
+        "timestamp": 1664823336
+    },
+    {
+        "content": "<p>the \"ordering semantics\" point instantly sold me on Ayaz's proposed restriction on where it can be used</p>",
+        "id": 302138042,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664827112
+    },
+    {
+        "content": "<p>it can't come up if you don't allow <code>crash</code> in defs in the first place!</p>",
+        "id": 302138112,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664827138
+    },
+    {
+        "content": "<p>I wonder if the rule could be simplified to \"you can only use <code>crash</code> immediately after <code>then</code>, <code>else</code>, or <code>-&gt;</code>\"</p>",
+        "id": 302138414,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664827241
+    },
+    {
+        "content": "<p>Hm, it still could come up in the following case, no?</p>\n<div class=\"codehilite\"><pre><span></span><code>x1 = when y is\n          _ -&gt; crash &quot;&quot;\nx2 = when y is\n          _ -&gt; crash &quot;&quot;\n</code></pre></div>",
+        "id": 302139716,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664827697
+    },
+    {
+        "content": "<p>even if you say that it can only happen as the sole expression in a function, the problem remains:</p>\n<div class=\"codehilite\"><pre><span></span><code>crasher = \\{} -&gt; crash &quot;&quot;\nx1 = crasher {}\nx2 = crasher {}\n</code></pre></div>",
+        "id": 302139969,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1664827797
+    },
+    {
+        "content": "<p>hm, yeah true</p>",
+        "id": 302141525,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664828338
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> could we give a warning about it?</p>",
+        "id": 302141644,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664828392
+    },
+    {
+        "content": "<p>I guess this same problem already happens with integer overflow etc</p>",
+        "id": 302141860,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664828472
+    },
+    {
+        "content": "<p>If something is going to crash, do we really care about this? Either way it is a crash, the app state is broken, and the platform has do deal with it.</p>",
+        "id": 302142650,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664828769
+    },
+    {
+        "content": "<p>yeah maybe it doesn't matter</p>",
+        "id": 302179386,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664848588
+    },
+    {
+        "content": "<p>here's a draft PR for <code>crash</code> in the tutorial, to see what it would look like: <a href=\"https://github.com/roc-lang/roc/pull/4190\">https://github.com/roc-lang/roc/pull/4190</a></p>",
+        "id": 302184380,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664853348
+    },
+    {
+        "content": "<p>As soon as ordering is well-defined, people will start depending on this ordering and we will need to make the compilation process (esp. some of the optimization passes) more complex to ensure that this guarantee is always upheld.</p>\n<p>I do not think that it is worth it.</p>",
+        "id": 302231060,
+        "sender_full_name": "Qqwy / Marten",
+        "timestamp": 1664879424
+    },
+    {
+        "content": "<p>I have to say that I really don't like <code>crash!</code> in packages!</p>\n<p>Yes, we should have some construct like this for iterating purposes, but in the code that we would distribute, I don't know, at least then each package should have <strong><em>GLARING RED</em></strong> each place where they use escape hatches.</p>",
+        "id": 302254724,
+        "sender_full_name": "Zeljko Nesic",
+        "timestamp": 1664888343
+    },
+    {
+        "content": "<p>It makes me almost like a hole in a stomach to think that my Roc might have crashes sprinlked around.</p>",
+        "id": 302254864,
+        "sender_full_name": "Zeljko Nesic",
+        "timestamp": 1664888391
+    },
+    {
+        "content": "<p>Especially then they can be very non-informative crashes. Like \"operation successfully failed, CRASH!\"</p>",
+        "id": 302255046,
+        "sender_full_name": "Zeljko Nesic",
+        "timestamp": 1664888423
+    },
+    {
+        "content": "<p>UGA BUGA, but why!?!?</p>",
+        "id": 302255122,
+        "sender_full_name": "Zeljko Nesic",
+        "timestamp": 1664888443
+    },
+    {
+        "content": "<p>And to enforce nice crash culture i think would be really hard.</p>",
+        "id": 302255209,
+        "sender_full_name": "Zeljko Nesic",
+        "timestamp": 1664888475
+    },
+    {
+        "content": "<p>Is there a reason hitting a <code>roc_panic</code> doesn't stack-unwind today? (I couldn't find anything in zulip but I know im missing historical context)</p>",
+        "id": 302565752,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665015277
+    },
+    {
+        "content": "<p>No platform has implemented it? They just print and exit. Theoretically the platform would have to deal with it.</p>",
+        "id": 302565943,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665015432
+    },
+    {
+        "content": "<p>how would the platform implement it? Im pretty sure you would need Roc compiler support</p>",
+        "id": 302566086,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665015544
+    },
+    {
+        "content": "<p>Namely, I'm referring to making sure reference counts are appropriately decremented when a <code>roc_panic</code> happens. I guess you could do that by chasing through <code>roc_alloc</code></p>",
+        "id": 302566240,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665015640
+    },
+    {
+        "content": "<p>so from what I've read, the general way to do this is using <code>libunwind</code></p>",
+        "id": 302569398,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665018442
+    },
+    {
+        "content": "<p>which exposes C functions you can call to get a backtrace of the current call stack, including function names if the currently running executable has debug info (and function addresses if not)</p>",
+        "id": 302569497,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665018529
+    },
+    {
+        "content": "<p>which means it's something hosts can do, and there's an advantage to having it be done in the host which is that it means hosts can decide whether or not they want to pay for walking the current stack to assemble that info</p>",
+        "id": 302569529,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665018582
+    },
+    {
+        "content": "<p>Though even if a host walked the currently stack, they wouldn't really have the information to clean up.</p>",
+        "id": 302569643,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665018676
+    },
+    {
+        "content": "<p>Really the only way for a host to clean up currently is to use an arena allocator or some separate allocator for roc that they can dump when panic is called</p>",
+        "id": 302569676,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665018711
+    },
+    {
+        "content": "<p>right, that ended up being the design intentionally</p>",
+        "id": 302569721,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665018735
+    },
+    {
+        "content": "<p>I was thinking of just getting a stack trace to log a better error message, which a host should be able to do</p>",
+        "id": 302569725,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665018738
+    },
+    {
+        "content": "<p>basically if hosts want to clean up on panic, they need to implement <code>roc_alloc</code> (and other resources, e.g. file handles - which also can only be created by running host code) to write down a list of what needs cleaning up</p>",
+        "id": 302569799,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665018824
+    },
+    {
+        "content": "<p>and then on panic they can traverse that list and perform whatever cleanups are necessary</p>",
+        "id": 302569850,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665018848
+    },
+    {
+        "content": "<p>Okay so it sounds like the current design is to sweep through <code>roc_alloc</code></p>",
+        "id": 302569934,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665018943
+    },
+    {
+        "content": "<p>doesn't have to be a sweep</p>",
+        "id": 302569940,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665018954
+    },
+    {
+        "content": "<p>like for example let's say you implement <code>roc_alloc</code> as a custom variation on <code>malloc</code> that's the same as normal <code>malloc</code> in every way except that it can give you pointers to all the pages it's allocated</p>",
+        "id": 302570011,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665019020
+    },
+    {
+        "content": "<p>Right, I just mean what you were saying - record somewhere the things that were allocated, and need to be freed eventually</p>",
+        "id": 302570037,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665019050
+    },
+    {
+        "content": "<p>ah, in that case, yes!</p>",
+        "id": 302570043,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665019060
+    },
+    {
+        "content": "<p>Even with <code>libunwind</code> it looks like you need some compiler support. At the very least DWARF info for some platforms. I don't really know much about this but it looks like you need to either use the C ABI everywhere for <code>libunwind</code> to do its thing (with DWARF info) or compile with unwinding directives, e.g. via llvm.</p>",
+        "id": 302570051,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665019070
+    },
+    {
+        "content": "<p>could very well be wrong though</p>",
+        "id": 302570126,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665019102
+    },
+    {
+        "content": "<p>these compiler things are all so magical</p>",
+        "id": 302570142,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665019126
+    },
+    {
+        "content": "<p>yeah that's correct</p>",
+        "id": 302570159,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665019144
+    },
+    {
+        "content": "<p>the compiler needs to output the necessary metadata for <code>libunwind</code> to do its thing, including both llvm and dev backends - although I <em>think</em> llvm might already do it automatically</p>",
+        "id": 302570268,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665019228
+    },
+    {
+        "content": "<p>I looked into this a couple of years ago, and I remember concluding this design would work, but I don't remember whether llvm did it automatically or not</p>",
+        "id": 302570291,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665019261
+    },
+    {
+        "content": "<p>well.. we emit almost no debug information today, even with llvm <span aria-label=\"sneezing\" class=\"emoji emoji-1f927\" role=\"img\" title=\"sneezing\">:sneezing:</span></p>",
+        "id": 302570332,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665019312
+    },
+    {
+        "content": "<p>I think you have to instruct llvm to do so explicitly. There are <code>debug</code> and <code>unwind</code> directives that it doesn't look like we inject today</p>",
+        "id": 302570386,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665019344
+    },
+    {
+        "content": "<p>also with the surgical linker things probably get trickier too</p>",
+        "id": 302570399,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665019363
+    },
+    {
+        "content": "<p>as I recall it's something along the lines of storing some metadata at the end (or maybe right before) each function</p>",
+        "id": 302570592,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665019579
+    },
+    {
+        "content": "<p>I suspect it'll be the same sort of thing as what we currently do for surgical linking, just with a slightly different format than ELF/Mach-O/COFF</p>",
+        "id": 302570636,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665019654
+    },
+    {
+        "content": "<p>yeah both of those make sense, re metadata and the linker. thinking from first principles you probably just need to know the address of the previous stack frame, instruction pointer, and size of the current stack frame. and maybe where to jump in the current stack frame to do your cleanup</p>",
+        "id": 302570759,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1665019784
+    },
+    {
+        "content": "<p>Yeah, surgical linker will bash debug info and at a minimum lead to it being misaligned. That being said, it should be supportable, just hasn't been done.</p>",
+        "id": 302571425,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665020442
+    },
+    {
+        "content": "<p>I haven't tried it, but <a href=\"https://crates.io/crates/backtrace\">https://crates.io/crates/backtrace</a> might be a quick way to try it out in the CLI platform</p>",
+        "id": 302574896,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665023749
+    },
+    {
+        "content": "<p>and the readme of <a href=\"https://crates.io/crates/mini-backtrace\">https://crates.io/crates/mini-backtrace</a> mentions some libunwind-llvm interactions</p>",
+        "id": 302574996,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665023831
+    },
+    {
+        "content": "<p>I understand the need to print out a stack trace. That makes sense.<br>\nBut do we really need to decrement refcounts and free memory? Your process is going to terminate, so the OS will free all of its memory anyway.</p>",
+        "id": 302590341,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1665038214
+    },
+    {
+        "content": "<p>depends on the platform - for a CLI app, totally! For a webserver, it probably wants to just respond with HTTP 500 for that request and keep handling the others as normal.</p>",
+        "id": 302592912,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665039611
+    },
+    {
+        "content": "<p>if an editor plugin crashes, it probably just wants to display an error and continue running all the other plugins as normal</p>",
+        "id": 302592992,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665039643
+    },
+    {
+        "content": "<p>Ah, OK. Yes that was an assumption I was making without realising it, thanks!</p>",
+        "id": 302594059,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1665040200
+    }
+]
