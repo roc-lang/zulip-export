@@ -22,3 +22,68 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         delete_history: true
         archive_branch: main
+    - name: Rename case-conflicting files for macOS compatibility
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        python3 << 'PYEOF'
+        import subprocess, sys, os
+
+        def upper_variant_name(path):
+            """Lowercase the path and insert -upper before the extension."""
+            dirname = os.path.dirname(path)
+            basename = os.path.basename(path)
+            if '.' in basename:
+                stem, ext = basename.rsplit('.', 1)
+                new_basename = stem.lower() + '-upper.' + ext.lower()
+            else:
+                new_basename = basename.lower() + '-upper'
+            return os.path.join(dirname, new_basename) if dirname else new_basename
+
+        def update_html_references(old_basename, new_basename):
+            all_files = subprocess.check_output(['git', 'ls-files']).decode().splitlines()
+            for f in all_files:
+                if not f.endswith('.html') or not os.path.exists(f):
+                    continue
+                with open(f, 'r', encoding='utf-8') as fh:
+                    content = fh.read()
+                if old_basename in content:
+                    with open(f, 'w', encoding='utf-8') as fh:
+                        fh.write(content.replace(old_basename, new_basename))
+
+        files = subprocess.check_output(['git', 'ls-files']).decode().splitlines()
+        lower_map = {}
+        renames = {}
+
+        for f in sorted(files):
+            k = f.lower()
+            if k in lower_map:
+                existing = lower_map[k]
+                # The uppercase variant is the one whose path differs from its own lowercase
+                if f != f.lower():
+                    upper = f
+                elif existing != existing.lower():
+                    upper = existing
+                    lower_map[k] = f
+                else:
+                    upper = f  # both lowercase already; rename the later one
+                renames[upper] = upper_variant_name(upper)
+            else:
+                lower_map[k] = f
+
+        if not renames:
+            print("No case conflicts found.")
+            sys.exit(0)
+
+        print(f"Renaming {len(renames)} file(s):")
+        for old, new in renames.items():
+            print(f"  {old} -> {new}")
+            subprocess.run(['git', 'mv', old, new], check=True)
+            update_html_references(os.path.basename(old), os.path.basename(new))
+
+        subprocess.run(['git', 'add', '-A'], check=True)
+        subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
+        subprocess.run(['git', 'config', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True)
+        subprocess.run(['git', 'commit', '-m', 'Rename case-conflicting files for macOS compatibility'], check=True)
+        subprocess.run(['git', 'push'], check=True)
+        PYEOF
