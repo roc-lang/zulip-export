@@ -1,0 +1,410 @@
+[
+    {
+        "content": "<p>So recently, we realized that open tags where leading to a solid number of ffi bugs. These were made apparent when we switch over to task as a builtin. Anytime we made a task like <code>Task someData []</code> it lead to ffi issues. The big problem is that <code>[]</code> was an open tag. It would eventually specialize to <code>SomeErrorTag</code>. That was leading to the ffi changing depending on the error type used by an application.</p>\n<p>This was the root of all kinds of strange bugs. As such, we switch over basic cli and other platforms using <code>{}</code> as the no error type. This solved the immediate ffi problem by requiring that the platform author manually deal with the issue.</p>\n<p>This has two main downsides:</p>\n<ol>\n<li>Even if a task can't fail, we are generating unnecessary result wrappings in the platform api. Often adding in a <code>crash</code> if the <code>{}</code> error case is ever somehow hit.</li>\n<li>We are leaving the fix up to the platform author, who may not even know there is a problem.</li>\n</ol>\n<hr>\n<p>I think we should more directly fix this. I also don't think it will be too hard:</p>\n<ol>\n<li>Ban any sort of type variables in the task type for a hosted function. No <code>Task Str *</code>. Those clearly have undefined ffi types.</li>\n<li>If we run into a <code>[]</code> in the ok or err case of a <code>Task</code>. Automatically map it in a way that ensures it will never expand.</li>\n</ol>\n<p>2 is pretty easy to do. This is an example of doing it manually for the error case:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"err\">#</span><span class=\"w\"> </span><span class=\"kt\">Hosted</span><span class=\"w\"> </span><span class=\"nv\">generated</span><span class=\"w\"> </span><span class=\"nv\">function</span>\n<span class=\"nv\">stdoutLine</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"p\">[]</span>\n\n<span class=\"err\">#</span><span class=\"w\"> </span><span class=\"kt\">Wrapping</span><span class=\"w\"> </span><span class=\"nv\">function</span><span class=\"nf\">:</span>\n<span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"p\">[]</span>\n<span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"p\">(</span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"nv\">x</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">stdoutLine</span><span class=\"w\"> </span><span class=\"nv\">str</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"nf\">.</span><span class=\"nv\">result</span><span class=\"err\">!</span>\n<span class=\"w\">    </span><span class=\"kt\">Task</span><span class=\"nf\">.</span><span class=\"nv\">ok</span><span class=\"w\"> </span><span class=\"nv\">x</span>\n</code></pre></div>\n<p>We just have to automatically generate the equivalent of that wrapping function. Preferably when we implement it, we inline the representation instead of actually calling <code>Task.result</code>.</p>\n<p>This enables user to just write <code>Task _ []</code> and it to automatically work. It will never expand accidentally and break ffi with the platform.</p>\n<p>Aside: I think we also have to ban <code>Task [] []</code>, but we can allow for both <code>Task [] _</code> and <code>Task _ []</code> where <code>_</code> is a proper type that enables instantiate the task.</p>\n<p>Thoughts?</p>",
+        "id": 475111554,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728231821
+    },
+    {
+        "content": "<p>One ffi note that is important to note to platform authors:</p>\n<p><code>Task {} []</code> will just be <code>void</code> return type.<br>\n<code>Task Something []</code> will just be <code>Something</code> return type.<br>\n<code>Task Something SomeErr</code> will be <code>Result Something SomeErr</code> return type.</p>",
+        "id": 475111655,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728231926
+    },
+    {
+        "content": "<p>I think it would be simpler to ban <code>[]</code> in hosted types altogether</p>",
+        "id": 475112573,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232769
+    },
+    {
+        "content": "<p>in the purity inference world, I don't think anyone would even notice <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 475112580,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232780
+    },
+    {
+        "content": "<p>because the only reason it comes up a lot now is that <code>Task _ []</code> comes up a lot</p>",
+        "id": 475112653,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232813
+    },
+    {
+        "content": "<p>but in the purity inference world, <code>Task Foo []</code> just becomes <code>Foo</code></p>",
+        "id": 475112660,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232822
+    },
+    {
+        "content": "<p>If purity inference is coming soon, I agree. If not, I think we should fix this</p>",
+        "id": 475112672,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728232848
+    },
+    {
+        "content": "<p>yeah Agus already has the type-checking part almost done! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 475112701,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232873
+    },
+    {
+        "content": "<p>hm, although shouldn't we still run into problems with non-empty tag unions? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 475112724,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232908
+    },
+    {
+        "content": "<p>oh! This is much farther along than I realized.</p>",
+        "id": 475112771,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728232925
+    },
+    {
+        "content": "<p>like if I send <code>[Foo, Bar]</code> to the host, there are circumstances where that can unify with <code>[Foo, Bar, Baz]</code></p>",
+        "id": 475112772,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232926
+    },
+    {
+        "content": "<p>haha...yeah...</p>",
+        "id": 475112783,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728232939
+    },
+    {
+        "content": "<p>which could change layouts</p>",
+        "id": 475112787,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232941
+    },
+    {
+        "content": "<p>So maybe we need a more wholistic solution for any tags sent to the host</p>",
+        "id": 475112797,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728232954
+    },
+    {
+        "content": "<p>yeah like explicitly saying <code>[Foo, Bar, Baz][]</code> - or inferring it that way I guess</p>",
+        "id": 475112820,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232974
+    },
+    {
+        "content": "<p>like basically treating any tag union types in hosted signatures as closed</p>",
+        "id": 475112838,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232991
+    },
+    {
+        "content": "<p>Really we want host tags to be closed but to automatically closed, but I also think that it would be preferred to to automatically map them back to open.</p>",
+        "id": 475112857,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233004
+    },
+    {
+        "content": "<p>Or at least make it trivial to do so?</p>",
+        "id": 475112881,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233015
+    },
+    {
+        "content": "<p>Cause all error tags will want to be open at the end of the day</p>",
+        "id": 475112911,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233036
+    },
+    {
+        "content": "<p>oh true</p>",
+        "id": 475112973,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233058
+    },
+    {
+        "content": "<p>hm</p>",
+        "id": 475112979,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233065
+    },
+    {
+        "content": "<div class=\"spoiler-block\"><div class=\"spoiler-header\">\n<p>terrible code in basic-cli to work around this</p>\n</div><div class=\"spoiler-content\" aria-hidden=\"true\">\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kt\">Err</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">    </span><span class=\"kt\">EndOfFile</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">BrokenPipe</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">UnexpectedEof</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">InvalidInput</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">OutOfMemory</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Interrupted</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Unsupported</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Other</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">,</span>\n<span class=\"p\">]</span>\n\n<span class=\"nv\">handleErr</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">        </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"kr\">if</span><span class=\"w\"> </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"s\">\"EOF\"</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">StdinErr</span><span class=\"w\"> </span><span class=\"kt\">EndOfFile</span>\n<span class=\"w\">        </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"kr\">if</span><span class=\"w\"> </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"s\">\"ErrorKind::BrokenPipe\"</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">StdinErr</span><span class=\"w\"> </span><span class=\"kt\">BrokenPipe</span>\n<span class=\"w\">        </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"kr\">if</span><span class=\"w\"> </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"s\">\"ErrorKind::UnexpectedEof\"</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">StdinErr</span><span class=\"w\"> </span><span class=\"kt\">UnexpectedEof</span>\n<span class=\"w\">        </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"kr\">if</span><span class=\"w\"> </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"s\">\"ErrorKind::InvalidInput\"</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">StdinErr</span><span class=\"w\"> </span><span class=\"kt\">InvalidInput</span>\n<span class=\"w\">        </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"kr\">if</span><span class=\"w\"> </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"s\">\"ErrorKind::OutOfMemory\"</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">StdinErr</span><span class=\"w\"> </span><span class=\"kt\">OutOfMemory</span>\n<span class=\"w\">        </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"kr\">if</span><span class=\"w\"> </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"s\">\"ErrorKind::Interrupted\"</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">StdinErr</span><span class=\"w\"> </span><span class=\"kt\">Interrupted</span>\n<span class=\"w\">        </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"kr\">if</span><span class=\"w\"> </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"nf\">==</span><span class=\"w\"> </span><span class=\"s\">\"ErrorKind::Unsupported\"</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">StdinErr</span><span class=\"w\"> </span><span class=\"kt\">Unsupported</span>\n<span class=\"w\">        </span><span class=\"nv\">str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">StdinErr</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Other</span><span class=\"w\"> </span><span class=\"nv\">str</span><span class=\"p\">)</span>\n\n<span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">StdinErr</span><span class=\"w\"> </span><span class=\"kt\">Err</span><span class=\"p\">]</span>\n<span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">    </span><span class=\"kt\">PlatformTasks</span><span class=\"nf\">.</span><span class=\"nv\">stdinLine</span>\n<span class=\"w\">    </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"nf\">.</span><span class=\"nv\">mapErr</span><span class=\"w\"> </span><span class=\"nv\">handleErr</span>\n</code></pre></div>\n</div></div>",
+        "id": 475113009,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233087
+    },
+    {
+        "content": "<p>so, setting aside ergonomics, I think there is only one way to do this correctly</p>",
+        "id": 475113139,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233163
+    },
+    {
+        "content": "<p>To work around this today in roc would require returning the open tag and then mapping every tag field (potentially recursively)  with a <code>when task |&gt; Task.result! is</code>.</p>",
+        "id": 475113142,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233164
+    },
+    {
+        "content": "<p>actually nm I can think of two ways to do it correctly</p>",
+        "id": 475113183,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233202
+    },
+    {
+        "content": "<blockquote>\n<p>I think there is only one way to do this correctly</p>\n</blockquote>\n<p>Force all type variables in the hosted api to be empty?</p>",
+        "id": 475113187,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233206
+    },
+    {
+        "content": "<p>So open tags are forced closed and <code>Task Str err</code> has not err case?</p>",
+        "id": 475113221,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233225
+    },
+    {
+        "content": "<p>so one way to do it correctly is to have a big <code>Error</code> union which represents literally every possible error the host might see</p>",
+        "id": 475113244,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233243
+    },
+    {
+        "content": "<p>and then all hosted functions use that as their <code>Error</code> types, and we have a rule that all tag unions in hosted types are closed unions, but that's okay because you've literally enumerated every possible one</p>",
+        "id": 475113267,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233279
+    },
+    {
+        "content": "<p>then as the platform author you write wrappers around these that just expose the specific errors that can happen for a particular operation (again, setting aside ergonomics - this would at least <em>work</em>)</p>",
+        "id": 475113330,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233307
+    },
+    {
+        "content": "<p>What happens when a user wants to wrap or modify an error? <code>Task.mapErr ExtraContext</code>?</p>",
+        "id": 475113340,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233315
+    },
+    {
+        "content": "<p>and those are open unions, and those are what get exposed to application authors</p>",
+        "id": 475113344,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233323
+    },
+    {
+        "content": "<p>application author experience is unchanged here</p>",
+        "id": 475113377,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233365
+    },
+    {
+        "content": "<p>this is an extra step for the platform author to take for the sake of layout correctness in the host</p>",
+        "id": 475113392,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233380
+    },
+    {
+        "content": "<p>I'm not sure I follow this? How are we opening the union such that the application author experience is unchanged?</p>",
+        "id": 475113402,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233390
+    },
+    {
+        "content": "<p>the platform author is using <code>Task.mapErr</code></p>",
+        "id": 475113411,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233401
+    },
+    {
+        "content": "<p>Ok, then why do we need one giant <code>Error</code> type?</p>",
+        "id": 475113463,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233414
+    },
+    {
+        "content": "<p>for layout reasons</p>",
+        "id": 475113468,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233420
+    },
+    {
+        "content": "<p>for a hosted function, the host needs to know statically what the layout of that tag union is</p>",
+        "id": 475113510,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233466
+    },
+    {
+        "content": "<p>in order to know what the layout of that <code>Result</code> is</p>",
+        "id": 475113518,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233470
+    },
+    {
+        "content": "<p>and that's only knowable statically if the tag union is closed</p>",
+        "id": 475113541,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233492
+    },
+    {
+        "content": "<p>(and if any closures inside it are boxed, which is already a rule we separately need)</p>",
+        "id": 475113566,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233518
+    },
+    {
+        "content": "<p><code>Task.mapErr</code> will deal with any layout issues by mapping to an open union.</p>\n<div class=\"codehilite\"><pre><span></span><code>task1: Str -&gt; Task {} [SomeErr1]\ntask2: Str -&gt; Task {} [SomeErr2]\n\nexposedTask1 = \\str -&gt; Task.mapErr task1 \\Err SomeErr1 -&gt; Err SomeErr1\nexposedTask2 = \\str -&gt; Task.mapErr task2 \\Err SomeErr2 -&gt; Err SomeErr2\n</code></pre></div>",
+        "id": 475113589,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233522
+    },
+    {
+        "content": "<p>oh, I see</p>",
+        "id": 475113681,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233553
+    },
+    {
+        "content": "<p>sure, that would do the same thing</p>",
+        "id": 475113692,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233558
+    },
+    {
+        "content": "<p>But yeah, ignoring ergonomic, I think we just need to ban all type variables. This includes the type variable in open tags.</p>",
+        "id": 475114022,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233681
+    },
+    {
+        "content": "<p>** and ban unboxed closures as you mentions</p>",
+        "id": 475114133,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233722
+    },
+    {
+        "content": "<p>well named type variables are useful</p>",
+        "id": 475114177,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233745
+    },
+    {
+        "content": "<p>but those need to compile to opaque pointers</p>",
+        "id": 475114203,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233754
+    },
+    {
+        "content": "<p>like that's what should be doing instead of <code>Model</code> ideally</p>",
+        "id": 475114279,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233769
+    },
+    {
+        "content": "<p>Ah, yeah, you have to special case some type variables, but those have to be in a container.</p>",
+        "id": 475114340,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233798
+    },
+    {
+        "content": "<p><code>Box model</code>, <code>List model</code>, etc.</p>",
+        "id": 475114423,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233824
+    },
+    {
+        "content": "<p>And this is due to the container having a known layout.</p>",
+        "id": 475114451,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233837
+    },
+    {
+        "content": "<p>But you can't do <code>Result Str err</code></p>",
+        "id": 475114479,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728233851
+    },
+    {
+        "content": "<p>yeah I think that should be fine</p>",
+        "id": 475114666,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233908
+    },
+    {
+        "content": "<p>like <code>Box model</code> instead of the current <code>Model</code> for initializing webserver global state...you'd want that to be heap-allocated anyway so it would be passed by pointer to all the different request handlers</p>",
+        "id": 475114819,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728233968
+    },
+    {
+        "content": "<p>A larger record is passed by reference anyway. So <code>Model</code> is still better.</p>",
+        "id": 475115044,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728234036
+    },
+    {
+        "content": "<p>No need to keep unboxing and reboxing</p>",
+        "id": 475115074,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728234050
+    },
+    {
+        "content": "<p>But yeah <code>Box model</code> is simpler</p>",
+        "id": 475115091,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728234056
+    },
+    {
+        "content": "<p>Cause <code>Box model</code> in roc probably leads to a copy. It will be copied to the stack so it can be used as <code>model</code> without the <code>Box</code> in the roc application.</p>",
+        "id": 475115386,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728234158
+    },
+    {
+        "content": "<p>We can fix this probably with a builtin though. Something that keeps the box alive, but for large records that will be passed by pointer anyway, will just pass in the pointer to the box.</p>",
+        "id": 475115820,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728234317
+    },
+    {
+        "content": "<p>random thought, but we could have a <code>Box.leak : a -&gt; Box a</code> which gives you...</p>",
+        "id": 475115851,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728234329
+    },
+    {
+        "content": "<p>yeah, something like that haha</p>",
+        "id": 475115861,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728234332
+    },
+    {
+        "content": "<p>I wonder how often large records in roc are mutated in place vs make a new copy.....</p>",
+        "id": 475116085,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728234416
+    },
+    {
+        "content": "<p>Anyway, this is a far side tangent at this point.</p>",
+        "id": 475116172,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728234441
+    },
+    {
+        "content": "<p>For the original topic of this thread:</p>\n<p>It sounds like purity inference is actually pretty close. So we should just wait for that. On top of that, we have some known changes around restricting types that get passed to/from the host. That will fix any of these annoying bugs, but will not fix the ergonomics (luckily, the ergonomics are only a platform problem and shouldn't generally affect applications if platforms are implemented well).</p>",
+        "id": 475116493,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728234553
+    },
+    {
+        "content": "<p>agreed!</p>",
+        "id": 475116662,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728234606
+    },
+    {
+        "content": "<p>we could do the \"make all the unions in hosted types be closed automatically\" change anytime</p>",
+        "id": 475116842,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728234668
+    }
+]

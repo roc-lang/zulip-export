@@ -1,0 +1,884 @@
+[
+    {
+        "content": "<p>I wanted to write this out to make sure we are all on the same page. This is especially important cause I know we want to change some of the platform calling convention to make things easier to work with. This does not need to all be done at once, but I think some of it is important to do from the start.</p>\n<p>Firstly, and probably the most important (it may effect some of the IRs). All functions that roc generates will now have an implicit arg. The arg will be a constant reference to a record that contains all allocation related functions. This will make it much easier for platforms to control allocations with arenas and what not. One piece I am not sure of with this design, do lambdas capture this record or do they take it as an argument? There may be some weird edge cases here that platforms need to be careful around.</p>\n<p>Note: Due to switching to static libraries instead of surgical linking, all other effects will stay the same as they are today. They will not need to be passed in on each call. They will just be linked as normal.</p>\n<p>Second, we want to change the host and effect function allowed types. Essentially, the host must box all returned lambdas and type variables. Type variables are allowed to be passed to the host, but they are simply opaque boxes to the host (Like <code>Box model</code> which the host would see as <code>Box {}</code>). This removes any sort of variable sized data being passed to the host. </p>\n<p>Third, and this is a longer term goal, we want to generate cffi functions that the host can use to interact with all roc primitives. These can be gc'd if the host doesn't use them, but we should generate functions for all types exposed to the host to make them easier to interact with. This will fundamentally work with glue to make interacting with roc types way easier. Instead of repeating the same logic that is rather complex in N different glue scripts, we just have to wrap a couple of functions and tell the host how many bytes a type is.</p>",
+        "id": 497282963,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738523917
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20calling.20roc/near/497282963\">said</a>:</p>\n<blockquote>\n<p>One piece I am not sure of with this design, do lambdas capture this record or do they take it as an argument? There may be some weird edge cases here that platforms need to be careful around.</p>\n</blockquote>\n<p>I don't think they should capture. if I'm the host and I run a chunk of Roc code, I always want the whole thing to run using the allocators I specified at the call site. Capturing them would remove that invariant, which definitely sounds undesirable! <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 497284436,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738525096
+    },
+    {
+        "content": "<p>but in general that all sounds right to me!</p>",
+        "id": 497284451,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738525113
+    },
+    {
+        "content": "<p>The hard part is that the lambda may capture variables that were allocated with the allocator that created the lambda. Maybe types need to store the allocator they were created with, but I was hoping to avoid that.</p>",
+        "id": 497284955,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738525481
+    },
+    {
+        "content": "<p>Also, if types store the allocator, should they migrate to a new allocator if they grow in a different roc function with a different new allocator.</p>",
+        "id": 497285001,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738525523
+    },
+    {
+        "content": "<p>I think it's best to let the host figure that out</p>",
+        "id": 497285452,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738525903
+    },
+    {
+        "content": "<p>like if the host is going to store returned closures and then use them again later, it's up to the host to make sure they're being used with the same allocator again</p>",
+        "id": 497285541,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738525959
+    },
+    {
+        "content": "<p>or at least with a compatible one, e.g. if the new one is told to deallocate an address it doesn't recognize, it knows to ask the previous allocator to deallocate it</p>",
+        "id": 497285662,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738526043
+    },
+    {
+        "content": "<p>Ok, yeah that sounds fine. I guess worst case the host makes a linked list of allocators. I wonder if this will make it hard to clean up old arenas. Probably depends a lot on context. Worst case the arena would last until all lambdas are resolved</p>",
+        "id": 497285803,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738526138
+    },
+    {
+        "content": "<p>I wanted to mention it in this thread too:</p>\n<p>we talked about simplifying the ABI by saying the host always passes exactly 3 pointers to the compiled Roc function:</p>\n<ol>\n<li>pointer to the struct of function pointers</li>\n<li>pointer to the memory where the return value will be written</li>\n<li>pointer to the memory where the 1 arg is stored (we restrict exposed Roc functions to 1 arg, but of course that 1 arg can be a tuple etc.)</li>\n</ol>",
+        "id": 497303903,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738540260
+    },
+    {
+        "content": "<p>this means we don't need to deal with C ABI at all</p>",
+        "id": 497303934,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738540283
+    },
+    {
+        "content": "<p>Yeah, that would free us from c call conv, but not from c abi in general (well, I guess glue just has to use c abi layouts to match roc's layout, so it does mostly avoid c abi too)</p>",
+        "id": 497304207,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738540500
+    },
+    {
+        "content": "<p>Also, I think n args is fine.</p>",
+        "id": 497304313,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738540574
+    },
+    {
+        "content": "<p>but yeah, each arg is passed by pointer to avoid abi for the most part</p>",
+        "id": 497304343,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738540611
+    },
+    {
+        "content": "<p>That said, for the interpreter, it would take that and map it to having all args in a list and also a list of types for each arg.</p>",
+        "id": 497304499,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738540719
+    },
+    {
+        "content": "<p>I think if we did one pointer per arg, there would become (correct) folklore that it's better for perf if you just put everything in one arg</p>",
+        "id": 497304533,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738540752
+    },
+    {
+        "content": "<p>so I feel like we should just make that be how it works directly</p>",
+        "id": 497304546,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738540762
+    },
+    {
+        "content": "<blockquote>\n<p>it's better for perf if you just put everything in one arg</p>\n</blockquote>\n<p>Why would that be better perf?</p>",
+        "id": 497304576,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738540791
+    },
+    {
+        "content": "<p>if I'm passing four u16s, passing the four pointers will use way more memory than the four u16s themselves</p>",
+        "id": 497304736,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738540862
+    },
+    {
+        "content": "<p>I don't think it would be consistently better or worse. The cost of putting them in one arg is making a big stack allocation and copying everything over. If in the platform they are all separate data, it is probably faster to pass them as separate pointers and avoid any copying of data.</p>",
+        "id": 497304779,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738540890
+    },
+    {
+        "content": "<p>fair</p>",
+        "id": 497304931,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738540944
+    },
+    {
+        "content": "<p>ok yeah maybe that's better just to make one less rule to think about</p>",
+        "id": 497304965,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738540963
+    },
+    {
+        "content": "<p>Honestly, I don't think the platform to roc boundary will be in the hot loop generally speaking. If roc is doing that little, you probably don't want to dish out to roc at all. So I think any abi is probably fine.</p>",
+        "id": 497305122,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738541054
+    },
+    {
+        "content": "<p>Is it helpful to think about what would be nice for Go, or Swift, or other languages to work with?</p>",
+        "id": 497305169,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738541100
+    },
+    {
+        "content": "<p>I feel like C or Zig is easy to do anything... but if we stray to far from convention it may make it difficult for those other languages to call into roc</p>",
+        "id": 497305224,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738541143
+    },
+    {
+        "content": "<p>nah</p>",
+        "id": 497305381,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738541231
+    },
+    {
+        "content": "<p>don't think this should matter for them</p>",
+        "id": 497305408,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738541253
+    },
+    {
+        "content": "<p>they have to know how to pass pointers to things regardless</p>",
+        "id": 497305420,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738541264
+    },
+    {
+        "content": "<p>Also -- not sure if we've forgotten about it. But should we discuss hot-reloading or the ideas around that?</p>",
+        "id": 497305426,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738541268
+    },
+    {
+        "content": "<p>yeah! prob in its own thread?</p>",
+        "id": 497305454,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738541281
+    },
+    {
+        "content": "<p>Yeah, I'm not sure what to say though... other than \"hey, anyone thought about hot-reloading?\"</p>",
+        "id": 497305544,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738541317
+    },
+    {
+        "content": "<p>Also, just to note, we are defining two different specs here. One for <code>libroc</code> and one for standard platform-&gt;roc calls.</p>\n<h2>Here is what I would propose:</h2>\n<h3>LibRoc</h3>\n<ol>\n<li>A pointer to write the return data to</li>\n<li>A pointer to write the return <code>TypeSpec</code> to</li>\n<li>A record of function pointers (this must include all effects).</li>\n<li>A slice of pointers (these are the args)</li>\n<li>A slice of <code>TypeSpec</code> (this tells it the types of every arg)</li>\n</ol>\n<h3>Platform -&gt; Roc standard FFI</h3>\n<ol>\n<li>A pointer to write the return data to</li>\n<li>A record of function pointers (only allocators functions and <code>roc_load</code>)</li>\n<li>N pointers, one for each arg.</li>\n</ol>\n<hr>\n<p>The shim would map between those to formats. A standard host would only implement \"Platform -&gt; Roc standard FFI\". A host directly consuming <code>libroc</code> would implement \"LibRoc\".</p>",
+        "id": 497305962,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738541591
+    },
+    {
+        "content": "<p>I'm not understanding the benefit of the typespec thing</p>",
+        "id": 497306086,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738541674
+    },
+    {
+        "content": "<p>The interpreter will run solely using tagged data. You didn't want recursively tagged data like would be traditional if we made a <code>RocObject</code> that the interpreter used. Without that, we need a type spec so the interpret can understand the underlying data.</p>",
+        "id": 497306186,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738541762
+    },
+    {
+        "content": "<p>that's true inside the running interpreter, yes</p>",
+        "id": 497306293,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738541845
+    },
+    {
+        "content": "<p>As a simple, if the interpreter calls <code>List.len</code>, it needs to know the element type of the list. This is required so it can decrement the refcount of the elements and free them.</p>",
+        "id": 497306298,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738541849
+    },
+    {
+        "content": "<p>Yes, and if a platform is able to dynamically build up args to call into the interpreter, we want to make sure the args passed in are what the roc function expects</p>",
+        "id": 497306372,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738541887
+    },
+    {
+        "content": "<p>Otherwise, we may blindly use the arg as the wrong type due to only trusting the roc source code and things would go very wrong.</p>",
+        "id": 497306409,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738541920
+    },
+    {
+        "content": "<p>the thing I'm missing is that the caller still has to get the ABI right</p>",
+        "id": 497306583,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738542063
+    },
+    {
+        "content": "<p>like if I give you a pointer to some bytes, and then I also give you a thing that says \"hey the pointer to the bytes has this type\"</p>",
+        "id": 497306599,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738542077
+    },
+    {
+        "content": "<p>and the type I'm giving you at runtime is always going to be the same type as the type you've statically declared you're expecting</p>",
+        "id": 497306614,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738542096
+    },
+    {
+        "content": "<p>I think it doesn't matter much for the shim use case. The shim gets rid of this type safety anyway by using the static API matching what llvm will use</p>",
+        "id": 497306738,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738542190
+    },
+    {
+        "content": "<p>then the scenario where this helps is:</p>\n<ul>\n<li>I gave you bytes that aren't the type you expect, even though you told me what you expect</li>\n<li>however, I correctly described the bytes I was giving you</li>\n<li>so I knew what type I was giving you, and although I statically had the information that you expected a different type, I missed that or something</li>\n<li>therefore, this runtime check caught it and replaced UB with a crash</li>\n</ul>",
+        "id": 497306740,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738542192
+    },
+    {
+        "content": "<p>For direct use of lib roc, more dynamic use cases should be possible</p>",
+        "id": 497306753,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738542208
+    },
+    {
+        "content": "<p>but in all cases we know statically what the expected type is</p>",
+        "id": 497306770,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738542225
+    },
+    {
+        "content": "<p>like there's no value of <code>main.roc</code> I can pass to it where I don't statically know what types are expected</p>",
+        "id": 497306784,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738542240
+    },
+    {
+        "content": "<p>I guess the scenario could be that I gave it the wrong main.roc maybe?</p>",
+        "id": 497306872,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738542298
+    },
+    {
+        "content": "<p>Sure, I guess then libroc at least needs to expose a function to get the type spec and list of exposed functions in <code>main.roc</code></p>",
+        "id": 497306890,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738542313
+    },
+    {
+        "content": "<p>That anchors to <code>main.roc</code> as the source of truth and trusts the platform to follow the spec read from <code>main.roc</code>. this is more thinking about future <code>libroc</code> use cases than the current shim plans.</p>",
+        "id": 497306997,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738542404
+    },
+    {
+        "content": "<p>Cause a platform could dynamically load a main.roc file and do something different depending on what is exposed by the main.roc file. A simple example would be supporting plugin versioning. Load main.roc, depending on the return function API, you know the plugin version to run with.</p>",
+        "id": 497307062,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738542464
+    },
+    {
+        "content": "<p>Anyway, assuming the platform -&gt; roc part looks fine, let's move the rest of this discussion over to the libroc thread. I think that dynamic use case is what needs to decide the API for it</p>",
+        "id": 497307539,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738542818
+    },
+    {
+        "content": "<p>I guess if the typespec is like a hash of the types, that's probably very quick?</p>",
+        "id": 497307632,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738542884
+    },
+    {
+        "content": "<p>as in, if it's just for validation</p>",
+        "id": 497307641,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738542894
+    },
+    {
+        "content": "<p>or perhaps it's a hash for quick validation plus an expanded version for more helpful error messages if the types disagree</p>",
+        "id": 497307668,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738542917
+    },
+    {
+        "content": "<p>I imagined it as a tag union of a spec defining the type, but I really haven't thought through it in detail. For the full libroc use case, it needs to be enough information that the interpreter can call a dynamic function with type variables.</p>",
+        "id": 497308135,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738543267
+    },
+    {
+        "content": "<p>I think maybe something worth establishing (because I'm not sure if we're on the same page about it) is that the <em>only</em> benefit of passing a type spec is that it would allow for an extra runtime check which could either give an error or do nothing</p>",
+        "id": 497308235,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543330
+    },
+    {
+        "content": "<p>like it wouldn't allow any useful amount of introspection, or performance (would be a slight perf downside but negligible if we pass a hash)</p>",
+        "id": 497308257,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543355
+    },
+    {
+        "content": "<p>wouldn't be necessary for correctness, etc.</p>",
+        "id": 497308265,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543364
+    },
+    {
+        "content": "<p>and a totally reasonable alternative design would be to just not do a typespec at all, and everything would work exactly the same way except that in the specific case where you have a correct typespec for what you're passing but that typespec doesn't line up with what main.roc expects, the typespec would have let you get a runtime error instead of UB</p>",
+        "id": 497308338,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543429
+    },
+    {
+        "content": "<p>does that all sound right?</p>",
+        "id": 497308405,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543464
+    },
+    {
+        "content": "<p>The interpreter will just end up creating the type spec anyway if the platform doesn't. It will be required internally to run the interpretter. Let me put up an example.</p>",
+        "id": 497308484,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738543527
+    },
+    {
+        "content": "<p>oh for sure!</p>",
+        "id": 497308613,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543647
+    },
+    {
+        "content": "<p>no disagreement there</p>",
+        "id": 497308616,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543650
+    },
+    {
+        "content": "<p>I'm just talking about the specific question of whether the host should construct its own type spec and pass it to <code>libroc</code></p>",
+        "id": 497308647,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543674
+    },
+    {
+        "content": "<p>In the default use case, the shim constructs the type spec</p>",
+        "id": 497308707,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738543694
+    },
+    {
+        "content": "<p>but of note, I'm saying the interpreter has to create its own typespec in either cae</p>",
+        "id": 497308709,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543697
+    },
+    {
+        "content": "<p>*case</p>",
+        "id": 497308711,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543698
+    },
+    {
+        "content": "<p>oh wait, are you thinking it doesn't do validation at the boundary?</p>",
+        "id": 497308731,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543716
+    },
+    {
+        "content": "<p>like it just accepts whatever it was given as truth, and then starts interpreting on that, and if that results in a runtime type mismatch at some point, so be it?</p>",
+        "id": 497308750,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738543735
+    },
+    {
+        "content": "<p>Ok, I feel like this just got mixed up do to talking about libroc and about standard roc calling.</p>\n<p>Let me try to anchor it.</p>\n<p>Normal platforms only see a single interface. That interface is:</p>\n<blockquote>\n<h3>Platform -&gt; Roc standard FFI</h3>\n<ol>\n<li>A pointer to write the return data to</li>\n<li>A record of function pointers (only allocators functions and <code>roc_load</code>)</li>\n<li>N pointers, one for each arg.</li>\n</ol>\n</blockquote>\n<p>That is all they see period. Anything libroc is an implementation detail and not exposed to the platform.</p>",
+        "id": 497308928,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738543866
+    },
+    {
+        "content": "<p>The shim library will deal with whatever is required to map from that interface to libroc.</p>",
+        "id": 497309042,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738543937
+    },
+    {
+        "content": "<p>Are we in agreement with this interface?</p>",
+        "id": 497309073,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738543975
+    },
+    {
+        "content": "<p>I agree that's the standard interface between for the host in a platform + application that's compiled into a single binary</p>",
+        "id": 497309165,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738544059
+    },
+    {
+        "content": "<p>but I don't think that <code>libroc</code> needs to <em>necessarily</em> be in any way different from that interface</p>",
+        "id": 497309181,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738544081
+    },
+    {
+        "content": "<p>we can choose to have it be different, but it's optional</p>",
+        "id": 497309197,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738544095
+    },
+    {
+        "content": "<p>in other words, <code>libroc</code> can expose a function which is exactly the same interface as <span aria-label=\"point up\" class=\"emoji emoji-1f446\" role=\"img\" title=\"point up\">:point_up:</span> except for 3 extra arguments:</p>\n<ol>\n<li>The path to main.roc</li>\n<li>The function to go from a path to a .roc file to its source bytes</li>\n<li>The name of the entrypoint function within main.roc that I want to call</li>\n</ol>",
+        "id": 497309295,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738544165
+    },
+    {
+        "content": "<blockquote>\n<p>only allocators functions and <code>roc_load</code></p>\n</blockquote>\n<ul>\n<li>roc_alloc/roc_dealloc/roc_realloc - allocators for roc to use</li>\n<li>roc_panic - roc crashed.. here's what happened</li>\n<li>roc_debug - here's a <code>dbg</code> thing for your information </li>\n<li>roc_expect_failed - hey an <code>expect</code> failed, heres some information about that</li>\n<li>roc_load -- give me the bytes for a file path</li>\n</ul>",
+        "id": 497309299,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738544172
+    },
+    {
+        "content": "<p>and then I just give it the arguments exactly as normal</p>",
+        "id": 497309302,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738544173
+    },
+    {
+        "content": "<p>look at the last message in <a class=\"stream-topic\" data-stream-id=\"395097\" href=\"/#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20libroc.20exploration\">#compiler development &gt; zig compiler - libroc exploration</a> and lets move the conversation there. That is why libroc needs a different interface.</p>\n<p><a class=\"message-link\" href=\"/#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20libroc.20exploration/near/497307664\">#compiler development &gt; zig compiler - libroc exploration @ 💬</a></p>",
+        "id": 497309306,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738544179
+    },
+    {
+        "content": "<p>separate thought about calling roc in general</p>",
+        "id": 497309720,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738544520
+    },
+    {
+        "content": "<p>we have the rule that only <code>Box</code>ed closures can be sent to the host</p>",
+        "id": 497309778,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738544539
+    },
+    {
+        "content": "<p>and in the interpreter, all closures are boxed</p>",
+        "id": 497309782,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738544550
+    },
+    {
+        "content": "<p>I guess that means we have an extra layer of boxing on them</p>",
+        "id": 497309790,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738544557
+    },
+    {
+        "content": "<blockquote>\n<p>A record of function pointers (only allocators functions and <code>roc_load</code>)</p>\n</blockquote>\n<p>edit: I think this just needs to be the allocator functions. The rest can be linked in like normal effects.</p>",
+        "id": 497309791,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738544558
+    },
+    {
+        "content": "<p>Edit to my edit. Given we want to support roc code as a shared library, we actually do want to require passing in all effects period. Forgot about this use case.</p>\n<p>Otherwise you get into all of the rdynamic pain and into brittle code symbol code that may not even consistently work cross platform.</p>",
+        "id": 497765587,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738706783
+    },
+    {
+        "content": "<p>Can glue (in future) generate the full type for our struct that needs to be passed in? -- with all the allocators, and entry-points, and effects etc</p>\n<p>So if I'm writing a platform in zig or rust for example, it's pretty hard to pass in the wrong things.</p>",
+        "id": 497765771,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738706882
+    },
+    {
+        "content": "<p>Just a record of function pointers. Sounds doable.</p>",
+        "id": 497765957,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738706957
+    },
+    {
+        "content": "<p>I'm thinking of stubbing out <code>roc glue</code> to take a fake glue script, and generates some zig/rust/go/c (not sure which) glue for a test platform using the new calling roc shape.</p>",
+        "id": 497766575,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738707235
+    },
+    {
+        "content": "<p>I would keep everything in zig for now.</p>",
+        "id": 497766680,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738707282
+    },
+    {
+        "content": "<p>And sure, though I'm not sure how valuable having the cart this far before the horse is.</p>",
+        "id": 497766776,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738707322
+    },
+    {
+        "content": "<p>For glue, maybe we should just focus on the roc side</p>",
+        "id": 497766806,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738707336
+    },
+    {
+        "content": "<p>We are going to the effort of engineering this thing top-down... it's all cart before horse</p>",
+        "id": 497766826,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738707347
+    },
+    {
+        "content": "<p>It needs to be expanding to support telling about all of the effects and such</p>",
+        "id": 497766841,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738707358
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20calling.20roc/near/497766826\">said</a>:</p>\n<blockquote>\n<p>We are going to the effort of engineering this thing top-down... it's all cart before horse</p>\n</blockquote>\n<p>I think this is useful for broad strokes, but it often is just wrong for specific details that depend on an unknown implementation. So I would focus more on concrete API than on stubbing all the interfaces loosely</p>",
+        "id": 497766974,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738707409
+    },
+    {
+        "content": "<p>I think a lot of these pieces will be easier to get right once with have a slim slice of the compiler from parser down to interpreter</p>",
+        "id": 497767106,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738707478
+    },
+    {
+        "content": "<p>But don't let me stop your stubbing if you think it is useful</p>",
+        "id": 497767202,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738707514
+    },
+    {
+        "content": "<p>You have outlined a specific API above for calling roc. I am proposing making a test platform that uses this new convention, and stubbing out the roc side of things -- to see it all working together, even though our roc side hasn't been implemented yet.</p>",
+        "id": 497767330,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738707585
+    },
+    {
+        "content": "<p>I'm also particularly interested in validating the fully-embedded roc use cases, which is more covered in that <code>libroc</code> exploration thread.</p>",
+        "id": 497767451,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738707622
+    },
+    {
+        "content": "<p>For fully embedded roc, I don't think this API is required. Or even recommended. You have direct access to roc internals. So you want a different API. I tried to mention the two apis above though.</p>",
+        "id": 497767893,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738707834
+    },
+    {
+        "content": "<p>My other reason, is I was hoping to figure out how to get our bundled <code>lld</code> linking thing working, so <code>roc build</code> produces an executable.</p>",
+        "id": 497767905,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738707840
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> and I have been cooking... we've put together a working prototype of <code>roc build</code> with an example platform, and a fake roc <code>app.o</code> object file. </p>\n<p>All the files are sitting on this branch. We will probably migrate into the roc repo -- now that it's less of a hack. I've included some explanation and notes in the README in case that helps.</p>\n<p><a href=\"https://github.com/lukewilliamboswell/roc-platform-template-zig/tree/calling-roc\">https://github.com/lukewilliamboswell/roc-platform-template-zig/tree/calling-roc</a></p>\n<p>If you want to try it out... </p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>$<span class=\"w\"> </span>zig<span class=\"w\"> </span>build-obj<span class=\"w\"> </span>host/app.zig\n$<span class=\"w\"> </span>zig<span class=\"w\"> </span>build-lib<span class=\"w\"> </span>host/main.zig\n$<span class=\"w\"> </span>zig<span class=\"w\"> </span>build-exe<span class=\"w\"> </span>app.o<span class=\"w\"> </span>libmain.a\n$<span class=\"w\"> </span>./app\ninfo:<span class=\"w\"> </span>Running<span class=\"w\"> </span>Roc<span class=\"w\"> </span>APP\nHello\n</code></pre></div>\n<p>There are a few things different from the current way we do things, and we've tried to implement the ideal based on our previous design discussions. </p>\n<p>Now would be a good time to discuss the API, and if there are ways we can improve things.</p>",
+        "id": 497815218,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738735597
+    },
+    {
+        "content": "<p>I wouldn't advise looking closely at <code>host/app.zig</code> -- it's a real hack and some scary internal things that would never be exposed to the general public. </p>\n<p>It's better to look at <code>platform/app.roc</code> which is the example and pretend the compiler generated our <code>app.o</code> object file and linked it with the prebuilt-host <code>libmain.a</code> all behind the scenes.</p>",
+        "id": 497815492,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738735747
+    },
+    {
+        "content": "<p>Two immediate painpoints I noticed (carry overs from the old api):</p>\n<ol>\n<li>dealloc not having a size means that the allocator has to track the size. In the case of zig, this means we allocate an extra usize before every allocation to store the size.</li>\n<li>Alignment is not useful cause zig only takes it as a comptime value (I guess you could manually toggle between all the alignments, but it isn't as nice). Also, in practice, everything will be aligned to 8 or 16, so no real gains.</li>\n</ol>",
+        "id": 497817290,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738736788
+    },
+    {
+        "content": "<p>One silly thing I noticed:<br>\n    Always using pointers means that a number of functions with trivial args or return types have ABIs that look really poor. Look at the string functions especially.</p>",
+        "id": 497817466,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738736888
+    },
+    {
+        "content": "<p>The pain points I've ran into trying to write a Zig platform and using a Zig allocator for Roc memory allocation. For Zig platform code it'd be really nice if the roc allocation API were ziggier, saves quite a bit of work! I guess that comes at the cost of writing platforms in other languages, though it does seem like it might be easier to implement malloc on top of a zig allocator then the other way around.</p>",
+        "id": 497821515,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1738739086
+    },
+    {
+        "content": "<p>Yeah, I think We will always be anchoring to cffi. Looking at the new example, apparate from passing the size to dealloc, I'm not sure we could make it ziggier.</p>",
+        "id": 497822337,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738739521
+    },
+    {
+        "content": "<p>We can't give it a comptime alignment cause cffi can't comptime</p>",
+        "id": 497822398,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738739537
+    },
+    {
+        "content": "<p>You can directly use an arena or other zig allocator now.</p>",
+        "id": 497822426,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738739562
+    },
+    {
+        "content": "<p>We give enough info for most of the calls....free is the only pain point I think.</p>",
+        "id": 497822467,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738739586
+    },
+    {
+        "content": "<p>And I currently don't know how to solve free except my making every list and string allocation 4 to 8 bytes larger to store the size.</p>\n<p>Instead with the example platform, we end up making all allocations 4 to 8 bytes larger (including recursive tags and boxes).</p>\n<p>Note, with arena allocation, this extra size would go away.</p>\n<p>When using an allocator that implicitly tracks the size, allocations are not made any larger at all.</p>",
+        "id": 497823247,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738739979
+    },
+    {
+        "content": "<p>I wonder if we can somehow get some allocator internal info on size information and avoid this explicit tracking</p>",
+        "id": 497823282,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738740002
+    },
+    {
+        "content": "<p>Ah, thanks for explaining, that makes a lot of sense.</p>\n<p>I guess it's not so bad, we can write a Zig-&gt;Roc allocator helper once and then anyone writing a Zig platform can use that. Maybe it'd be the kind of thing to include in Luke's platform examples repo.</p>",
+        "id": 497824473,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1738740520
+    },
+    {
+        "content": "<p>Yeah, I think we could easily make something that wraps a zig allocator to make it track size. And as mentioned above for arenas and for allocators that already internally track size (if you can get access to the internals), you can avoid adding the size to the allocation.</p>",
+        "id": 497827448,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738741680
+    },
+    {
+        "content": "<p>I have written one here: </p>\n<p><a href=\"https://github.com/ostcar/roc-aoc-platform/blob/main/host/RocAllocator.zig\">https://github.com/ostcar/roc-aoc-platform/blob/main/host/RocAllocator.zig</a></p>\n<p>It probably can be improved</p>",
+        "id": 497889985,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1738761277
+    },
+    {
+        "content": "<p>over the years we've gone back and forth regarding whether it would be possible for Roc to pass the total allocation size to dealloc automatically</p>",
+        "id": 497916332,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738768289
+    },
+    {
+        "content": "<p>I think whether or not it was possible depended on some seamless slice implementation details?</p>",
+        "id": 497916416,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738768313
+    },
+    {
+        "content": "<p>and I thought we ended up in a place where we actually did always have the info on the Roc side and could pass it to dealloc, but maybe I'm misremembering <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 497916585,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738768347
+    },
+    {
+        "content": "<p>Yeah, I always end up thinking we can. Then I realize that we store the number of live elements on the heap for refcounted seamless slices. That is not the size. The size is the full capacity, which a seamless slice has no way to get.</p>",
+        "id": 497935478,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738773277
+    },
+    {
+        "content": "<p>ahhh right</p>",
+        "id": 497963571,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738782156
+    },
+    {
+        "content": "<p>yeah I remember thinking this changed when we changed the representation of how that's stored in memory</p>",
+        "id": 497963617,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738782175
+    },
+    {
+        "content": "<p>but I think we actually ended up with a representation where we <em>don't</em> know it</p>",
+        "id": 497963637,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738782185
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20calling.20roc/near/497815218\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> and I have been cooking... we've put together a working prototype of <code>roc build</code> with an example platform, and a fake roc <code>app.o</code> object file. </p>\n<p>All the files are sitting on this branch. We will probably migrate into the roc repo -- now that it's less of a hack. I've included some explanation and notes in the README in case that helps.</p>\n<p><a href=\"https://github.com/lukewilliamboswell/roc-platform-template-zig/tree/calling-roc\">https://github.com/lukewilliamboswell/roc-platform-template-zig/tree/calling-roc</a></p>\n<p>If you want to try it out... </p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>$<span class=\"w\"> </span>zig<span class=\"w\"> </span>build-obj<span class=\"w\"> </span>host/app.zig\n$<span class=\"w\"> </span>zig<span class=\"w\"> </span>build-lib<span class=\"w\"> </span>host/main.zig\n$<span class=\"w\"> </span>zig<span class=\"w\"> </span>build-exe<span class=\"w\"> </span>app.o<span class=\"w\"> </span>libmain.a\n$<span class=\"w\"> </span>./app\ninfo:<span class=\"w\"> </span>Running<span class=\"w\"> </span>Roc<span class=\"w\"> </span>APP\nHello\n</code></pre></div>\n<p>There are a few things different from the current way we do things, and we've tried to implement the ideal based on our previous design discussions. </p>\n<p>Now would be a good time to discuss the API, and if there are ways we can improve things.</p>\n</blockquote>\n<p>I'm looking at Richard's PR <a href=\"https://github.com/roc-lang/roc/pull/7795\">https://github.com/roc-lang/roc/pull/7795</a> and thinking about this work we did. I wonder if our design has evolved much from this and if it's worth updating this again so we have a test platform ready to go.</p>",
+        "id": 519246304,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1747696799
+    },
+    {
+        "content": "<p>I think it is mostly the same, but yeah, some minor differences</p>",
+        "id": 519248130,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747697590
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> -- I started writing this as a comment in that other thread... <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span> </p>\n<p>We're fast approaching the point where I'd like to pick your brains on how to actually implement this interpreter shim thing. We're really close to having single module/expression evaluation working in a simple form. </p>\n<p>What comes next is fuzzy for me, particularly with the platform integration.</p>\n<p>I'm of the opinion that the platform supplies a host executable that has embedded a roc compiler/interpreter (libroc) which can be used to load, compile, and execute <code>.roc</code> code and call relevant platform provided IO/effects.</p>\n<p>Running an app using the roc cli, i.e <code>roc my_demo_app.roc</code>, roc is then calling this platform supplied executable and passing through the arguments (<code>my_demo_app.roc</code> etc) for the interpreter to run.</p>",
+        "id": 525443137,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750742211
+    },
+    {
+        "content": "<p>Alternatively, I think is the intended design is that the roc cli compiles the app into a canonical IR (including comp-time eval etc) then produces a static library (with the builtin bitcode included) that represents the <code>app.o</code> part. </p>\n<p>From a platform's perspective they could be calling a fully compiled app (and optimised using LLVM) <code>app.o</code>, however internally it is using an interpreter at runtime to evaluate the code when the host calls into roc.</p>",
+        "id": 525443527,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750742529
+    },
+    {
+        "content": "<p>Yeah, it will be interesting making the shim and getting this all working together</p>",
+        "id": 525443911,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1750742832
+    },
+    {
+        "content": "<p>I have ideas, but will be interesting to see if it works how I expect when we implement it in practice</p>",
+        "id": 525443963,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1750742888
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/316715-contributing/topic/Pull.20Request.20for.20Review/near/529088676\">said</a>:</p>\n<blockquote>\n<p>Nice base doc. One note, we don't want to hardcode the entry point. There can be many, but that is just a minor note.</p>\n</blockquote>\n<p>FYSA we are cooking a plan to have a single entrypoint to start with, to simplify the integration and get things working. </p>\n<p>If we can get the <code>llvm-objcopy</code> library working like we have for <code>lld</code> then Richard has an idea for supporting up to N (say 256) entrypoints by renaming the symbols in our interpreter shim before the cli links with the platform host for combined interpreter executable.</p>",
+        "id": 529178058,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1752706495
+    },
+    {
+        "content": "<p>That way the platform author doesn't need to change anything. they provide a static library e.g. <code>host.a</code> and then the roc cli can link that with either the interpreter shim (i.e. roc run for fast dev loop), or with the LLVM optimised machine code and there is no difference.</p>",
+        "id": 529178199,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1752706603
+    },
+    {
+        "content": "<p>I had a couple of questions that came up yesterday that I wanted to get down while I'm thinking of it.</p>",
+        "id": 529178371,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1752706735
+    },
+    {
+        "content": "<p>Do we want to change <code>roc_dealloc</code> to include the size of the allocation. I realised without this we need to track the size of allocations manually in the host in order to play nicely with Zig's allocators. </p>\n<p>I remember <span class=\"user-mention\" data-user-id=\"496321\">@Oskar Hahn</span> had something similar when we was building a Go platform.</p>",
+        "id": 529178375,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1752706736
+    },
+    {
+        "content": "<p>If <code>roc_alloc</code> is being passed into Roc... does this change the zig builtins? </p>\n<p>We currently assume that <code>roc_alloc</code> is linked and available globally, but it's just a function pointer now. </p>\n<p>I need to explore this further... so this question may not make much sense.</p>",
+        "id": 529178610,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1752706853
+    },
+    {
+        "content": "<p>Should we link libC with our interpreter shim? I wasn't sure if we needed it or if it made any difference.</p>",
+        "id": 529178735,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1752706928
+    },
+    {
+        "content": "<p>6 messages were moved here from <a class=\"stream-topic\" data-stream-id=\"395097\" href=\"/#narrow/channel/395097-compiler-development/topic/casual.20conversation/with/528948872\">#compiler development &gt; casual conversation</a> by <span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span>.</p>",
+        "id": 529178826,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1752706998
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20calling.20roc/near/529178058\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/316715-contributing/topic/Pull.20Request.20for.20Review/near/529088676\">said</a>:</p>\n<blockquote>\n<p>Nice base doc. One note, we don't want to hardcode the entry point. There can be many, but that is just a minor note.</p>\n</blockquote>\n<p>FYSA we are cooking a plan to have a single entrypoint to start with, to simplify the integration and get things working. </p>\n<p>If we can get the <code>llvm-objcopy</code> library working like we have for <code>lld</code> then Richard has an idea for supporting up to N (say 256) entrypoints by renaming the symbols in our interpreter shim before the cli links with the platform host for combined interpreter executable.</p>\n</blockquote>\n<p>I found a better way btw; can add symbols and it'll be fine</p>",
+        "id": 529180322,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752708140
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20calling.20roc/near/529178610\">said</a>:</p>\n<blockquote>\n<p>If <code>roc_alloc</code> is being passed into Roc... does this change the zig builtins? </p>\n<p>We currently assume that <code>roc_alloc</code> is linked and available globally, but it's just a function pointer now. </p>\n</blockquote>\n<p>you're correct! We'll have to change all of them to accept function pointers to roc_alloc etc</p>",
+        "id": 529180401,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752708188
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20calling.20roc/near/529178199\">said</a>:</p>\n<blockquote>\n<p>That way the platform author doesn't need to change anything. they provide a static library e.g. <code>host.a</code> and then the roc cli can link that with either the interpreter shim (i.e. roc run for fast dev loop), or with the LLVM optimised machine code and there is no difference.</p>\n</blockquote>\n<p>I don't understand this. Even with 500 entry points, the platform author shouldn't need to change anything</p>",
+        "id": 529186908,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752714146
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20calling.20roc/near/529178375\">said</a>:</p>\n<blockquote>\n<p>Do we want to change <code>roc_dealloc</code> to include the size of the allocation. I realised without this we need to track the size of allocations manually in the host in order to play nicely with Zig's allocators. </p>\n<p>I remember <span class=\"user-mention silent\" data-user-id=\"496321\">Oskar Hahn</span> had something similar when we was building a Go platform.</p>\n</blockquote>\n<p>I forget what we decided here. Either we need to modify lists to store size of the allocation on the heap...or we need the platform to do it.</p>",
+        "id": 529187296,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752714416
+    },
+    {
+        "content": "<p>That's helpful context. I might try and dig out our conversation about it. </p>\n<p>I'm thinking we should aim to make this as friendly as possible for platform dev as long as it's not a massive performance cost. It sounds like the information needs to be saved anyway, if roc does it internally we can be sure it's done correctly I guess.</p>",
+        "id": 529188156,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1752715194
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20calling.20roc/near/529187296\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20calling.20roc/near/529178375\">said</a>:</p>\n<blockquote>\n<p>Do we want to change <code>roc_dealloc</code> to include the size of the allocation. I realised without this we need to track the size of allocations manually in the host in order to play nicely with Zig's allocators. </p>\n<p>I remember <span class=\"user-mention silent\" data-user-id=\"496321\">Oskar Hahn</span> had something similar when we was building a Go platform.</p>\n</blockquote>\n<p>I forget what we decided here. Either we need to modify lists to store size of the allocation on the heap...or we need the platform to do it.</p>\n</blockquote>\n<p>yeah I think the host should do it</p>",
+        "id": 529188672,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752715679
+    },
+    {
+        "content": "<p>the thing is, a lot of allocators store size on every allocation anyway, and so it's wasteful for us to automatically store it again</p>",
+        "id": 529188707,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752715713
+    },
+    {
+        "content": "<p>but for allocators that don't do that, they can just have their <code>roc_alloc</code> implementation store an extra <code>usize</code> for the size and write it in there before they return the pointer (to right after the <code>usize</code> they stored)</p>",
+        "id": 529188750,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752715749
+    },
+    {
+        "content": "<p>and then during deallocation they can just look right in front of the allocation to find the <code>usize</code> that they stored earlier in <code>roc_alloc</code></p>",
+        "id": 529188771,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752715773
+    },
+    {
+        "content": "<p>we can and should pass the alignment though</p>",
+        "id": 529188788,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752715789
+    },
+    {
+        "content": "<p>because that's statically known, and it helps any <code>roc_alloc</code> author who's doing that trick avoid having to conservatively allocate space for the count</p>",
+        "id": 529188838,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752715833
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20calling.20roc/near/529188707\">said</a>:</p>\n<blockquote>\n<p>the thing is, a lot of allocators store size on every allocation anyway, and so it's wasteful for us to automatically store it again</p>\n</blockquote>\n<p>To be fair, I think it is often know for small allocations, but not always tracked for large allocations... But in general, yeah, allocators tend to track it cause they are based on the malloc api</p>",
+        "id": 529190757,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752717655
+    },
+    {
+        "content": "<p>Ok, sounds good <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 529202322,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1752728084
+    }
+]

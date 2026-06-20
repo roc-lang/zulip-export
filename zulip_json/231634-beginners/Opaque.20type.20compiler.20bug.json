@@ -1,0 +1,110 @@
+[
+    {
+        "content": "<p>I am trying to write a custom type to parse nulls in JSON, and the following code crashes when <code>roc test</code>:</p>\n<div class=\"codehilite\"><pre><span></span><code>interface Nullable\n    exposes [Nullable, null, full, nullableDecode, nullableEncode]\n    imports [\n        json.Core.{ json },\n    ]\n\nNullable val := [Null, Full val] implements [\n        Decoding { decoder: nullableDecode },\n        Encoding { toEncoder: nullableEncode },\n        Inspect, # auto derive\n        Eq, # auto derive\n    ]\n\nnull = @Nullable Null\nfull = \\a -&gt; @Nullable (Full a)\n\nnullBytes = [110, 117, 108, 108]\n\nnullableDecode : Decoder (Nullable val) fmt where val implements Decoding, fmt implements DecoderFormatting\nnullableDecode = Decode.custom \\bytes, fmt -&gt;\n    if bytes |&gt; List.startsWith nullBytes then\n        { result: Ok (@Nullable (Null)), rest: List.dropFirst bytes 4 }\n    else\n        when bytes |&gt; Decode.decodeWith (Decode.decoder) fmt is\n            { result: Ok res, rest } -&gt; { result: Ok (@Nullable (Full res)), rest }\n            { result: Err a, rest } -&gt; { result: Err a, rest }\n\nnullableEncode : Nullable val -&gt; Encoder fmt where val implements Encoding, fmt implements EncoderFormatting\nnullableEncode = \\val -&gt;\n    Encode.custom\n        (\\bytes, fmt -&gt; List.concat\n                bytes\n                (\n                    when val is\n                        @Nullable Null -&gt; nullBytes\n                        @Nullable (Full a) -&gt; Encode.toBytes a fmt\n                )\n        )\n\nTestType : {\n    a : Nullable I32,\n}\n\nexpect\n    actual : DecodeResult TestType\n    actual = &quot;{\\&quot;a\\&quot;:null}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json\n    expected = Ok ({ a: @Nullable Null })\n    actual.result == expected\n\nexpect\n    actual : DecodeResult TestType\n    actual = &quot;{\\&quot;a\\&quot;:3}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json\n    expected = Ok ({ a: full 3 })\n    actual.result == expected\n\nexpect\n    actual = { a: @Nullable Null } |&gt; Encode.toBytes json |&gt; Str.fromUtf8\n    expected = Ok (&quot;{\\&quot;a\\&quot;:null}&quot;)\n    actual == expected\n\nexpect\n    actual = { a: full 3 } |&gt; Encode.toBytes json |&gt; Str.fromUtf8\n    expected = Ok (&quot;{\\&quot;a\\&quot;:3}&quot;)\n    actual == expected\n</code></pre></div>\n<p>The culprit is test 3: when encoding a null value, the branch <code>@Nullable (Some a) -&gt;</code> is chosen. And the crash only happens when <code>val</code> or matched <code>a</code> are accessed in any way anywhere in the body of <code>nullableEncode</code> during test 3, even with <code>dbg</code>.</p>",
+        "id": 430182927,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711672171
+    },
+    {
+        "content": "<p>The crash:</p>\n<div class=\"codehilite\"><pre><span></span><code>thread &#39;&lt;unnamed&gt;&#39; panicked at &#39;called `Option::unwrap()` on a `None` value&#39;, crates/compiler/mono/src/ir.rs:6143:56\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nThere was an unrecoverable error in the Roc compiler. The `roc check` command can sometimes give a more helpful error report than other commands.\n</code></pre></div>\n<p><code>roc check</code> doesn't find errors</p>",
+        "id": 430183300,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711672455
+    },
+    {
+        "content": "<p>does <code>roc check</code> pass?</p>",
+        "id": 430187188,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1711675352
+    },
+    {
+        "content": "<p>It does, 0 errors and the warnings only relate to no usage of some declarations</p>",
+        "id": 430187309,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711675487
+    },
+    {
+        "content": "<p>huh, interesting! I'm seeing <code>roc check</code> errors when I copy/paste that source locally <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> </p>\n<div class=\"codehilite\"><pre><span></span><code>── UNRECOGNIZED NAME in Lib/Nullable.roc ───────────────────────────────────────\n\nNothing is named `json` in this scope.\n\n50│      actual = &quot;{\\&quot;a\\&quot;: null}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json\n                                                                           ^^^^\n\nDid you mean one of these?\n\n    Box\n    Bool\n    U8\n    F64\n\n\n── UNRECOGNIZED NAME in Lib/Nullable.roc ───────────────────────────────────────\n\nNothing is named `json` in this scope.\n\n56│      actual = &quot;{\\&quot;a\\&quot;: 3}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json\n                                                                        ^^^^\n\nDid you mean one of these?\n\n    Box\n    Bool\n    U8\n    F64\n\n\n── UNRECOGNIZED NAME in Lib/Nullable.roc ───────────────────────────────────────\n\nNothing is named `json` in this scope.\n\n61│      actual = { a: @Nullable Null } |&gt; Encode.toBytes json |&gt; Str.fromUtf8\n                                                          ^^^^\n\nDid you mean one of these?\n\n    Box\n    Bool\n    U8\n    F64\n\n\n── UNRECOGNIZED NAME in Lib/Nullable.roc ───────────────────────────────────────\n\nNothing is named `json` in this scope.\n\n66│      actual = { a: nonNull 3 } |&gt; Encode.toBytes json |&gt; Str.fromUtf8\n                                                     ^^^^\n\nDid you mean one of these?\n\n    Box\n    Bool\n    U8\n    F64\n\n────────────────────────────────────────────────────────────────────────────────\n\n4 errors and 1 warning found in 16 ms\n</code></pre></div>",
+        "id": 430254073,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1711717874
+    },
+    {
+        "content": "<p>if you do <code>roc --version</code> what does it print?</p>",
+        "id": 430254089,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1711717883
+    },
+    {
+        "content": "<p>Ah, I am just using roc-json library, did not mention that</p>",
+        "id": 430255071,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711718382
+    },
+    {
+        "content": "<p>The latest 0.6.3, and yesterday's roc nightly (will print version a bit later)</p>",
+        "id": 430255272,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711718469
+    },
+    {
+        "content": "<p>Json.Core.{ json }</p>",
+        "id": 430255479,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711718543
+    },
+    {
+        "content": "<p>ah, can you maybe share a link to the full repo? Looks like this needs more than one file to reproduce <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 430257027,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1711719291
+    },
+    {
+        "content": "<p>Not  a link but the complete file to try as-is:<br>\nmain.roc</p>\n<div class=\"codehilite\"><pre><span></span><code>app &quot;simple-json&quot;\n    packages {\n        pf: &quot;https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br&quot;,\n        json: &quot;https://github.com/lukewilliamboswell/roc-json/releases/download/0.6.3/_2Dh4Eju2v_tFtZeMq8aZ9qw2outG04NbkmKpFhXS_4.tar.br&quot;,\n    }\n    imports [\n        pf.Stdout,\n        json.Core.{ json },\n    ]\n    provides [main] to pf\n\nmain =\n    Stdout.line &quot;Hello Richard!&quot;\n\nNullable val := [Null, Full val] implements [\n        Decoding { decoder: nullableDecode },\n        Encoding { toEncoder: nullableEncode },\n        Inspect, # auto derive\n        Eq, # auto derive\n    ]\n\nnull = @Nullable Null\nfull = \\a -&gt; @Nullable (Full a)\n\nnullBytes = [110, 117, 108, 108]\n\nnullableDecode : Decoder (Nullable val) fmt where val implements Decoding, fmt implements DecoderFormatting\nnullableDecode = Decode.custom \\bytes, fmt -&gt;\n    if bytes |&gt; List.startsWith nullBytes then\n        { result: Ok (@Nullable (Null)), rest: List.dropFirst bytes 4 }\n    else\n        when bytes |&gt; Decode.decodeWith (Decode.decoder) fmt is\n            { result: Ok res, rest } -&gt; { result: Ok (@Nullable (Full res)), rest }\n            { result: Err a, rest } -&gt; { result: Err a, rest }\n\nnullableEncode : Nullable val -&gt; Encoder fmt where val implements Encoding, fmt implements EncoderFormatting\nnullableEncode = \\val -&gt;\n    Encode.custom\n        (\\bytes, fmt -&gt; List.concat\n                bytes\n                (\n                    when val is\n                        @Nullable Null -&gt; nullBytes\n                        @Nullable (Full a) -&gt; Encode.toBytes a fmt\n                )\n        )\n\nTestType : {\n    a : Nullable I32,\n}\n\nexpect\n    actual : DecodeResult TestType\n    actual = &quot;{\\&quot;a\\&quot;:null}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json\n    expected = Ok ({ a: null })\n    actual.result == expected\n\nexpect\n    actual : DecodeResult TestType\n    actual = &quot;{\\&quot;a\\&quot;:3}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json\n    expected = Ok ({ a: full 3 })\n    actual.result == expected\n\nexpect\n    actual = { a: @Nullable Null } |&gt; Encode.toBytes json |&gt; Str.fromUtf8\n    expected = Ok (&quot;{\\&quot;a\\&quot;:null}&quot;)\n    actual == expected\n\nexpect\n    actual = { a: full 3 } |&gt; Encode.toBytes json |&gt; Str.fromUtf8\n    expected = Ok (&quot;{\\&quot;a\\&quot;:3}&quot;)\n    actual == expected\n</code></pre></div>",
+        "id": 430258604,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711720073
+    },
+    {
+        "content": "<p>Ok wow, this is definitely a bug, but I just found a workaround<br>\nCrashes:</p>\n<div class=\"codehilite\"><pre><span></span><code>expect\n    actual = { a: @Nullable Null } |&gt; Encode.toBytes json |&gt; Str.fromUtf8\n    expected = Ok (&quot;{\\&quot;a\\&quot;:null}&quot;)\n    actual == expected\n</code></pre></div>\n<p>Passes:</p>\n<div class=\"codehilite\"><pre><span></span><code>expect\n    actual = { a: null } |&gt; Encode.toBytes json |&gt; Str.fromUtf8\n    expected = Ok (&quot;{\\&quot;a\\&quot;:null}&quot;)\n    actual == expected\n</code></pre></div>",
+        "id": 430261199,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711721141
+    },
+    {
+        "content": "<p>To help debugging, copying again the bug behavior:<br>\nThe culprit is test 3: when encoding a null value, the branch <code>@Nullable (Some a) -&gt;</code> is chosen. And the crash only happens when <code>val</code> or matched <code>a</code> are accessed in any way anywhere in the body of <code>nullableEncode</code> during test 3, even with <code>dbg</code>.</p>",
+        "id": 430261636,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711721298
+    },
+    {
+        "content": "<p>huh! Might be a scoping issue involving <code>expect</code> that we haven't encountered before</p>",
+        "id": 430263999,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1711722460
+    },
+    {
+        "content": "<p>do you think you could minimize that and open an issue for it? I bet you don't need to get JSON involved at all, seems like the issue is with the opaque wrapper</p>",
+        "id": 430264108,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1711722492
+    },
+    {
+        "content": "<p>Weird thing is the first test worked with</p>\n<div class=\"codehilite\"><pre><span></span><code>expect\n    actual : DecodeResult TestType\n    actual = &quot;{\\&quot;a\\&quot;:null}&quot; |&gt; Str.toUtf8 |&gt; Decode.fromBytesPartial json\n    expected = Ok ({ a: @Nullable Null })\n    actual.result == expected\n</code></pre></div>",
+        "id": 430264232,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711722548
+    },
+    {
+        "content": "<p>I'll try to minimize the repro today</p>",
+        "id": 430264338,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1711722587
+    },
+    {
+        "content": "<p>appreciate it, thank you!</p>",
+        "id": 430276022,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1711727309
+    }
+]

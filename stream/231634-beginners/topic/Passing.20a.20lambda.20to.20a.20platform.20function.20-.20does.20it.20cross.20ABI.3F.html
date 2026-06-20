@@ -1,0 +1,155 @@
+<html>
+<head><meta charset="utf-8"><title>Passing a lambda to a platform function - does it cross ABI? · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html">Passing a lambda to a platform function - does it cross ABI?</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="597928142"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/597928142" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#597928142">(May 26 2026 at 19:30)</a>:</h4>
+<p>Hi! I am poking at lower-level stuff for the first time, so apologies if this is obvious.</p>
+<p>I'm working with a Zig-based nightly 2026-04-10 on a platform experiment (Rust host) that wraps a data-processing engine over an extern "C" ABI. The host does the heavy lifting - running processing loops over streams of records - and I'd like user Roc code to define the per-record transformations (let's ignore batching for now). So the natural API I reached for was a platform method that takes a lambda, something like:</p>
+<div class="codehilite"><pre><span></span><code>  Builder := [].{
+      map_records! : Stream, (Row -&gt; Row) =&gt; Stream
+  }
+</code></pre></div>
+<p>and then in an app you'd write Builder.map_records!(stream, |row| { ...transform... }), and my host would call that lambda once per record.</p>
+<p>When I tried it, the lambda seems to just... disappear. The host method gets called fine, but it only receives the non-lambda arguments - the (Row -&gt; Row) never shows up on the host side, and the lambda body doesn't seem to run at all. I even swapped <code>|row| row</code> for <code>|row| transform(row)</code> and the compiled output was byte-for-byte identical, so it looks like the lambda argument is dropped entirely at the boundary.<br>
+I also tried to pass a top-level function, but it seemingly got elided, too. As a control, passing a simple string works as expected, so this seems to affect any function-like object.</p>
+<p>So my questions:</p>
+<ol>
+<li>Is passing a lambda or a function directly to a platform function a supported thing? If yes, is there a particular way I need to declare it on the platform side (some special type, or a host_* form) so the host actually receives something callable?</li>
+<li>If it's not meant to work that way, is the right pattern instead to have the app provide a function that the host calls into - the way basic-webserver's respond! works?The only workaround I can think of is having the app expose a single dispatcher keyed by an integer id, roughly:</li>
+</ol>
+<div class="codehilite"><pre><span></span><code>  run_transform! : U64, Row =&gt; Row
+  run_transform! = |id, row|
+      when id is
+          0 -&gt; ...first transform...
+          1 -&gt; ...second transform...
+          _ -&gt; crash &quot;unknown id&quot;
+</code></pre></div>
+<p>and my host stores an id per operator, then calls back into run_transform! with that id whenever it needs to transform a record. The user-facing lambdas would get rewritten into branches of this one function under the hood.</p>
+<p>Basically: can I pass lambdas or functions into the platform, or should I flip it around so the app provides a callback the host invokes? And if the second is the way, is there anything I should know about doing it efficiently, since this runs on a hot path (potentially hundreds of thousands of records per second)?</p>
+<p>Thanks!</p>
+
+
+
+<a name="597984075"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/597984075" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#597984075">(May 27 2026 at 02:46)</a>:</h4>
+<p>welcome! You're really diving straight into the deep end on this one...I like it! <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span> </p>
+<blockquote>
+<p>Is passing a lambda or a function directly to a platform function a supported thing? If yes, is there a particular way I need to declare it on the platform side (some special type, or a host_* form) so the host actually receives something callable?</p>
+</blockquote>
+<p>yeah, they have to be boxed right now - as in, <code>Box(Row -&gt; Row)</code> instead of <code>(Row -&gt; Row)</code></p>
+
+
+
+<a name="597984764"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/597984764" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#597984764">(May 27 2026 at 02:52)</a>:</h4>
+<p>some notes on this:</p>
+<ul>
+<li>the challenge with passing unboxed lambdas across the host boundary is that having a host ABI where the shape of your data structures varies <em>based on what the application happens to close over</em> (which you can't possibly know when you're designing your host ABI) creates a huge amount of problems. We went down a rabbit hole trying to come up with a nice design (which led to fun discoveries like "any record containing a lambda in any of its fields no longer has stable ordering, since record fields are sorted by alignment, and the alignment of a lambda can also change based on what the application happens to close over..." which we tried to work around by generating elaborate "getters and setters" for records and lambdas based on what the application closed over, which then led to problems of even just the names of those getters and setters being hard to generate, given anonymous records...)</li>
+<li>ultimately we decided "yeah let's just say that for now you can only pass heap-allocated closures to/from the host, and we can revisit stack-allocated closures across the host boundary in the future" - and <code>Box</code> is the way you opt into that.</li>
+<li>a lambda inside a <code>Box</code> has a stable size and alignment regardless of what it captures, because the capture is heap-allocated (which is the downside and why we make it opt-in to box closures)</li>
+<li>I think ideally a host would offer an unboxed API to the application author, so they don't see the boxing behind the scenes, and then just use the <code>Box</code> to send the lambda to/from the host</li>
+<li>boxed lambdas landed very recently in the new compiler, and although we have tests, I don't think anyone has actually tried to use them in a real platform yet, so feel free to leave a message here if you run into anything weird or have any questions about them! <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></li>
+</ul>
+
+
+
+<a name="597984876"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/597984876" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#597984876">(May 27 2026 at 02:54)</a>:</h4>
+<p>as an aside, we should definitely give a compile-time error when you try to use something unsupported (like unboxed lambdas) in the host boundary, but we don't have any validation in place for that yet - sorry about that!</p>
+
+
+
+<a name="597985072"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/597985072" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#597985072">(May 27 2026 at 02:55)</a>:</h4>
+<p>as far as your high-level question about approach, I think you have the right idea! in terms of performance, I'd expect boxed lambdas to be totally fine for the use case you just described - like the app says "here is my lambda to transform this data" and then the platform hands that off to the host, which runs it a gazillion times</p>
+
+
+
+<a name="597985225"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/597985225" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#597985225">(May 27 2026 at 02:57)</a>:</h4>
+<p>another thing to note: until <a href="https://github.com/roc-lang/roc/pull/9421">this PR</a> lands (I expect it to land in the next few days), LLVM optimizations are currently disabled, so <code>roc --optimize</code> won't work and you won't get the performance that you'll get once that lands.</p>
+
+
+
+<a name="597985250"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/597985250" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#597985250">(May 27 2026 at 02:57)</a>:</h4>
+<p>anyway thanks for the detailed write-up <span class="user-mention" data-user-id="654587">@Karakatiza</span> and lmk if you have any other questions!</p>
+
+
+
+<a name="597995293"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/597995293" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#597995293">(May 27 2026 at 04:38)</a>:</h4>
+<p>My plan to test out the recently landed Boxed lambdas was to start poking at <a href="https://github.com/lukewilliamboswell/roc-ray">https://github.com/lukewilliamboswell/roc-ray</a> again ... but it's currently on the back burner as I've been focussed on Zig 16 upgrade and also helping Richard with things.</p>
+
+
+
+<a name="597995421"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/597995421" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#597995421">(May 27 2026 at 04:39)</a>:</h4>
+<p>So I don't think anyone has a platform currently which demonstrates that functionality we can point at.</p>
+
+
+
+<a name="598067941"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/598067941" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#598067941">(May 27 2026 at 12:04)</a>:</h4>
+<p>Thank you for such a detailed reply! I had to compile Roc from the latest <code>main</code>, seems to work so far! Syntax <code>Box((Str -&gt; Str))</code> worked for me, single parentheses failed to compile. I assume the heap allocation is not too much of an overhead because of CPU caching, but we'll see.  I'll share if I reach any meaningful result =) </p>
+<p>As a part of this experiment I'm building a largish Roc platform + library - there are ~500 small helper functions plus a ~70-method "builder" pattern type. Working through different ways to structure it (Claude tried a lot of options), I kept hitting what looks like symbol count limits, and I'd love a sanity check on whether these are expected / known before I consider a proper bug report:</p>
+<p>- A single := [].{} block seems to stop "seeing" its own imports once it has ~50+ functions — every <code>FfiOption.x</code> reference reports "no module FfiOption imported", even though import <code>FfiOption</code> is right there at the top.<br>
+  - A platform seems to cap around ~350 total .{} methods across its modules before roc check panics ("reached unreachable code").<br>
+  - An app seems to cap around ~200 methods pulled in (not referenced directly) across all imports before the same panic.</p>
+<p>For now it seems I can declare all ~500 functions in a single library across multiple modules (couldn't simply within the platform), but I can only import a subset of the modules in the lib when writing the Roc app before the program stops compiling.</p>
+<p>Are these known limits or bugs of symbol count per block / module / platform / app?</p>
+
+
+
+<a name="598069174"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/598069174" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#598069174">(May 27 2026 at 12:10)</a>:</h4>
+<blockquote>
+<p>You're really diving straight into the deep end on this one</p>
+</blockquote>
+<p>For me it's like a warzone - you fly in before you can walk <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="598081814"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/598081814" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#598081814">(May 27 2026 at 13:02)</a>:</h4>
+<blockquote>
+<p>Are these known limits or bugs of symbol count per block / module / platform / app?</p>
+</blockquote>
+<p>I think they are all bugs</p>
+
+
+
+<a name="598101216"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/598101216" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#598101216">(May 27 2026 at 14:18)</a>:</h4>
+<p>for sure! <span class="user-mention" data-user-id="654587">@Karakatiza</span> any chance you could give a .roc file (or a few of them) which reproduce that?</p>
+
+
+
+<a name="598177249"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/598177249" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karakatiza <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#598177249">(May 27 2026 at 20:31)</a>:</h4>
+<p>I want to get further along in my prototype to get to some working baseline, after that it should be easy to  trigger these issues I encountered again, which I'd then share.</p>
+
+
+
+<a name="598181852"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/598181852" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#598181852">(May 27 2026 at 20:59)</a>:</h4>
+<p>cool, thanks!</p>
+
+
+
+<a name="598185919"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Passing%20a%20lambda%20to%20a%20platform%20function%20-%20does%20it%20cross%20ABI%3F/near/598185919" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Passing.20a.20lambda.20to.20a.20platform.20function.20-.20does.20it.20cross.20ABI.3F.html#598185919">(May 27 2026 at 21:21)</a>:</h4>
+<p>If you (or anyone) finds issues like this and makes a minimal repro and GH issue we usually can fix the bugs pretty fast.</p>
+
+
+
+<hr><p>Last updated: Jun 20 2026 at 13:20 UTC</p>
+</html>

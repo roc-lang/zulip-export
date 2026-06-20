@@ -1,0 +1,92 @@
+[
+    {
+        "content": "<p>I'm looking for some assistance with <a href=\"https://github.com/lukewilliamboswell/basic-ssg\">this platform</a></p>\n<p>I've managed to stumble across a double free, and I'm having trouble tracking it down. </p>\n<div class=\"codehilite\"><pre><span></span><code>+ roc dev --prebuilt-platform examples/simple.roc\nexamples/output/banana.html successfully written to disk\nroc_app_binary(39425,0x204bca080) malloc: double free for ptr 0x158008c00\nroc_app_binary(39425,0x204bca080) malloc: *** set a breakpoint in malloc_error_break to debug\n</code></pre></div>\n<p>I think it's in roc, as I can use <code>dbg!</code> to see I'm passing in a correct <code>RocStr</code>, and then I can get it to come back out and it's garbled/corrupted.</p>\n<p>I've been working on a platform for static-site-gen. It's mostly the bones from the version in our repo, but I've made some changes so that it is much closer in user experience to using basic-cli. </p>\n<p>My goal here is to have a nice rust platform which builds itself (not from roc cli), and is structured nicely so that it can serve as a template for other projects.</p>\n<p>If anyone could help me that would be super appreciated. Even just ideas for how to debug.</p>\n<p>To reproduce the bug, all you should need to do is clone the repository and then <code>bash run.sh</code>,  which is basically a helper for the following.</p>\n<div class=\"codehilite\"><pre><span></span><code>cargo build --target=aarch64-apple-darwin\ncp target/aarch64-apple-darwin/debug/libhost.a platform/macos-arm64.a\nroc dev --prebuilt-platform examples/simple.roc\n</code></pre></div>",
+        "id": 435114639,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713937756
+    },
+    {
+        "content": "<p>This is probably not the answer to your question. But does the platform really need to deallocate at all? If you would change <a href=\"https://github.com/lukewilliamboswell/basic-ssg/blob/18b31bd96f1495fa6fd1d6a706f2c8b4c9b71c95/crates/host/src/lib.rs#L32\">roc_dealloc</a> to a noop and <a href=\"https://github.com/lukewilliamboswell/basic-ssg/blob/18b31bd96f1495fa6fd1d6a706f2c8b4c9b71c95/crates/host/src/lib.rs#L24\">roc_realloc</a> to <code>libc::malloc(new_size)</code>,  it would make the platform faster and would also solve the double free bug.</p>",
+        "id": 435117661,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1713939432
+    },
+    {
+        "content": "<p>Ooh, that sound like a fun workaround. Thank you</p>",
+        "id": 435125232,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713942806
+    },
+    {
+        "content": "<p>Can confirm this \"solves\" my double free problem, haha <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 435151148,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713951796
+    },
+    {
+        "content": "<p>Which might help me to achieve my larger purposes with that platform anyway...</p>",
+        "id": 435151347,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713951861
+    },
+    {
+        "content": "<p>Even better, skip malloc and use a bumpalo arena</p>",
+        "id": 435197848,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713967529
+    },
+    {
+        "content": "<p>As for the memory leak, my best guess at quick glance is that it is somehow caused by this: <code>RocResult&lt;RocList&lt;roc_app::UrlPath&gt;, RocStr&gt; </code></p>",
+        "id": 435199170,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713967873
+    },
+    {
+        "content": "<p>Does this mean we might have a bug. somewhere in <code>roc_std</code>? Or should I be using something like <code>std::mem::ManuallyDrop</code> somewhere?</p>",
+        "id": 435283912,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713998634
+    },
+    {
+        "content": "<p>I would assume in roc_std, but would need to dig in a lot more</p>",
+        "id": 435286114,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714000000
+    },
+    {
+        "content": "<p>Ohk, I guess I'm wondering if this is something I should sweat over and is specific to my app, or should I move on to implementing features elsewhere? </p>\n<p>I think the strategy of never dealloc works in this particular use-case.</p>\n<p>I'd like to clean it up a little more, and then test out the cross-compilation using cargo (from my aaarch64 mac).</p>",
+        "id": 435287016,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714000565
+    },
+    {
+        "content": "<p>I wouldn't worry about it too much.</p>",
+        "id": 435287905,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714001269
+    },
+    {
+        "content": "<p>Ok, so I've made a bunch of improvements to the platform and it's working nicely on my MacOS. <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span> </p>\n<p>Now when I test it on my Ununtu x64 Linux machine (building locally) I'm having some issues. <span aria-label=\"sad\" class=\"emoji emoji-2639\" role=\"img\" title=\"sad\">:sad:</span> </p>\n<p>The first issue is if I compile it to <code>x86_64-unknown-linux-musl</code> then when I run it I can't get rust to see the arguments provided to the application. Using <code>dbg!</code> I can see the args is an empty vector.</p>\n<div class=\"codehilite\"><pre><span></span><code>+ cp target/x86_64-unknown-linux-musl/debug/libhost.a platform/linux-x64.a\n+ roc dev --prebuilt-platform examples/main.roc -- examples/content/ examples/output/\n[crates/host/src/lib.rs:132:29] std::env::args().collect() = []\nMissing directory arguments, usage example: roc app.roc -- path/to/input/dir path/to/output/dir\n</code></pre></div>\n<p>If I switch to compiling using the native toolchain rustup gave me then I can see the arguments are provided correctly, however I get a strange <code>memory allocation of 99459012813592 bytes failed</code> issue. </p>\n<div class=\"codehilite\"><pre><span></span><code>~/Documents/Github/basic-ssg$ cargo build\n    Finished dev [unoptimized + debuginfo] target(s) in 0.08s\n~/Documents/Github/basic-ssg$ cp target/debug/libhost.a platform/linux-x64.a\n~/Documents/Github/basic-ssg$ roc-nightly version\nroc nightly pre-release, built from commit d67ba43 on Mi 24 Apr 2024 09:01:43 UTC\n~/Documents/Github/basic-ssg$ roc-nightly run --prebuilt-platform --linker=legacy examples/main.roc -- ./examples/content/ ./examples/output\n[crates/host/src/lib.rs:132:29] std::env::args().collect() = [\n    &quot;/proc/self/fd/3&quot;,\n    &quot;./examples/content/&quot;,\n    &quot;./examples/output&quot;,\n]\nmemory allocation of 99459012813592 bytes failed\nAborted (core dumped)\n</code></pre></div>",
+        "id": 435298152,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714009791
+    },
+    {
+        "content": "<p>99TB....you don't have that kind of ram?</p>",
+        "id": 435298279,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714009870
+    },
+    {
+        "content": "<p>Also, based on some of the things I've learnt building this, I would like to refactor basic-cli and basic-webserver a little. I like the separation of \"host\" <code>.rs</code> files and \"platform\" <code>.roc</code> files as it's much clearer where things are and how they get built.</p>",
+        "id": 435299136,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714010544
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> I'm hitting this error now, do you know how you solved <a href=\"#narrow/stream/316715-contributing/topic/help.20with.20RocStr.20double.20free/near/435298152\">it</a>?</p>\n<div class=\"codehilite\"><pre><span></span><code>$ roc examples/cli/false-interpreter/False.roc examples/cli/false-interpreter/examples/sqrt.false\n🔨 Rebuilding platform...\nmemory allocation of 93824993832009 bytes failed\n</code></pre></div>\n<p><span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> has <a href=\"#narrow/stream/395097-compiler-development/topic/Casual.20Conversation/near/403344468\">encountered this error too in the past</a></p>",
+        "id": 465795515,
+        "sender_full_name": "Anton",
+        "timestamp": 1724858120
+    }
+]

@@ -1,0 +1,1028 @@
+[
+    {
+        "content": "<p>I've been working on efficiently calculating attributes for idents, including legal attributes like ! suffix, _ suffix, etc. as well as problems like double underscores. I think this information is useful throughout the rest of the compiler, so it feels appropriate to store these in a byte as bitflags and pass them around the parsing code that way. It would require slightly more space for every string we keep in the AST, but it would ensure we don't have to repeat parsing work for every single ident in the compiler.</p>\n<p>Does anyone think this is a bad idea? I'm gonna try this out post implementing string interpolation, but will avoid that work if people think it's better to duplicate work rather than store more info in the AST</p>",
+        "id": 492980688,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736525326
+    },
+    {
+        "content": "<p>The reason why this is tempting to me is because I'm trying to report all problems with an ident in a single message for every string we see in Roc</p>",
+        "id": 492981001,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736525439
+    },
+    {
+        "content": "<p>And it seems like we calculate a lot of these attributes later during canonicalization, but we can actually just do it while chomping characters. That way, we don't have to worry about handling non-ASCII or whatever in calculating in <code>roc_can</code> because we know exactly what we parsed earlier.</p>",
+        "id": 492981317,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736525546
+    },
+    {
+        "content": "<p>This aligns better with \"always inform, never block\"</p>",
+        "id": 492981433,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736525588
+    },
+    {
+        "content": "<p>Currently, we give a runtime error if a function has two underscores. I think we should just parse it, give a warning, and run anyway</p>",
+        "id": 492981504,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736525615
+    },
+    {
+        "content": "<p>i don't have a preference for the specific mechanism but I think these should definitely be consolidated behind an API and the specific API implementation should be opaque to the caller. Ideally these are methods <code>is_effectful</code> etc on the ident or symbol itself. If that's not possible, they should be methods on whatever object manages the symbol.</p>",
+        "id": 492983014,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736526128
+    },
+    {
+        "content": "<p>That's what I was thinking.</p>",
+        "id": 492983075,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736526150
+    },
+    {
+        "content": "<p>After simultaneously parsing an ident and its attributes, we'd return a</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Ident</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">text</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">a</span><span class=\"w\"> </span><span class=\"kt\">str</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">attributes</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">problems</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 492983234,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736526198
+    },
+    {
+        "content": "<p>And you'd access those values via methods</p>",
+        "id": 492983278,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736526213
+    },
+    {
+        "content": "<p>I've already written these methods for a post-parsing <code>IdentAttributes</code></p>",
+        "id": 492983327,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736526229
+    },
+    {
+        "content": "<p>But I think they belong at parsing and later instead</p>",
+        "id": 492983359,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736526240
+    },
+    {
+        "content": "<p>seems fine. as long as the fields are always private and immutable</p>",
+        "id": 492983363,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736526242
+    },
+    {
+        "content": "<p>Yep, sounds good</p>",
+        "id": 492983424,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736526251
+    },
+    {
+        "content": "<p>what attributes specifically did you have in mind?</p>",
+        "id": 493004446,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736533908
+    },
+    {
+        "content": "<p>(out of curiosity)</p>",
+        "id": 493004460,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736533915
+    },
+    {
+        "content": "<p>These are the current valid flags I'm parsing:</p>\n<ul>\n<li>Is the first character uppercase?</li>\n<li>Is there an exclam at the end?</li>\n<li>Is there an underscore at the end?</li>\n<li>Is there an underscore at the start?</li>\n</ul>\n<p>And these are the current ident errors, (though some may go away without needing to verify the ident parsed):</p>\n<ul>\n<li>Is it an empty ident?</li>\n<li>Are there multiple underscores in a row?</li>\n<li>Did they type <code>_!</code> at the end instead of <code>!_</code>?</li>\n<li>Is there an exclam in the middle?</li>\n<li>Are there any invalid chars, e.g. %, or ! a tag name?</li>\n<li>Are there any uppercase letters in a lowercase ident?</li>\n<li>Is there a number at the start? (we have a lot of fuzzer test cases with these parsed)</li>\n</ul>\n<p>My plan for these errors is to combine them into a single warning per ident with a list of errors to maximize info without clustering multiple warnings on the same ident</p>",
+        "id": 493010954,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736536502
+    },
+    {
+        "content": "<p>For the flags, not all of them are needed the whole time. The uppercase thing isn't needed once we figure out if a thing is a tag/alias or a var/function/value/typevar</p>",
+        "id": 493011022,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736536543
+    },
+    {
+        "content": "<p>Underscore at the start gets the ident ignored, but we probably still want to track the ident in case someone tries to run code that looks like</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">_val</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"mi\">123</span>\n<span class=\"nv\">do_something_else</span><span class=\"err\">!</span><span class=\"p\">()</span><span class=\"err\">?</span>\n<span class=\"nv\">_val</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"mi\">456</span>\n</code></pre></div>",
+        "id": 493011365,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736536683
+    },
+    {
+        "content": "<p>The current technique that Agus is employing is using the first bit of the 32bit ident ID as a bitflag for whether the var is ! suffixed</p>",
+        "id": 493011477,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736536731
+    },
+    {
+        "content": "<p>That gives us about 2 billion idents available instead of 4 billion per module</p>",
+        "id": 493011519,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736536751
+    },
+    {
+        "content": "<p>Using 4 bits brings us down to a quarter of a billion</p>",
+        "id": 493011550,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736536766
+    },
+    {
+        "content": "<p>We may not even need 4 bits, but if we use 4 bits that doesn't feel like much of a cost</p>",
+        "id": 493011670,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736536810
+    },
+    {
+        "content": "<p>This change also means that we probably can get away with not storing string values during parsing. We can just store a 64-bit rolling hash for each string and check for equality based on that value.</p>",
+        "id": 493012046,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736536960
+    },
+    {
+        "content": "<p>If you need the original string, you use the region of the string to get it back</p>",
+        "id": 493012120,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736536996
+    },
+    {
+        "content": "<p>the string is just a pointer right? so there should be no size difference</p>",
+        "id": 493012677,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736537222
+    },
+    {
+        "content": "<p>If it's always a pointer, then yes</p>",
+        "id": 493012739,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537247
+    },
+    {
+        "content": "<p>But string equality checking in can right now is O(n)</p>",
+        "id": 493012796,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537268
+    },
+    {
+        "content": "<p>yeah but the strings are small and that only matters before you turn the string into a symbol. it should be benchmarked but i would be a lot of money that is very low on the flamegraph</p>",
+        "id": 493012966,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736537327
+    },
+    {
+        "content": "<p>Yeah, fair</p>",
+        "id": 493013016,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537349
+    },
+    {
+        "content": "<p>My thought is that we use a lot of <code>VecMap</code>s</p>",
+        "id": 493013059,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537366
+    },
+    {
+        "content": "<p>And that's because we want to avoid the cost of hashing</p>",
+        "id": 493013077,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537377
+    },
+    {
+        "content": "<p>for small collections yes</p>",
+        "id": 493013109,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736537393
+    },
+    {
+        "content": "<p>debugability is probably more important than perf in the current implementation though</p>",
+        "id": 493013201,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736537417
+    },
+    {
+        "content": "<p>But if strings are always hashed already, then you can use them as keys in a proper hashmap</p>",
+        "id": 493013209,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537421
+    },
+    {
+        "content": "<p>Okay, for now I'll keep strings as strings</p>",
+        "id": 493013252,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537444
+    },
+    {
+        "content": "<p>you still have to deal with collisions right? or write your own string hasher</p>",
+        "id": 493013261,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736537446
+    },
+    {
+        "content": "<p>You'd make your object a <code>Vec&lt;(string hash, Vec&lt;item&gt;)&gt;</code></p>",
+        "id": 493013352,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537485
+    },
+    {
+        "content": "<p>Write your own string hasher would just mean a rolling hash</p>",
+        "id": 493013409,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537511
+    },
+    {
+        "content": "<p>you would have to do something to ensure there are no hash conflicts right?</p>",
+        "id": 493013579,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736537570
+    },
+    {
+        "content": "<p>at which point it's an interner b/c 1-to-1 mapping</p>",
+        "id": 493013603,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736537580
+    },
+    {
+        "content": "<p>Yeah, true</p>",
+        "id": 493013618,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537588
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/blob/a69a326161a49c19186b8bf07b50c625d3b95686/crates/compiler/collections/src/small_string_interner.rs#L185\">https://github.com/roc-lang/roc/blob/a69a326161a49c19186b8bf07b50c625d3b95686/crates/compiler/collections/src/small_string_interner.rs#L185</a></p>",
+        "id": 493013799,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537639
+    },
+    {
+        "content": "<p>This is where we walk the entire string interner every time we look for a symbol that matches what we have in scope</p>",
+        "id": 493013882,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537660
+    },
+    {
+        "content": "<p>It'd be nice for the interner to get closer to O(1) than O(n) by hashing the strings for insert</p>",
+        "id": 493013945,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537690
+    },
+    {
+        "content": "<p>The way to avoid that is to have your string interners keys be the hashes of the strings, and the values be <code>Vec&lt;(&amp;'a str, other, data)&gt;</code></p>",
+        "id": 493014034,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537730
+    },
+    {
+        "content": "<p>I'll be improving this performance by maintaining a separate data structure in the can rewrite for tracking ident IDs in scope</p>",
+        "id": 493014163,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537777
+    },
+    {
+        "content": "<p>But I'm very conscious of the time we put into interning strings</p>",
+        "id": 493014199,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537798
+    },
+    {
+        "content": "<p>As you point out, this doesn't matter right now</p>",
+        "id": 493014290,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537858
+    },
+    {
+        "content": "<p>But O(n) searches of all idents interned so far every time we want to deduplicate ident IDs by string search seems pretty sus</p>",
+        "id": 493014387,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736537890
+    },
+    {
+        "content": "<p>the way i would do it is to keep a hash map instead. then look up by hash and check for any collisions. if there are no collisions insert</p>",
+        "id": 493014578,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736537986
+    },
+    {
+        "content": "<p>i wouldn't get too nerdsniped by this though. the really expensive parts are typechecking and monomorphization. everything else is kind of a drop in the bucket comparatively</p>",
+        "id": 493014749,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736538059
+    },
+    {
+        "content": "<p>yeah and +1 on \"correctness first\"</p>",
+        "id": 493014886,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736538125
+    },
+    {
+        "content": "<p>Ok. An aside: is just <code>mono</code> that expensive?</p>",
+        "id": 493014906,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736538137
+    },
+    {
+        "content": "<p>like architecturally we want to be set up for caching</p>",
+        "id": 493014908,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736538138
+    },
+    {
+        "content": "<p>but on the level of an individual data structure, we can optimize those later as desired</p>",
+        "id": 493014945,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736538167
+    },
+    {
+        "content": "<p>yes</p>",
+        "id": 493023035,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736541940
+    },
+    {
+        "content": "<p>the reason c++/rust style languages have slow compilers is because of specialization</p>",
+        "id": 493023102,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736541962
+    },
+    {
+        "content": "<p>specialization is the <a href=\"https://github.com/roc-lang/roc/issues/1\">#1</a> cost in any compiler</p>",
+        "id": 493023146,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736541977
+    },
+    {
+        "content": "<p>everything else doesn't matter (comparatively). specialization forces a potentially-exponential growth in program size, and hence compute during compilation</p>",
+        "id": 493023226,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542023
+    },
+    {
+        "content": "<p>Wow, good to know</p>",
+        "id": 493023761,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542295
+    },
+    {
+        "content": "<p>That makes me wonder if long-term, Roc would have a faster dev backend startup time if we did dynamic dispatch for everything</p>",
+        "id": 493023930,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542382
+    },
+    {
+        "content": "<p>That would be <em>very</em> long-term, though</p>",
+        "id": 493023949,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542393
+    },
+    {
+        "content": "<p>I'm not sure about that...seems like Zig and JAI are way faster than Rust or C++ even though they both specialize, and they specialize via compile-time interpreting of source code, which is likely to be slower than parametric polymorphism type inference</p>",
+        "id": 493024003,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736542428
+    },
+    {
+        "content": "<p>\"specialization is costly\" is definitely true, but \"specializing compilers are all slow\" is empirically false thanks to those counterexamples, so there is obviously more to the story</p>",
+        "id": 493024126,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736542492
+    },
+    {
+        "content": "<p>i'm talking about relative speeds, not in absolute terms. zig is faster than c++ and rust but that doesn't mean that zig without specialization would be just as fast as zig with specialization. it would certainly be faster</p>",
+        "id": 493024337,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542587
+    },
+    {
+        "content": "<p>oh yeah for sure!</p>",
+        "id": 493024364,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736542598
+    },
+    {
+        "content": "<p>c++ and rust have a lot of other stuff that doesn't help. auto derefs are a good example</p>",
+        "id": 493024377,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542605
+    },
+    {
+        "content": "<p>yep haha</p>",
+        "id": 493024389,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736542611
+    },
+    {
+        "content": "<p>but what i mean is, in terms what is the bottleneck for any given compiler, specialization is definitely at the top</p>",
+        "id": 493024419,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542629
+    },
+    {
+        "content": "<p>totally</p>",
+        "id": 493024433,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736542641
+    },
+    {
+        "content": "<p>specialization is the only thing that cannot be O(N) where N is program size</p>",
+        "id": 493024441,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542644
+    },
+    {
+        "content": "<p>well, after linking and code gen in the case of LLVM - although specialization does create more work for both of those steps</p>",
+        "id": 493024550,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736542683
+    },
+    {
+        "content": "<p>Can typechecking be O(N)-ish with our type system?</p>",
+        "id": 493024564,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542686
+    },
+    {
+        "content": "<p>It feels very graph traversal-y at the moment</p>",
+        "id": 493024584,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542698
+    },
+    {
+        "content": "<p>yes typechecking is o(n)</p>",
+        "id": 493024586,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542699
+    },
+    {
+        "content": "<p>in practice</p>",
+        "id": 493024610,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736542712
+    },
+    {
+        "content": "<p>Ah</p>",
+        "id": 493024624,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542718
+    },
+    {
+        "content": "<p>just don't write a giant pyramid of nested defs please <span aria-label=\"stuck out tongue\" class=\"emoji emoji-1f61b\" role=\"img\" title=\"stuck out tongue\">:stuck_out_tongue:</span></p>",
+        "id": 493024634,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736542725
+    },
+    {
+        "content": "<p>I can see in practice</p>",
+        "id": 493024643,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542728
+    },
+    {
+        "content": "<p>even just for generating the specializations, it's bigger than o(n)</p>",
+        "id": 493024644,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542729
+    },
+    {
+        "content": "<p>because you emit equal or more code than is fed in</p>",
+        "id": 493024691,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542751
+    },
+    {
+        "content": "<p>so just producing the specializations is expensive</p>",
+        "id": 493024705,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542761
+    },
+    {
+        "content": "<p>I get that specialization gen is bigger than O(n), but <em>just</em> making concretely-typed copies seems cheap even if you do a lot of it</p>",
+        "id": 493024722,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542776
+    },
+    {
+        "content": "<p>and it's compounded by the fact that you have to duplicate data, etc (and there is little getting around that)</p>",
+        "id": 493024744,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542787
+    },
+    {
+        "content": "<p>But the part that would suck is everything after it working on more than the original N functions/values</p>",
+        "id": 493024752,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542790
+    },
+    {
+        "content": "<p>yeah the reason is that specialization is more than making trivial copies</p>",
+        "id": 493025063,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542923
+    },
+    {
+        "content": "<p>you are basically chopping up graphs of the program and rewriting them</p>",
+        "id": 493025091,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736542937
+    },
+    {
+        "content": "<p>I figured</p>",
+        "id": 493025095,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542940
+    },
+    {
+        "content": "<p>Oh, even <em>just</em> the naive graph expansion is bottleneck number one for relative time spent by compiler passes??</p>",
+        "id": 493025197,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736542995
+    },
+    {
+        "content": "<p>there are things that you can do to make the constant cost better, eg avoid over allocating, have a dense union/find representation of types, compiling to a good representation (e.g. passing large objects by pointer instead of by value everywhere). but the non-constant cost can't change</p>",
+        "id": 493025276,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736543040
+    },
+    {
+        "content": "<p>maybe a better way to put it is anything that is rewriting the program to a non-constant equivalent is going to be an expensive part. optimizations are another good example of this</p>",
+        "id": 493025653,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736543207
+    },
+    {
+        "content": "<p>another kind of interesting thing about specialization is that it is inherently at odds with separate compilation</p>",
+        "id": 493025928,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736543343
+    },
+    {
+        "content": "<p>this is why you don't really have separate compilation in Rust and in C++ you have to include generic functions in header files (so you have separate compilation until you need a generic function)</p>",
+        "id": 493025988,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736543383
+    },
+    {
+        "content": "<p>which adds to the feeling of compilation time overall</p>",
+        "id": 493026007,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736543394
+    },
+    {
+        "content": "<p>there are ways to get around this though. for example boxing values at compilation unit boundaries so there is a uniform representation. This is what Swift to separate comp/dynamic linking with generics IIRC</p>",
+        "id": 493026127,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736543448
+    },
+    {
+        "content": "<p>yeah that route is tricky for us because of host ABIs unfortunately</p>",
+        "id": 493026521,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736543646
+    },
+    {
+        "content": "<p>like if we give a <code>List Str</code> to the host, it needs to look the same way in memory with or without optimizations, and we definitely want specialization in optimized builds even if we wanted dev builds to do something else</p>",
+        "id": 493026597,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736543700
+    },
+    {
+        "content": "<p>i honestly think the long term answer for dev builds if you care about compiler perf (for any specializing compiler) is an interpreter</p>",
+        "id": 493026790,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736543805
+    },
+    {
+        "content": "<p>in roc's case the interpreter would have some c ffi and the rest is just interpreted, no specialization</p>",
+        "id": 493026827,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736543830
+    },
+    {
+        "content": "<p>you also don't need to worry about it for the host ABI because the host ABI has to be concretized - there is no polymorphism over it</p>",
+        "id": 493027032,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736543932
+    },
+    {
+        "content": "<p>it only matters within same-language (Roc&lt;&gt;Roc in this case) calls</p>",
+        "id": 493027086,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736543965
+    },
+    {
+        "content": "<p>so like convert at runtime right at the boundary?</p>",
+        "id": 493028442,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736544643
+    },
+    {
+        "content": "<blockquote>\n<p>long term answer for dev builds if you care about compiler perf (for any specializing compiler) is an interpreter</p>\n</blockquote>\n<p>Yeah, this is probably correct. Probably a bytecode interpreter like python. (Though this does leave weird holes where dev and optimized differ even more).</p>",
+        "id": 493028824,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736544831
+    },
+    {
+        "content": "<p>Like host calls into roc (which just launches an interpreter over the roc bytecode). When calling back into the host, just use libffi to deal with all the types and calling the host pointers.</p>",
+        "id": 493029104,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736544945
+    },
+    {
+        "content": "<p>This should be very doable with lots of gains.</p>",
+        "id": 493029199,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736544971
+    },
+    {
+        "content": "<p>Likely still want to do at a minimum tail call optimization, but most things could remain boxed and etc to run faster.</p>",
+        "id": 493029253,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736545002
+    },
+    {
+        "content": "<p>The problem with the dev backend compilation time long term, isn't the dev backend. It is all the parts above the dev backend to deal with type checking and specialization.</p>",
+        "id": 493029349,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736545044
+    },
+    {
+        "content": "<p>Those are the slow parts that benefit signifcantally from a boxed representation and such.</p>",
+        "id": 493029454,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736545084
+    },
+    {
+        "content": "<p>Also, I'm not sure which would be faster, dev assembly or a bytecode interpreter. Probably still the dev assembly, but less clear especially if you do some smart bytecode assembler tricks (not to mention some lambda chaining tricks that get pretty optimized code without writing any assembly).</p>",
+        "id": 493029756,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736545225
+    },
+    {
+        "content": "<p>Obviously, we could box everything and do assembly gen fast just change the assembly to understand boxed types.</p>",
+        "id": 493029907,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736545305
+    },
+    {
+        "content": "<blockquote>\n<p>so like convert at runtime right at the boundary?<br>\nyes</p>\n</blockquote>",
+        "id": 493031370,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546111
+    },
+    {
+        "content": "<p>yeah to Brendan's point, interpreter vs fast machine code generator is orthogonal to specialization</p>",
+        "id": 493031546,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546192
+    },
+    {
+        "content": "<p>the real benefit would be if we could have the dev backend do something other than specialization at the cost of (much) more boxing at runtime</p>",
+        "id": 493031598,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546223
+    },
+    {
+        "content": "<p>and yet at the boundary convert things over to the representation the host needs</p>",
+        "id": 493031620,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546235
+    },
+    {
+        "content": "<p>which in some cases might be very expensive, unfortunately <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 493031634,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546243
+    },
+    {
+        "content": "<p>well the great thing is you don't need the boundary conversion at the host, that's what im saying</p>",
+        "id": 493031801,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546318
+    },
+    {
+        "content": "<p>What about something like <code>List Str</code>? in the boxed non-specialized world, wouldn't it be <code>List GenericRocType</code></p>",
+        "id": 493031866,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736546359
+    },
+    {
+        "content": "<p>hm, but unless I'm missing something, <code>List Str</code> would be different in memory depending on whether it's been monomorphized or not</p>",
+        "id": 493031868,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546361
+    },
+    {
+        "content": "<p>i don't think it's that expensive. it's only a pointer dereference and indirect jumps for abilities</p>",
+        "id": 493031869,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546363
+    },
+    {
+        "content": "<p>right, there would be some runtime metadata there I'd think</p>",
+        "id": 493031877,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546369
+    },
+    {
+        "content": "<p>at the host there's no polymorphism</p>",
+        "id": 493031895,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546380
+    },
+    {
+        "content": "<p>at the host boundary*</p>",
+        "id": 493031913,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546388
+    },
+    {
+        "content": "<p>but you can give a <code>List Str</code> to a host</p>",
+        "id": 493031914,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546389
+    },
+    {
+        "content": "<p>there are no polymorphic variables</p>",
+        "id": 493031994,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546411
+    },
+    {
+        "content": "<p>they're all concrete</p>",
+        "id": 493032003,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546414
+    },
+    {
+        "content": "<p>sure, but you don't need to box it because you know that the function will always have the same concrete inputs and outputs</p>",
+        "id": 493032030,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546428
+    },
+    {
+        "content": "<p>but <code>List Str</code> and <code>List U8</code> have different memory layouts if they've been specialized</p>",
+        "id": 493032034,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546430
+    },
+    {
+        "content": "<p>right, but no host-exposed function has more than one specialization</p>",
+        "id": 493032129,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546472
+    },
+    {
+        "content": "<p>Other languages are more free to do this because the language runtime and the \"platform\" are not separated and are cohesive</p>",
+        "id": 493032132,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1736546473
+    },
+    {
+        "content": "<p>but let's say I have a call to <code>List.map</code> which returns a <code>List Str</code> which I hand off to the platform</p>",
+        "id": 493032153,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546488
+    },
+    {
+        "content": "<p>how can <code>List.map</code> return a <code>List Str</code> sometimes and a <code>List U8</code> other times I call it, without either specializtion or some runtime metadata on <code>List</code>?</p>",
+        "id": 493032244,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736546524
+    },
+    {
+        "content": "<p>okay, i see what you're getting at now</p>",
+        "id": 493032324,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546574
+    },
+    {
+        "content": "<p>I'm not sure that is supported though</p>",
+        "id": 493032333,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546579
+    },
+    {
+        "content": "<blockquote>\n<p>but you don't need to box it because you know that the function will always have the same concrete inputs and outputs</p>\n</blockquote>\n<p>Wait, your suggestion is more meta than I realized. You don't want to box everything, You just want to box anything that has more than one specialization. That said, you want to box only over the possible specializations. So for a function that in practice has two specializations <code>List Str -&gt; ...</code> or <code>List U8 -&gt; ...</code>, you would essentially convert it into a <code>[ ListStr (List Str), ListU8 (List U8) ] -&gt; ...</code></p>",
+        "id": 493032346,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736546586
+    },
+    {
+        "content": "<p>So very different from the standard interpreter that boxes everything and does so in a recursive manner.</p>",
+        "id": 493032384,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736546611
+    },
+    {
+        "content": "<p>i don't think you can pass a function to the host that is polymorphic for exactly that reason - the host has to have a concrete (non-generic) interface so i'm not sure how you would pass such a function through?</p>",
+        "id": 493032467,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546645
+    },
+    {
+        "content": "<p>like I can't say on the host side \"i expose an effect <code>f: Str -&gt; (a -&gt; a) -&gt; Str</code>\"</p>",
+        "id": 493032515,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546679
+    },
+    {
+        "content": "<p>you have to say <code>f: Str -&gt; (Str -&gt; Str) -&gt; Str</code> at which point you know exactly what specialization you need and you don't need anything more</p>",
+        "id": 493032567,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546713
+    },
+    {
+        "content": "<blockquote>\n<p>Wait, your suggestion is more meta than I realized. You don't want to box everything, You just want to box anything that has more than one specialization. That said, you want to box only over the possible specializations. So for a function that in practice has two specializations <code>List Str -&gt; ...</code> or <code>List U8 -&gt; ...</code>, you would essentially convert it into a <code>[ ListStr (List Str), ListU8 (List U8) ] -&gt; ...</code></p>\n</blockquote>\n<p>Yes, that could work too. But i'm not quite following how the host can take any function that is generic. I don't think it's possible but maybe i'm missing something</p>",
+        "id": 493032792,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546826
+    },
+    {
+        "content": "<p>I'm not worried about directly interacting with the host. I am worried about indirectly interacting with the host.</p>",
+        "id": 493032915,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736546884
+    },
+    {
+        "content": "<p>what is the difference?</p>",
+        "id": 493032934,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736546896
+    },
+    {
+        "content": "<p>I thought part of the goal of this work was to avoid specialization. As such, even though the host has concrete types, it has to be able to call functions that have multiple specializations and thus take generic boxed types. As such, there has to be a way to convert concrete types to/from generic types.</p>",
+        "id": 493033022,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736546978
+    },
+    {
+        "content": "<p>Aside, I think an interpreter could theoretically avoid boxing and lazily specialize when a function with a specific specialization is called.</p>",
+        "id": 493033158,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736547052
+    },
+    {
+        "content": "<p>My argument is that the host can never interact with any Roc function that is polymorphic, hence you don't need to worry about generics over the host boundary. Because how could that work if it did? You would need to re-compile the host every time the app uses another specialization</p>",
+        "id": 493033231,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736547110
+    },
+    {
+        "content": "<p>yes, i think you're right</p>",
+        "id": 493033316,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736547148
+    },
+    {
+        "content": "<p>sorry for devolving your thread Sam lmao</p>",
+        "id": 493033481,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736547249
+    },
+    {
+        "content": "<p>This was educational</p>",
+        "id": 493034090,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736547627
+    },
+    {
+        "content": "<p>I got what I wanted, which was approval for me doing code cleanup</p>",
+        "id": 493034114,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736547644
+    },
+    {
+        "content": "<p>i'm still confused on if i'm missing something about the app&lt;&gt;host boundary. am i? or is it correct that the host actually has no way to call a polymorphic function</p>",
+        "id": 493038423,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736550182
+    },
+    {
+        "content": "<p>Host could call something with a <code>Box model</code></p>",
+        "id": 493040811,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736551731
+    },
+    {
+        "content": "<p>But that is kinda different</p>",
+        "id": 493040822,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736551743
+    },
+    {
+        "content": "<p>but that has to be equivalent to a single function, it can't dispatch to one of N functions right</p>",
+        "id": 493040846,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736551761
+    },
+    {
+        "content": "<p>yeah</p>",
+        "id": 493040848,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736551761
+    },
+    {
+        "content": "<p>Yeah</p>",
+        "id": 493040876,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736551784
+    },
+    {
+        "content": "<p>but the host can't actually call <code>List.map</code> polymorphically</p>",
+        "id": 493040880,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736551786
+    },
+    {
+        "content": "<p>theres no way to do that and be able to compile the host separately i think</p>",
+        "id": 493040947,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736551807
+    },
+    {
+        "content": "<p>without boxed polymorphic types obviously</p>",
+        "id": 493040978,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736551825
+    },
+    {
+        "content": "<p>Yeah</p>",
+        "id": 493040986,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736551830
+    },
+    {
+        "content": "<p>okay, so then this works just fine at host boundaries. you don't need any boxing at all.</p>",
+        "id": 493041020,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736551852
+    },
+    {
+        "content": "<p>I just don't understand how without specializing <a href=\"http://list.map\">list.map</a>, we go from the concrete list passed in from the host to calling a polymorphic function.</p>",
+        "id": 493041083,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736551904
+    },
+    {
+        "content": "<p>Like if main is simply:</p>\n<div class=\"codehilite\"><pre><span></span><code>main : List Str -&gt; List U64\nmain =\n    if #some arbitrary conditional then\n        List.map Str.toU64\n    else\n        List.map Str.toI64\n        |&gt; List.map Num.abs\n</code></pre></div>",
+        "id": 493041259,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736552022
+    },
+    {
+        "content": "<p>sorry i think i wasn't clear</p>",
+        "id": 493041438,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736552150
+    },
+    {
+        "content": "<p><a href=\"http://List.map\">List.map</a> would be specialized</p>",
+        "id": 493041442,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736552154
+    },
+    {
+        "content": "<p>I was talking about 3p functions at compilation boundaries (let's say libraries for now)</p>",
+        "id": 493041521,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736552174
+    },
+    {
+        "content": "<p>but the case is similar. in this example you would simply unwrap the boxed type at the end and return that.</p>",
+        "id": 493041582,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736552220
+    },
+    {
+        "content": "<p>yeah the problem with that is what if you have like <code>List (List Str)</code> or something</p>",
+        "id": 493041641,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736552263
+    },
+    {
+        "content": "<p>why is that a problem?</p>",
+        "id": 493041657,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736552273
+    },
+    {
+        "content": "<p>now you gotta traverse the whole thing and unbox all the inner lists</p>",
+        "id": 493041719,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1736552291
+    },
+    {
+        "content": "<p>i don't think that's necessarily true. you only need to do the wrap/unwrap if you definitely know you are calling a polymorphic-but-unspecialized function. which in practice is going to be a small amount of the functions in your program (since it's only at 3p library API boundaries)</p>",
+        "id": 493041857,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736552396
+    },
+    {
+        "content": "<p>Also, it doesn't need to be nested unwrap. If you pass <code>List (List Str)</code> to a function like that, you only need to wrap the whole structure, not the nested ones</p>",
+        "id": 493041948,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736552444
+    },
+    {
+        "content": "<p>this is succinct explanation of what i was saying: <a href=\"https://lobste.rs/s/ei5bp4/apple_is_killing_swift#c_zwjc1i\">https://lobste.rs/s/ei5bp4/apple_is_killing_swift#c_zwjc1i</a>. very coincidental</p>",
+        "id": 493113185,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736616678
+    }
+]

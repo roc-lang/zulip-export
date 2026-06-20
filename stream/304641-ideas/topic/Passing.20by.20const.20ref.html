@@ -1,0 +1,259 @@
+<html>
+<head><meta charset="utf-8"><title>Passing by const ref · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html">Passing by const ref</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="272751140"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751140" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751140">(Feb 22 2022 at 01:31)</a>:</h4>
+<p>Currently everything in Roc is essentially passed as a constant value, with the special exception that lists and strings can be edited in place if they only have a single reference. That being said, they are technically still passed by constant value. Just the data they point to is not constant.</p>
+<p>In many cases this does not matter, but depending on the calling convention, this can have horrible performance characteristics. Specifically in Roc's case, passing large structs and unions has a lot of overhead in many calling conventions. For every call, the large struct must be copied to a new stack location. This means that if you are passing a model down the stack, you are copying the entire model for every single call, wasting stack space and time. Here is an example in c++ of the difference between passing by <a href="https://godbolt.org/z/3Yhqxdcqq">const value</a> and passing by <a href="https://godbolt.org/z/Wfr34Tdfs">const ref</a>. The cost is approximately 30 memory copy assembly instructions even in this simple example. When looking at the performance cost using only a struct that is 4 usizes (pretty tiny), it already is about <a href="https://www.quick-bench.com/q/6GOGl2JzEP_nCq2HTPtQV86f3EA">3x slower</a> to pass by const value instead of const reference for these small functions.</p>
+<p>Given Roc is a functional language focused on high performance, I think taking advantage of passing by const reference is extremely important. I think we should follow along with C++ guidelines, for anything that is trivially copy-able, pass it by value. For everything else, pass it by const reference. In our specific case, I propose that any value over 2 usizes should be passed by const reference. Then it will only be copied if a sub-function needs to return a modified version of the struct, rather than being copied for every single function call. The reason for 2 usizes is that it matches along with most modern function calls. Things that are 2 usizes or smaller will be passed in registers instead of on the stack. Anything larger than 2 usizes requires copying to the stack for passing.</p>
+<p>I think this will be paramount to performance and avoiding stack overflows for large models and structs being passed around. It also will make boxing fit in naturally. If we are boxing a large object, we can still just pass the pointer down the call stack like with all other structs. No need to every truly unbox and copy all of the data out of the box. A box is just a constant reference to a chunk of data.</p>
+<p>Thoughts?</p>
+
+
+
+<a name="272751650"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751650" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751650">(Feb 22 2022 at 01:42)</a>:</h4>
+<blockquote>
+<p>In our specific case, I propose that any value over 2 usizes should be passed by const reference.</p>
+</blockquote>
+<p>that sounds like a great heuristic! I've been thinking about this for awhile, but didn't know what a good cutoff point would be...I like your reasoning for choosing that!</p>
+
+
+
+<a name="272751655"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751655" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751655">(Feb 22 2022 at 01:43)</a>:</h4>
+<p>actually a good example of where this will come up is GUIs, e.g. for editor plugins</p>
+
+
+
+<a name="272751663"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751663" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751663">(Feb 22 2022 at 01:43)</a>:</h4>
+<p>you have the entire application state value being passed around to all sorts of functions</p>
+
+
+
+<a name="272751670"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751670" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751670">(Feb 22 2022 at 01:43)</a>:</h4>
+<p>if that thing has like 20 fields in it, RIP performance unless we're passing pointers <span aria-label="laughing" class="emoji emoji-1f606" role="img" title="laughing">:laughing:</span></p>
+
+
+
+<a name="272751750"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751750" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751750">(Feb 22 2022 at 01:45)</a>:</h4>
+<p>a separate consideration: what if we have a bunch of arguments?</p>
+
+
+
+<a name="272751755"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751755" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751755">(Feb 22 2022 at 01:46)</a>:</h4>
+<p>for example:</p>
+
+
+
+<a name="272751815"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751815" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751815">(Feb 22 2022 at 01:46)</a>:</h4>
+<p>As an extra note, in some simple benchmarks, even <a href="https://www.quick-bench.com/q/VOfVjo8qqPRXmdK633Ygn-NFhxg">at 3 usizes</a>, it is still faster to pass by reference than by value. Of coures, <a href="https://www.quick-bench.com/q/o9ZzCJFYpBP6vK-VdcopFZx4xjI">at 2 usizes</a>, passing by ref is much worse due to not taking advantage of registers.</p>
+
+
+
+<a name="272751824"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751824" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751824">(Feb 22 2022 at 01:47)</a>:</h4>
+<p>consider a function with 20 arguments. Should we copy all 20 every time the function gets called?</p>
+<p>I could see arguments for two designs:</p>
+<ol>
+<li>Automatically turn some of those arguments into a struct and pass them that way, so we aren't copying 20 things on the stack</li>
+<li>If you're doing it this way, it's because for some reason you explicitly want that to happen (if you don't want it to happen, you could just accept a single-tag union with a 20-field payload), and we shouldn't take away that option from you</li>
+</ol>
+
+
+
+<a name="272751883"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751883" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751883">(Feb 22 2022 at 01:48)</a>:</h4>
+<p>usually I'd default to #2 in a case like this - give people <em>some</em> way to get the behavior, so we're not eliminating potential performance optimizations - but the thing is, I can't think of a single motivating use case to support #2 where you'd ever actually prefer that it copy all 20 arguments to having them be automatically "tupled" and passed by reference <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="272751904"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751904" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751904">(Feb 22 2022 at 01:49)</a>:</h4>
+<p>So with many arguments, it gets a lot more calling conventions specific. For example, on x86-64 linux, I can pass 14 arguments in registers if 6 of them are ints, and the other 8 are floats, but on windows, I get 4 arguments total passed in registers, int or float.</p>
+
+
+
+<a name="272751970"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751970" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751970">(Feb 22 2022 at 01:50)</a>:</h4>
+<p>This being said, I don't think making a tuple would help much. The only case where it would be an advantage is if the same 20 arguments are passed to multiple functions, or always in order linear subsets of the arguments.</p>
+
+
+
+<a name="272751989"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272751989" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272751989">(Feb 22 2022 at 01:51)</a>:</h4>
+<p>Because if you swap order or only use some the parameters, you would still have to copy around to make the new expected tuple for the sub function.</p>
+
+
+
+<a name="272752059"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272752059" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272752059">(Feb 22 2022 at 01:52)</a>:</h4>
+<p>Also with 20 args, as many as possible will still be in registers before we start pushing to the stack, so that is another advantage over the tuple. With individual args, I might get 8 in registers and 12 on the stack instead of 20 on the stack with a reference to it being passed as an arg.</p>
+
+
+
+<a name="272752092"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272752092" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272752092">(Feb 22 2022 at 01:53)</a>:</h4>
+<p>In fact, in shallow cases, or cases where the args for each function change a lot, splitting a struct into many values and passing it as a ton of arguments instead of just one, it can be faster. But in most cases where you pass the same struct around to multiple functions, that will be generally better than direct args.</p>
+
+
+
+<a name="272752749"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272752749" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272752749">(Feb 22 2022 at 02:07)</a>:</h4>
+<p>oh that's a good point! <span aria-label="thumbs up" class="emoji emoji-1f44d" role="img" title="thumbs up">:thumbs_up:</span></p>
+
+
+
+<a name="272777436"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272777436" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272777436">(Feb 22 2022 at 09:21)</a>:</h4>
+<p>The Wasm backend is already passing all data structure arguments as pointers. Only primitive numbers are passed by value.</p>
+
+
+
+<a name="272777442"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272777442" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272777442">(Feb 22 2022 at 09:21)</a>:</h4>
+<p>Is it possible to in-place mutate an argument?</p>
+
+
+
+<a name="272834749"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272834749" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272834749">(Feb 22 2022 at 17:08)</a>:</h4>
+<p>The answer should be no to my knowledge, which is why I want to make passing by const ref an explicit rule of the language. That being said, with the llvm backend, it's optimizations totally are allowed to violate that. For example if it is passed a struct on the stack, modifies a field, and then  uses it, llvm could update that struct argument because it knows the value was copied in and it has ownership. Technically in the dev backend basic linear scan optimizations could probably be made, but it is not part of our mono ir.<br>
+So for wasm, does the "C" calling convention just always use pointers? Also, this means that the wasm backend already doesn't copy data if it passes a struct from one function to the next, just sends the pointer farther down?</p>
+
+
+
+<a name="272839677"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272839677" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272839677">(Feb 22 2022 at 17:42)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/304641-ideas/topic/Passing.20by.20const.20ref/near/272834749">said</a>:</p>
+<blockquote>
+<p>So for wasm, does the "C" calling convention just always use pointers? Also, this means that the wasm backend already doesn't copy data if it passes a struct from one function to the next, just sends the pointer farther down?</p>
+</blockquote>
+<p>That's right, yes.</p>
+
+
+
+<a name="272839868"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272839868" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272839868">(Feb 22 2022 at 17:43)</a>:</h4>
+<p>It always uses pointers for data structures.</p>
+
+
+
+<a name="272853801"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272853801" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272853801">(Feb 22 2022 at 19:21)</a>:</h4>
+<p>Yeah, so this all just doesn't effect wasm, I guess.</p>
+
+
+
+<a name="272854201"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272854201" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272854201">(Feb 22 2022 at 19:24)</a>:</h4>
+<p>In x86-64, if a function is passed a 4 element struct and it then passes the struct to another function, it has to copy the struct to a new stack offset. So switching to const ref is important. I assume everything in wasm is already pointers because registers and some memory management are abstracted away.</p>
+
+
+
+<a name="272854883"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272854883" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272854883">(Feb 22 2022 at 19:30)</a>:</h4>
+<p>for LLVM this should be mitigated by inlining, but is probably still worth looking at</p>
+
+
+
+<a name="272854963"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272854963" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272854963">(Feb 22 2022 at 19:31)</a>:</h4>
+<p>question is though: at what level of abstraction do we want to think about this? in the mono IR, or in the backends themselves?</p>
+
+
+
+<a name="272855000"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272855000" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Folkert de Vries <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272855000">(Feb 22 2022 at 19:31)</a>:</h4>
+<p>wasm already does its own thing, so that makes it a bit weird to put it into mono IR</p>
+
+
+
+<a name="272857076"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272857076" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272857076">(Feb 22 2022 at 19:48)</a>:</h4>
+<p>inlining will help, but will not solve all problems, especially with a large model (or subsets of them) are threaded through most functions. It is unlikely all of the functions will be inlined and then some calls will lead to copying.</p>
+
+
+
+<a name="272857337"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272857337" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272857337">(Feb 22 2022 at 19:50)</a>:</h4>
+<p>As for IR or not, I think it should probably be in the IR.<br>
+I think it needs to be explicit because the platform needs to know about it in order to pass args correctly.</p>
+
+
+
+<a name="272857380"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272857380" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272857380">(Feb 22 2022 at 19:51)</a>:</h4>
+<p>If struct greater than 2 usize, platforms must pass by constant ref.</p>
+
+
+
+<a name="272857623"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272857623" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272857623">(Feb 22 2022 at 19:53)</a>:</h4>
+<p>Also, if the platform is passing a value, even in wasm (to my understanding), the host might still need to make a copy of the value and then pass it in, rather than just passing the pointer to the existing value.</p>
+
+
+
+<a name="272857675"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272857675" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272857675">(Feb 22 2022 at 19:53)</a>:</h4>
+<p>The issue is that const values that are function args can still be modified and a copy will be required if the host wants to use or modify the value later.</p>
+
+
+
+<a name="272873280"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272873280" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272873280">(Feb 22 2022 at 22:07)</a>:</h4>
+<p>I don't see why anything other than the copy needs to be explicit in the IR</p>
+
+
+
+<a name="272873368"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272873368" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272873368">(Feb 22 2022 at 22:08)</a>:</h4>
+<p>Checking if something is bigger than 2 usize can be done anywhere. I'm already doing it in the wasm backend.</p>
+
+
+
+<a name="272873526"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272873526" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272873526">(Feb 22 2022 at 22:09)</a>:</h4>
+<p>From a certain point of view it's already in the IR because the Layout tells you the size of the structure so you have the info you need.</p>
+
+
+
+<a name="272876962"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272876962" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272876962">(Feb 22 2022 at 22:40)</a>:</h4>
+<p>That is true. I guess it is just important that the platform author has an explicit rule to follow when passing data to Roc (also builtins from roc to zig). Otherwise, internally, all backends can technically make up whatever calling conventions they want.</p>
+
+
+
+<a name="272877767"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272877767" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272877767">(Feb 22 2022 at 22:49)</a>:</h4>
+<p>I think that I would prefer something in the IR because it will specify consistency across the backends and help to ensure a platform won't be messed up on a specific backend. That being said, the explicitness could just be a bool flag or another enum value with the same data (<code>Struct</code> and <code>StructRef</code>. I don' think we need to explicitly add pointer loading and such. So for the wasm backend, it actually wouldn't change anything since everything is already references.</p>
+
+
+
+<a name="272878477"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272878477" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272878477">(Feb 22 2022 at 22:56)</a>:</h4>
+<p>On the flip side, in some situations, not having the explicit IR could enable a tiny bit more performance optimizations. For example, with avx2, it is technically possible to pass 4 doubles by value in a single register using the <code>__m256d</code> type.</p>
+
+
+
+<a name="272878515"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Passing%20by%20const%20ref/near/272878515" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Passing.20by.20const.20ref.html#272878515">(Feb 22 2022 at 22:56)</a>:</h4>
+<p>Not sure if Roc would or could ever take advantage of that, but maybe.</p>
+
+
+
+<hr><p>Last updated: Jun 20 2026 at 13:20 UTC</p>
+</html>
