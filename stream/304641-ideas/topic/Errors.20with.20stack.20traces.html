@@ -1,0 +1,1258 @@
+<html>
+<head><meta charset="utf-8"><title>Errors with stack traces · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html">Errors with stack traces</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="491493908"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491493908" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491493908">(Jan 01 2025 at 11:48)</a>:</h4>
+<p>Having worked with functional error handling a bunch in Elm and Scala, I feel confident in saying that it is quite good at discerning <em>what</em> went wrong and adding context at different layers. But functional error handling is fairly poor at discerning <em>where</em> the error happened, and certainly much inferior to the stack trace you get when throwing an exception (regardless of any other deficiencies exceptions have).</p>
+<p>I'm not suggesting that stack traces are the end-all-be-all of error locations, but I do think they would be a big step up of what we have today. I'll write out a bit about what's wrong with the current setup further down, but I'll write my proposal first:</p>
+<h2>Proposal</h2>
+<p>We have talked a bunch about how to manage errors with <code>try</code>, <code>?</code>, <code>??</code>, and <code>map_err</code>, all centered around <code>Result</code> where you can put in anything as an error. But what if the error variant, instead of being <code>Err e</code> was <code>Err (Error e)</code> where <code>Error</code> is a custom type provided by the standard library, which can contain extra information, like a stack trace.</p>
+<p>The reason we need to store the stack trace is because we're going to build it as we pass errors around with the various operators. I'll admit that I'm only confident in what semantics <code>map_err</code> has and the others I just find confusing at the momemt, so I'm going to suggest my own operators here to avoid getting tangled up in existing semantics. But in the real world, they should just be merged into the existing operators.</p>
+<p>Operator 1, aka <code>new_error</code> (just pretend it's an operator and not a keyword):<br>
+The <code>new_error</code> operator takes any value <code>e</code> and creates an <code>Error e</code> type from it. When the compiler sees the <code>new_error</code> operator, it creates the string of the location of current file and line, e.g. <code>"MyRocProject/MyCode.roc:234"</code> and it inserts that as the first element of the stack trace in the <code>Error</code>, which contains the stack trace as just a <code>List String</code>.</p>
+<p>After that comes operator 2, aka <code>propagate_error</code>:<br>
+The <code>propagate_error</code> operator works like <code>new_error</code>, except it doesn't create a new error but just propagates an existing one. But when the compiler sees this operator, it will still create the next level of the stack trace and append it to the <code>Error</code>.</p>
+<p>Then there's operator 3, <code>map_error_operator</code> (named to not be confused with the existing function):<br>
+Again it's only special in that it builds the stack trace behind the scenes when used, but otherwise it just maps the contents of the given error as usual.</p>
+<p>In other words, <code>Error</code> can only be constructed and mapped by using operators that build out the stack trace, and the existing <code>map_err</code> function would be removed. Users <em>can</em> still return an existing <code>Error</code> normally which would not build out the stack trace, but I think that could produce a warning when building.</p>
+<h2>Problems in current setup</h2>
+<p>Imagine an error like this, which is nested according to current best practices:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">ConfigError</span>
+<span class="w">    </span><span class="kt">CouldNotReadConfigError</span>
+<span class="w">        </span><span class="kt">FileReadError</span>
+</code></pre></div>
+<p><code>FileReadError</code> is the original error, which has been wrapped up a few times.</p>
+<p>This structure is a "jack of all trades, master of none" error structure. That is:</p>
+<ul>
+<li><code>FileReadError</code> is just the original "symptom" of what went wrong, as many errors are only symptoms of the real problem somewhere else anyway.</li>
+<li><code>CouldNotReadConfigError</code> actually tells you what went wrong at the context level that, in this example, has the most information about the error.</li>
+<li><code>ConfigError</code> exists mainly as form of stack trace, to tell you where the error occurred, but it doesn't add any useful information about what went wrong.</li>
+</ul>
+<p>And in the real world you'd have potentially many more levels mixing both context and tracing together. I think it would be preferable for this error to be something like</p>
+<div class="codehilite" data-code-language="Perl"><pre><span></span><code><span class="p">{</span><span class="w"> </span><span class="n">payload</span><span class="o">=</span><span class="w"> </span><span class="n">CouldNotReadConfigError</span><span class="w"> </span><span class="p">(</span><span class="n">FileReadError</span><span class="p">)</span>
+<span class="p">,</span><span class="w"> </span><span class="n">trace</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s">"MyRocProject/Config.roc:234"</span>
+<span class="w">    </span><span class="p">,</span><span class="w"> </span><span class="s">"MyRocProject/Setup.roc:123"</span>
+<span class="w">    </span><span class="p">,</span><span class="w"> </span><span class="s">"MyRocProject/Main.roc:23"</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>where the contents of <code>payload</code> is what <code>Error</code> is generic over (so <code>Error payload</code> essentially).</p>
+<p>The benefits here are twofold:</p>
+<ul>
+<li>The payload is less noisy than the original error, as it is only responsible for providing error context.</li>
+<li>The stack trace is a much clearer trace than what the old error provided</li>
+</ul>
+<p>There's a few reasons the stack trace is superior to the old trace:</p>
+<ul>
+<li>Error variants need to be named uniquely across the code base to be fully traceable (e.g. <code>ConfigError</code> may be applied in multiple places in the code, and it might not be clear from the trace which one was hit)</li>
+<li>With Roc, propagating errors without wrapping them is easy, so the old kind of tracing can easily be missing information that's needed to fully trace the error.</li>
+<li>Asking people to map their errors everywhere easily leads to very stuttering code a la <code>Config.get!().map_err(ConfigError)</code>. This code is harder to read without any real benefit. Roc afford us easy propagation of errors, but we're not really getting the most of it when the best practice is to map the errors everywhere, even when it doesn't add value to do so.</li>
+</ul>
+<p>All the issues above can also be fixed with developers writing disciplined code, but in that case, it still feels like it needs a lot of effort compared to just getting a stack trace for free, and only mapping your errors when you actually have something useful to add to it.</p>
+
+
+
+<a name="491502027"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491502027" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491502027">(Jan 01 2025 at 14:00)</a>:</h4>
+<p>I'm not sure about the specifics with the proposed operators but I would like to have errors with traces as well :)</p>
+
+
+
+<a name="491505120"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491505120" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491505120">(Jan 01 2025 at 14:45)</a>:</h4>
+<p>One of the reasons this isn't done is because the performance is generally awful.</p>
+<p>The issue is that errors in results are generally not exceptional. They are actually pretty common in many cases. Adding locations is both bloat to the binary and extra allocation with data movement.</p>
+<p>That said, I completely understand the goal here. Location traces can be great. Debugging can be a pain without them.</p>
+<p>This is the one advantage of exceptions in my opinion. They essentially have free error traces. That said, exceptions are also slower in the error cases where errors are often handled by default. They really are meant for the exceptional case where errors are very uncommon.</p>
+
+
+
+<a name="491505297"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491505297" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491505297">(Jan 01 2025 at 14:47)</a>:</h4>
+<p>I generally find that either the error is expected to be handled. At which point any sort of error trace or even wrapping is pretty wasteful. (Might still be worth while to wrap a little, but not great to do it a ton).<br>
+Or the error is truly exceptional and is not expected to be handled. At which point crashing can give you a backtrace and has low cost.</p>
+
+
+
+<a name="491505421"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491505421" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491505421">(Jan 01 2025 at 14:49)</a>:</h4>
+<p>Yet, as shown by error context wrapping in go and rust, clearly some form of nested error that kinda half holds a stack trace will exist in pretty much any language that defaults to using errors instead of exceptions. (My gut feeling is that this is a bad design pattern)</p>
+<p>One main advantage of simply wrapping is that it is way cheaper than strings and exceptions. You get a string in the form of the tag name, but it is nearly free to add.</p>
+
+
+
+<a name="491505615"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491505615" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491505615">(Jan 01 2025 at 14:52)</a>:</h4>
+<p>Could we go with something like <code>RUST_BACKTRACE=1</code>?</p>
+
+
+
+<a name="491505617"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491505617" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491505617">(Jan 01 2025 at 14:52)</a>:</h4>
+<p>General question. What is your plan for the trace? Is it ever actionable in code?</p>
+
+
+
+<a name="491505684"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491505684" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491505684">(Jan 01 2025 at 14:53)</a>:</h4>
+<blockquote>
+<p>What is your plan for the trace?</p>
+</blockquote>
+<p>I would want it just to understand the path the code has taken so I can understand and solve the bug more quickly</p>
+
+
+
+<a name="491505881"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491505881" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491505881">(Jan 01 2025 at 14:56)</a>:</h4>
+<p>Yeah, so not actionable in code.</p>
+
+
+
+<a name="491505990"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491505990" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491505990">(Jan 01 2025 at 14:58)</a>:</h4>
+<p>Also, looking at the state of anyhow in rust and go error wrapping. They basically are akin to nested tags, but with slightly more free form error strings. Also, anyhow will apparently store a backtrace in the root error if <code>RUST_BACKTRACE=1</code>.</p>
+
+
+
+<a name="491506134"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491506134" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491506134">(Jan 01 2025 at 15:00)</a>:</h4>
+<p>That definitely is an interesting idea. Not sure what it would take to orchestrate, but just grabbing a backtrace (not converting it to string yet)  and holding onto that for printing when the error is printed.</p>
+
+
+
+<a name="491506421"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491506421" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491506421">(Jan 01 2025 at 15:04)</a>:</h4>
+<p>The only way to get an equivalent trace in roc today would be to crash at the error generation sight. Which is actually really easy to do with <code>??</code>.</p>
+
+
+
+<a name="491506444"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491506444" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491506444">(Jan 01 2025 at 15:04)</a>:</h4>
+<p>Which, if you don't plan to handle the error in your app at all sounds totally reasonable</p>
+
+
+
+<a name="491508568"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491508568" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491508568">(Jan 01 2025 at 15:37)</a>:</h4>
+<p>now that we have purity inference, platforms can offer a <code>backtrace!</code> function</p>
+
+
+
+<a name="491508594"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491508594" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491508594">(Jan 01 2025 at 15:37)</a>:</h4>
+<p>which applications could use to log backtraces immediately when desired, separately from error handling</p>
+
+
+
+<a name="491508666"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491508666" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491508666">(Jan 01 2025 at 15:38)</a>:</h4>
+<p>in other words, do something like <code>log_error!(backtrace!(), "Something really unexpected happened"</code> and then return <code>Err</code></p>
+
+
+
+<a name="491508685"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491508685" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491508685">(Jan 01 2025 at 15:39)</a>:</h4>
+<p>so decoupling the <em>logging</em> of the backtrace from the <em>handling</em> of the error</p>
+
+
+
+<a name="491508775"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491508775" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491508775">(Jan 01 2025 at 15:40)</a>:</h4>
+<p>If backtrace is a <code>=&gt; Str</code> function, you _could_ even store the backtrace in your Err if you wanted</p>
+
+
+
+<a name="491508917"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491508917" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491508917">(Jan 01 2025 at 15:42)</a>:</h4>
+<p>Switching to logging does work, but it also loses some value due to requiring an effectful function chain.</p>
+
+
+
+<a name="491508933"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491508933" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491508933">(Jan 01 2025 at 15:42)</a>:</h4>
+<p>That's a strong point</p>
+
+
+
+<a name="491508964"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491508964" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491508964">(Jan 01 2025 at 15:43)</a>:</h4>
+<p>Can't we just have a dbg-like command add a stack-trace for development?</p>
+
+
+
+<a name="491508968"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491508968" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491508968">(Jan 01 2025 at 15:43)</a>:</h4>
+<p>Or something of the sort?</p>
+
+
+
+<a name="491509130"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509130" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509130">(Jan 01 2025 at 15:45)</a>:</h4>
+<p>yeah there's an ongoing open question as to whether there will be demand in practice for logging in the middle of pure functions, or if it's fine to have logging (which is obviously an effect) only allowed in effectful functions</p>
+
+
+
+<a name="491509174"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509174" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509174">(Jan 01 2025 at 15:46)</a>:</h4>
+<p>that makes the most sense by default, of course</p>
+
+
+
+<a name="491509246"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509246" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509246">(Jan 01 2025 at 15:48)</a>:</h4>
+<p>Yeah, I guess backtraces are still kinda tangential to this. If we exposed logging as a special non-effectful builtin like dbg, a platform could choose to log a backtrace on every error log.</p>
+
+
+
+<a name="491509319"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509319" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509319">(Jan 01 2025 at 15:48)</a>:</h4>
+<p>the argument for "allow logging in pure functions as a special case exception" is that it's an effect that isn't supposed to affect the rest of the program, and is also theoretically only supposed to be recording what's happening, so if the compiler decides to optimize the pure function away (e.g. evaluate it at compile time) then the fact that the logging gets skipped should also be harmless</p>
+
+
+
+<a name="491509328"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509328" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509328">(Jan 01 2025 at 15:48)</a>:</h4>
+<p>I think it's fine with something like dbg that's stripped from release builds</p>
+
+
+
+<a name="491509329"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509329" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509329">(Jan 01 2025 at 15:48)</a>:</h4>
+<p>I guess the biggest disadvantage of solutions like logging is that they are more verbose...though it could just be <code>my_fn(a, b, c) ? log_err!</code></p>
+
+
+
+<a name="491509364"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509364" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509364">(Jan 01 2025 at 15:49)</a>:</h4>
+<p>certainly I expect webservers to do lots of logging (and/or spans/traces/etc)</p>
+
+
+
+<a name="491509371"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509371" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509371">(Jan 01 2025 at 15:49)</a>:</h4>
+<p>Yep</p>
+
+
+
+<a name="491509377"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509377" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509377">(Jan 01 2025 at 15:49)</a>:</h4>
+<p>I think a keyword like <code>trace</code> would be nice paired with <code>??</code></p>
+
+
+
+<a name="491509387"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509387" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509387">(Jan 01 2025 at 15:49)</a>:</h4>
+<p>not sure how much that will vary by use case, and how much other use cases want logging</p>
+
+
+
+<a name="491509436"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509436" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509436">(Jan 01 2025 at 15:50)</a>:</h4>
+<p>I think it's fine if the handler type is <code>=&gt;</code> for a webserver</p>
+
+
+
+<a name="491509440"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509440" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509440">(Jan 01 2025 at 15:50)</a>:</h4>
+<p>As long as your core logic is pure</p>
+
+
+
+<a name="491509443"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509443" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509443">(Jan 01 2025 at 15:50)</a>:</h4>
+<p>That keeps effects on the edges</p>
+
+
+
+<a name="491509472"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509472" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509472">(Jan 01 2025 at 15:51)</a>:</h4>
+<p>If you don't allow for logging in request handlers, I think your webserver use cases are dead in the water</p>
+
+
+
+<a name="491509568"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509568" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509568">(Jan 01 2025 at 15:52)</a>:</h4>
+<p>well request handlers are usually full of I/O, so certainly those are effectful <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="491509583"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509583" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509583">(Jan 01 2025 at 15:52)</a>:</h4>
+<p>Exactly</p>
+
+
+
+<a name="491509637"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509637" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509637">(Jan 01 2025 at 15:54)</a>:</h4>
+<p>I think it is very important to note that the goal of this idea is to get a backtrace from any function (including a pure function), not just an effectful one. The pure function returns a result and as part of the error, a trace is included. This enables an effectful logger to capture the full contexts that starts at the error root in a pure function.</p>
+
+
+
+<a name="491509731"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491509731" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491509731">(Jan 01 2025 at 15:55)</a>:</h4>
+<p>If it only works for effectful functions it is a lot less useful for debugging and understand the full stack trace when first developing code.</p>
+
+
+
+<a name="491510314"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491510314" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491510314">(Jan 01 2025 at 16:02)</a>:</h4>
+<p>yeah so it seems to me like:</p>
+<ul>
+<li>if we treat logging as special, and permit it inside pure functions even though it's an effect (with the understanding that logging statements inside pure functions may get optimized away and are never guaranteed to run), then having those logging functions be able to include backtraces seems fine</li>
+<li>having a supposedly pure function which returns a backtrace seems super scary to me. A pure function absolutely should never return a different value when given the same arguments, and it feels like we'd be in UB territory (conceptually) in the sense that I can't even begin to imagine all the assumptions having a function like that would break. So I definitely don't think we should do that.</li>
+<li>Having a language keyword that evaluates to "the source code location where the keyword was used" would not be a backtrace, but wouldn't break purity. It would be a constant that never changes at runtime. It would still be risky to have in the language (because it would suddenly become true that you can add a newline somewhere and now your program breaks because some code somewhere was relying on source position at runtime for some reason) but it at least wouldn't break purity.</li>
+</ul>
+
+
+
+<a name="491510353"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491510353" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491510353">(Jan 01 2025 at 16:03)</a>:</h4>
+<p>then there's the separate issue of "I'm just trying to debug the program I'm running right now, I don't care about persistent logging"</p>
+
+
+
+<a name="491510417"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491510417" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491510417">(Jan 01 2025 at 16:04)</a>:</h4>
+<p>for that use case, one obvious question is "if we had a really nice debugger, how much demand would remain for backtraces inside pure functions?"</p>
+
+
+
+<a name="491510425"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491510425" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491510425">(Jan 01 2025 at 16:04)</a>:</h4>
+<p>I'm not sure what the answer would be there</p>
+
+
+
+<a name="491510546"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491510546" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491510546">(Jan 01 2025 at 16:06)</a>:</h4>
+<p>the nice thing about doing effectful logging of backtraces via the platform is that it's already doable today, so there's no blocker to trying it out and seeing what use cases remain in practice when you already have that</p>
+
+
+
+<a name="491510593"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491510593" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491510593">(Jan 01 2025 at 16:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/stream/304641-ideas/topic/Errors.20with.20stack.20traces/near/491510417">said</a>:</p>
+<blockquote>
+<p>for that use case, one obvious question is "if we had a really nice debugger, how much demand would remain for backtraces inside pure functions?"</p>
+</blockquote>
+<p>I kinda have answer to this. There are no good debuggers that exist on all platforms and are easy to use. As such, there is almost always a demand to easily add a backtrace at least for people who aren't used to debuggers. As someone used to debuggers (albeit mostly stuck in cli with lldb), I still often would rather just get a good backtrace and never have to open a debugger</p>
+
+
+
+<a name="491510708"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491510708" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491510708">(Jan 01 2025 at 16:08)</a>:</h4>
+<p>Yeah, I definitely think we should add a logging effect to basic CLI and basic webserver that can also log a backtrace. That might alleviate a lot of the pain.</p>
+
+
+
+<a name="491513160"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491513160" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491513160">(Jan 01 2025 at 16:48)</a>:</h4>
+<p>The goal is really to create more useful errors. Both in stopping people from trying to come up with make-shift alternatives to stack traces inside their errors, which dilute the error itself, but also in actually giving people the information they need proper.</p>
+<p>Generally I find the types of errors reported with <code>Result</code> break down into three kinds:</p>
+<ol>
+<li>The ones you actually recover from</li>
+<li>The ones you surface to the user, because the error pertains to something they did wrong</li>
+<li>The ones you surface to the user because something completely unexpected went wrong, and e.g. they need to file an error report.</li>
+</ol>
+<p>Before you figure which kind of error you have, I think every error goes through roughly these stages:</p>
+<ul>
+<li>Every <code>Result</code> error starts as a potentially recoverable error</li>
+<li>As you return the error through the stack, you map it and accumulate context</li>
+<li>At some point, you decide whether you will in fact recover from it or not. If you recover, your work is finished.</li>
+<li>If you don't recover, you're reaching a point where the code has concluded its investigation of the error, and there's nothing left but to propagate it out.</li>
+</ul>
+<p>In the ideal world, I think I would want the following:</p>
+<ul>
+<li>When the code has decided that it cannot recover from the error, it will log the complete "investigation" that has been done up until that point. That is, both the useful error tags like <code>CouldNotReadConfigError</code>, as well as any context it's received, along with the full stack trace of where the error originated.</li>
+<li>All code handling this error after this point should only propagate it, until there's some code that actually shows it to the user. This <em>could</em> be <code>crash</code>, but I think it's important that <code>crash</code> won't give the stack trace that I want. It only has the stack trace of where the investigation concluded, not where the error originated.</li>
+</ul>
+
+
+
+<a name="491513545"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491513545" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491513545">(Jan 01 2025 at 16:54)</a>:</h4>
+<p>Is a stack trace actually useful to an end user though?</p>
+
+
+
+<a name="491513550"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491513550" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491513550">(Jan 01 2025 at 16:54)</a>:</h4>
+<p>I'm alright with logging context along the way, rather than at a single point, but it requires more discipline from developers and more tooling to get right, since you need to correlate more logs, rather than having a single log entry that contains everything you need, and you need to remember to log everywhere that might be relevant.</p>
+
+
+
+<a name="491513699"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491513699" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491513699">(Jan 01 2025 at 16:56)</a>:</h4>
+<p>No, I wouldn't want a stack trace when reporting something end users messed up (e.g. permissions, configuration, etc.). But if the error is for the end user to report to the developer, you definitely want the stack trace available for the user to report. Like "please open a GitHub issue at #link and include file applogs.log"</p>
+
+
+
+<a name="491514381"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491514381" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491514381">(Jan 01 2025 at 17:07)</a>:</h4>
+<p>Yeah, this is one of those surprising annoying problems of results and error returns. You really don't want to pay extra cost on every error, but stack traces are amazing when needed.</p>
+
+
+
+<a name="491514415"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491514415" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491514415">(Jan 01 2025 at 17:07)</a>:</h4>
+<p>And you can't get a full stack trace if you first return through a chain of pure functions.</p>
+
+
+
+<a name="491579308"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491579308" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491579308">(Jan 02 2025 at 08:48)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="557981">Kasper Møller Andersen</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/491513550">said</a>:</p>
+<blockquote>
+<p>I'm alright with logging context along the way, rather than at a single point, but it requires more discipline from developers and more tooling to get right, since you need to correlate more logs, rather than having a single log entry that contains everything you need, and you need to remember to log everywhere that might be relevant.</p>
+</blockquote>
+<p>Instrumenting code with tracing instead of logging might be a good alternative for this. If an operation fails you'll end up with a single trace of the request/operation in which the error happened.</p>
+<p>Because trace frames, like logs, are added manually, they don't capture as many frames as a stack trace, so that's a downside.</p>
+<p>But an upside is that a trace of an error can contain frames about code branches that were completed before the error happened, which can provide a ton of useful information when debugging. Plus, you can use that trace for other types of debugging as well, such as looking into performance problems.</p>
+
+
+
+<a name="491581720"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/491581720" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Tobias Steckenborn <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#491581720">(Jan 02 2025 at 09:10)</a>:</h4>
+<p>Yet tracing without some correlated logs (or events) aren't really helpful as well, are they?</p>
+<p>I like what e.g. they are doing here:<br>
+<a href="https://effect.website/blog/releases/effect/311/#effectfn">https://effect.website/blog/releases/effect/311/#effectfn</a><br>
+<a href="https://effect.website/blog/releases/effect/312/#effectfn-improvements">https://effect.website/blog/releases/effect/312/#effectfn-improvements</a><br>
+<a href="https://effect.website/docs/observability/tracing/">https://effect.website/docs/observability/tracing/</a></p>
+
+
+
+<a name="497251891"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497251891" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497251891">(Feb 02 2025 at 11:53)</a>:</h4>
+<p>I wanna bang this drum again, because I think stack traces are still really important. Roc's error handling is pretty similar to Rust in a lot of ways, and it's very easy to find people asking about how they get stack traces in Rust, like <a href="https://www.reddit.com/r/rust/comments/16vcazq/what_am_i_missing_with_stacktraces_and_result/">so</a> and <a href="https://www.reddit.com/r/rust/comments/1e978l7/ive_used_and_loved_rust_for_10_years_here_are_the/">so</a>. <em>Not</em> having stack traces by default is essentially a big deficiency and eats a good chunk of weirdness budget.</p>
+<p>I also still think it nullifies a good deal of the benefit of the Roc's tag unions, because it essentially forces people to wrap their error types a whole bunch to try and recreate stack traces. So even though you <em>can</em> just propagate errors in Roc, you might not really want to, because you lose location information that way. Roc wants to make it easy to map errors, but I think that's partially about fixing this <strong>symptom</strong>, rather than fixing the root problem, because we would be mapping errors way less if we didn't have to manually build up types to mimick stack traces.</p>
+
+
+
+<a name="497251899"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497251899" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497251899">(Feb 02 2025 at 11:53)</a>:</h4>
+<p>So here's a revised proposal for how this might look!</p>
+<p><code>Result</code> looks like this:</p>
+<div class="codehilite"><pre><span></span><code>Result ok err :
+    [
+        Ok ok,
+        Err StackTrace err
+    ]
+</code></pre></div>
+<p>where <code>StackTrace</code> is a nominal type that stores stack trace lines (we'll get back to how it does so later). Those lines would all be the type <code>StackTraceLine</code> a la:</p>
+<div class="codehilite"><pre><span></span><code>StackTraceLine :
+    [
+        MyRocProject__Config U16
+        MyRocProject__Setup U16
+        MyRocProject__Main U16
+        ...
+    ]
+</code></pre></div>
+<p>where there exists a function <code>line_to_string</code> that does this:</p>
+<div class="codehilite"><pre><span></span><code>when line is
+    MyRocProject__Config line -&gt; Str.concat(&quot;MyRocProject/Config.roc:&quot;, Num.to_str line)
+    ...
+</code></pre></div>
+<p><code>StackTraceLine</code> and <code>line_to_string</code> would be generated by the compiler and not something the developer would deal with. It does have a few implications:</p>
+<ul>
+<li>Developers can't construct an <code>Err</code> themselves, because they would need to insert the right stack trace line when doing so.</li>
+<li><code>Err</code> should have a function <code>trace_to_string</code> that converts the full stack trace to a human readable string.</li>
+</ul>
+<p>In other words, we would need a way to construct an <code>Err</code> with a keyword probably. Like <code>fail</code> or (please don't shoot me) <code>throw</code> <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span> </p>
+<p>Taking an <a href="https://www.roc-lang.org/tutorial#accumulating-tag-types">example from the tutorial</a> might then look like:</p>
+<div class="codehilite"><pre><span></span><code>|str|
+    if Str.is_empty(str) then
+        Ok &quot;it was empty&quot;
+    else
+        fail [&quot;it was not empty&quot;]
+</code></pre></div>
+<p>And any time you use <code>?</code> and whatever else we have to handle errors these days, the compiler basically desugars that to the same code as today, except it also inserts the corresponding <code>StackTraceLine</code> into the <code>StackTrace</code>.</p>
+<p>What would <code>StackTrace</code> look like though? Ideally it would be an array on the stack, as that would be the simplest and most performant solution I think. We would have to spill the lines onto the heap at some point of course, but given that a single <code>StackTraceLine</code> would only take up something like 32 bits, there's at least room for a chunk of them on the stack.</p>
+<p>Without arrays though, how might <code>StackTrace</code> look? It might just be</p>
+<div class="codehilite"><pre><span></span><code>{ line1, line2, line3, line4 ... }
+</code></pre></div>
+<p>and keeping track of which line to use with an integer and something like</p>
+<div class="codehilite"><pre><span></span><code>when previousLine is
+    1 -&gt; set_line_2(...)
+    2 -&gt; set_line_3(...)
+    ...
+</code></pre></div>
+<p>Not as nice as an array, but workable at least. Alternatively, I don't know if it's been considered to have <code>List</code> be able to start off on the stack when there are only a few elements in it, and only spilling to the heap as needed?</p>
+<p>And then there's the question of how many errors should be storable before we spill onto the heap. I don't have a good answer to this. On the one hand, a small number might be sufficient, because if you're not handling the error in short order, you're probably going to let it bubble all the way out anyway. On the other hand, a library might have a deep stack of its own before the error reaches the user of the library, and it would be nice not to use the heap before they've had the chance to deal with the error. So I'm not really sure what makes the most sense there.</p>
+
+
+
+<a name="497257347"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497257347" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497257347">(Feb 02 2025 at 13:07)</a>:</h4>
+<p>I think adding this amount of runtime overhead to every error operation is too incompatible with Roc's goals of running fast</p>
+
+
+
+<a name="497257459"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497257459" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497257459">(Feb 02 2025 at 13:08)</a>:</h4>
+<p>for example, this would mean that doing <a href="https://www.roc-lang.org/builtins/Num#div_checked"><code>div_checked</code></a> potentially does a bunch of string copying and dynamic array resizing - that's just wildly out of bounds for an acceptable performance cost compared to today where it's a single branch</p>
+
+
+
+<a name="497257636"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497257636" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497257636">(Feb 02 2025 at 13:11)</a>:</h4>
+<p>of the options we've discussed, this seems like the frontrunner to me:</p>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/491508568">said</a>:</p>
+<blockquote>
+<p>now that we have purity inference, platforms can offer a <code>backtrace!</code> function</p>
+</blockquote>
+<p>then error tracing libraries like bugsnag can take an effectful "get backtrace" function during init, so when they log errors they automatically include stack traces just like they do in e.g. JavaScript. "Log an error to an external service, including stack trace" is the most common scenario I've seen for stack traces being useful for debugging after the fact, and we already have full support for that use case today!</p>
+<p>if you're debugging locally, there are other options (e.g. setting a breakpoint and seeing what the trace is at that point)</p>
+
+
+
+<a name="497257865"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497257865" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497257865">(Feb 02 2025 at 13:14)</a>:</h4>
+<p>Note that I specifically addressed those performance concerns with the new proposal. Creating an error shouldn’t allocate strings or lists on the heap, require anything to be resized, etc.</p>
+
+
+
+<a name="497259617"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497259617" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497259617">(Feb 02 2025 at 13:41)</a>:</h4>
+<p><span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span> how would it prevent resizing?</p>
+
+
+
+<a name="497259680"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497259680" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497259680">(Feb 02 2025 at 13:42)</a>:</h4>
+<p>sorry, I think I should be more direct about this: regardless of performance, I don't think we should do this.</p>
+
+
+
+<a name="497259712"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497259712" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497259712">(Feb 02 2025 at 13:43)</a>:</h4>
+<p>I don't think <code>Result</code> should store stack trace information, period, and I think the Rust error handling libraries that do similar things are the wrong design</p>
+
+
+
+<a name="497259944"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497259944" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497259944">(Feb 02 2025 at 13:47)</a>:</h4>
+<p>I think there are two scenarios where we want stack traces:</p>
+<ul>
+<li>we want to log it immediately for later analysis, right at the point where an error occurred. I think this can be done in an effectful function just fine.</li>
+<li>we're in the middle of debugging a locally running program. I think this can be done using breakpoints or similar</li>
+</ul>
+
+
+
+<a name="497260069"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497260069" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497260069">(Feb 02 2025 at 13:49)</a>:</h4>
+<p>I agree that stack traces are valuable information, but I disagree with the premise that we should store them eagerly and accumulate them and pass them around, just in case we want them later. I think we explicitly should do the opposite of that, and only retrieve a trace on demand, right at the point where we've determined we want it.</p>
+
+
+
+<a name="497284521"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497284521" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497284521">(Feb 02 2025 at 19:39)</a>:</h4>
+<blockquote>
+<p>Note that I specifically addressed those performance concerns with the new proposal. Creating an error shouldn’t allocate strings or lists on the heap, require anything to be resized, etc.</p>
+</blockquote>
+<p>I work on a system that has to store stack trace on creation of nodes. It just stores the raw reference to the stack trace and is doing pretty minimal work. It is still quite costly. Much more expensive than the old version that was just return errors without nice locations. (like 1.5 to 2x slower and it is not storing that many stack trace references).</p>
+<p>I am really curious to see what mojo ends up doing in this space. They currently only have an error type and not an exception type cause they have not found a performant enough way to do exceptions (though I think they had some ideas). Due to wanting to be a superset of python in the long term, they definitely want exceptions eventually. Currently the solution is to run code in the debugger and make it so that any time an error is generated the debugger adds the stack trace and treats it like an exception (that or manually grabbing the stack trace and adding it to an error explicitly). It is currently pretty painful to work with.</p>
+
+
+
+<a name="497284666"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497284666" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497284666">(Feb 02 2025 at 19:41)</a>:</h4>
+<blockquote>
+<p>I wanna bang this drum again, because I think stack traces are still really important.</p>
+</blockquote>
+<p>Yeah, rust and go often deal with this by repeated wrapping and adding of more and more context. It is definitely not as nice as a stack trace in most cases.</p>
+
+
+
+<a name="497285172"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497285172" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497285172">(Feb 02 2025 at 19:47)</a>:</h4>
+<p>I think it really depends on the application</p>
+
+
+
+<a name="497285223"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497285223" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497285223">(Feb 02 2025 at 19:48)</a>:</h4>
+<p>like in the Roc compiler I want context so I can report them to the user</p>
+
+
+
+<a name="497285264"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497285264" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497285264">(Feb 02 2025 at 19:48)</a>:</h4>
+<p>I wouldn't want to spit out a stack trace even if it were free</p>
+
+
+
+<a name="497285379"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497285379" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497285379">(Feb 02 2025 at 19:50)</a>:</h4>
+<p>in a web server I want my logged error events to have stack traces but I don't think having the stack trace be passed around as a value is in any way useful to me (although it's a security concern if it's inspectable)</p>
+
+
+
+<a name="497285623"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497285623" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497285623">(Feb 02 2025 at 19:53)</a>:</h4>
+<p>I wonder if we can enable getting a stack trace cleanly (even if only for crash messages).</p>
+<p>With debug info and the llvm backend, backtraces should work if grabbed from the host. If running via the interpreter, a host backtrace would be useless.</p>
+
+
+
+<a name="497286894"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497286894" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497286894">(Feb 02 2025 at 20:10)</a>:</h4>
+<p>hm yeah that's true</p>
+
+
+
+<a name="497286947"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497286947" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497286947">(Feb 02 2025 at 20:11)</a>:</h4>
+<p>actually the compiled Roc app could expose a function to the host for getting the current roc backtrace</p>
+
+
+
+<a name="497287019"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287019" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287019">(Feb 02 2025 at 20:12)</a>:</h4>
+<p>which the host could call, both for its own use and also as a way to provide it to the app</p>
+
+
+
+<a name="497287054"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287054" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287054">(Feb 02 2025 at 20:12)</a>:</h4>
+<p>Yep, though I assume that would add a dependency on libunwind to roc. Which might be ok.</p>
+
+
+
+<a name="497287058"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287058" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287058">(Feb 02 2025 at 20:12)</a>:</h4>
+<p>and then that function could silently either ask the interpreter or else walk stack frames</p>
+
+
+
+<a name="497287078"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287078" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287078">(Feb 02 2025 at 20:13)</a>:</h4>
+<p>yeah that seems fine</p>
+
+
+
+<a name="497287086"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287086" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287086">(Feb 02 2025 at 20:13)</a>:</h4>
+<p>Ok</p>
+
+
+
+<a name="497287099"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287099" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287099">(Feb 02 2025 at 20:13)</a>:</h4>
+<p>like we want every host to be able to support backtraces</p>
+
+
+
+<a name="497287107"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287107" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287107">(Feb 02 2025 at 20:13)</a>:</h4>
+<p>And then we could also expose that functionality to the app (though only as an effect?)</p>
+
+
+
+<a name="497287108"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287108" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287108">(Feb 02 2025 at 20:13)</a>:</h4>
+<p>and right now you kind of have to know the tricks</p>
+
+
+
+<a name="497287164"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287164" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287164">(Feb 02 2025 at 20:14)</a>:</h4>
+<p>I think it should be up to the platform to provide that functionality to the application (or not), but we should make it trivial for platforms to offer it</p>
+
+
+
+<a name="497287218"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287218" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287218">(Feb 02 2025 at 20:15)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497287099">said</a>:</p>
+<blockquote>
+<p>like we want every host to be able to support backtraces</p>
+</blockquote>
+<p>Even in a fully roc is embedded in a larger host use case, like a game engine?</p>
+
+
+
+<a name="497287223"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287223" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287223">(Feb 02 2025 at 20:15)</a>:</h4>
+<p>I think it's just simpler if all effectful functions come from the platform, no exceptions</p>
+
+
+
+<a name="497287247"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287247" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287247">(Feb 02 2025 at 20:15)</a>:</h4>
+<p>fair</p>
+
+
+
+<a name="497287294"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497287294" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497287294">(Feb 02 2025 at 20:16)</a>:</h4>
+<p><span class="user-mention" data-user-id="515757">@Luke Boswell</span> sure, like if the roc plugin crashes, you want to be able to know what chain of calls led to the crash</p>
+
+
+
+<a name="497289287"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497289287" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497289287">(Feb 02 2025 at 20:42)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497284521">sagde</a>:</p>
+<blockquote>
+<p>I work on a system that has to store stack trace on creation of nodes. It just stores the raw reference to the stack trace and is doing pretty minimal work. It is still quite costly. Much more expensive than the old version that was just return errors without nice locations. (like 1.5 to 2x slower and it is not storing that many stack trace references).</p>
+</blockquote>
+<p>What is the reference to in this case? I assume it's a heap allocated collection (whether string or something else), so the cost is for building that initial trace, rather than just holding on to it?</p>
+
+
+
+<a name="497289398"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497289398" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497289398">(Feb 02 2025 at 20:44)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497259712">sagde</a>:</p>
+<blockquote>
+<p>I don't think <code>Result</code> should store stack trace information, period, and I think the Rust error handling libraries that do similar things are the wrong design</p>
+</blockquote>
+<p>I'm curious what you see as being wrong about that design? Not that I disagree necessarily, I just want to make sure we're talking about the same things <span aria-label="blush" class="emoji emoji-1f60a" role="img" title="blush">:blush:</span></p>
+
+
+
+<a name="497289543"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497289543" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497289543">(Feb 02 2025 at 20:46)</a>:</h4>
+<blockquote>
+<p>What is the reference to in this case?</p>
+</blockquote>
+<p>A traceback object which should should just be a list of function pointers extracted from the stack. No strings have been created yet. But I assume it has to walk the stack and make a list. I guess you could minorly amortize the cost if you grab it one step at a time on every return, but I think it is fundamentally the same amount of extra cost.</p>
+
+
+
+<a name="497290853"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497290853" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497290853">(Feb 02 2025 at 21:06)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="557981">Kasper Møller Andersen</span> <a href="#narrow/stream/304641-ideas/topic/Errors.20with.20stack.20traces/near/497289398">said</a>:</p>
+<blockquote>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497259712">sagde</a>:</p>
+<blockquote>
+<p>I don't think <code>Result</code> should store stack trace information, period, and I think the Rust error handling libraries that do similar things are the wrong design</p>
+</blockquote>
+<p>I'm curious what you see as being wrong about that design? Not that I disagree necessarily, I just want to make sure we're talking about the same things <span aria-label="blush" class="emoji emoji-1f60a" role="img" title="blush">:blush:</span></p>
+</blockquote>
+<p>in no particular order:</p>
+<ul>
+<li>it complicates the type</li>
+<li>it breaks referential transparency (you can call the same function with the same args from 2 different functions and get 2 different answers)</li>
+<li>it's either a security concern (packages being able to see the trace in which they were used) or else the API is even more complicated to prevent that</li>
+<li>it's redundantly storing info that's already available right at the moment you're most likely to want it (right at the moment where the error occurred, because you either want to log it right away or else pause the program right away and explore the state) and then passing it around just in case you also want it later too</li>
+</ul>
+
+
+
+<a name="497291036"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497291036" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497291036">(Feb 02 2025 at 21:09)</a>:</h4>
+<p><code>Result</code> is a simple and flexible type, and including stack trace information seems like massive  scope creep for it with really unclear benefits in comparison to alternative ways of getting stack traces that don't involve <code>Result</code></p>
+
+
+
+<a name="497291268"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497291268" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497291268">(Feb 02 2025 at 21:12)</a>:</h4>
+<p>even if it were free, the idea that a <code>Dict.get</code> saying a key wasn't present in the dictionary triggers an automatic walking of the entire stack frame feels wrong in a visceral way</p>
+
+
+
+<a name="497292683"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497292683" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497292683">(Feb 02 2025 at 21:30)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497260069">sagde</a>:</p>
+<blockquote>
+<p>I agree that stack traces are valuable information, but I disagree with the premise that we should store them eagerly and accumulate them and pass them around, just in case we want them later. I think we explicitly should do the opposite of that, and only retrieve a trace on demand, right at the point where we've determined we want it.</p>
+</blockquote>
+<p>My problem with this approach is that it relies on discipline to get a lot of things right, and you don't really know ahead of time when you're going to need it. Since capturing a trace is not the default, you end up having to decide between paying the performance cost or the debugging cost without knowing what the debugging cost is (because you have to understand every way a piece of code can fail in order to know that cost).</p>
+<p>I would personally much rather lug around a stack trace, and be able to opt out of collecting it in the few places where I know this performance matters.</p>
+
+
+
+<a name="497293216"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497293216" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497293216">(Feb 02 2025 at 21:36)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497291268">sagde</a>:</p>
+<blockquote>
+<p>even if it were free, the idea that a <code>Dict.get</code> saying a key wasn't present in the dictionary triggers an automatic walking of the entire stack frame feels wrong in a visceral way</p>
+</blockquote>
+<p>This seems like you're thinking the <code>Err</code> should walk the entire stack upon creation, which isn't what I'm proposing. Instead I'm proposing that the stack trace is built up as the error is propagated through the stack <em>anyway</em>. In this sense, creating an <code>Err</code> still has no logic attached (no branches, no heap allocations). You only have to deal with this as you start propagating the error.</p>
+<p>Just so I'm sure you're disagreeing with the right thing <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<a name="497295610"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497295610" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497295610">(Feb 02 2025 at 22:05)</a>:</h4>
+<p>fair, but I don't see how that would work without the possibility of reallocation if that gets too big</p>
+
+
+
+<a name="497295666"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497295666" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497295666">(Feb 02 2025 at 22:06)</a>:</h4>
+<p>I guess the underlying problem is that stack traces attached to <code>Result</code> are an imperfect approximation anyway. What we really want is a way to retrace the exact steps the code took to get to a certain point, and it just happens that <code>Result</code> is <em>usually</em> the place where the breakage becomes visible.</p>
+<p>Having said that, I do worry that Roc's strength of allowing you to do whatever you want with errors is also a great weakness. Because it means you are free to do nothing at all with the error until you are far away from its origin. It's kind of like exceptions in that regard, except you don't get a stack trace either, so you're truly in trouble when you have to debug where it came from. And it's not like making this error easily debuggable is a one-off effort. It requires continuous discipline at every level the error gets passed around.</p>
+
+
+
+<a name="497295734"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497295734" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497295734">(Feb 02 2025 at 22:07)</a>:</h4>
+<p>I think the history of errors in programming is that they are mostly ignored way more often than they should be</p>
+
+
+
+<a name="497295744"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497295744" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497295744">(Feb 02 2025 at 22:07)</a>:</h4>
+<p>I've never seen any system that really fixes this</p>
+
+
+
+<a name="497295860"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497295860" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497295860">(Feb 02 2025 at 22:08)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497295610">sagde</a>:</p>
+<blockquote>
+<p>fair, but I don't see how that would work without the possibility of reallocation if that gets too big</p>
+</blockquote>
+<p>You would need to reallocate at some point. I'm just distinguishing between:</p>
+<ul>
+<li>initial creation (which costs about the same as today, but maybe using slightly more stack space)</li>
+<li>first few propagations (which we can also keep on the stack up to some limit)</li>
+<li>later propagations (where you need to reallocate, but you may already have propagated it out enough times that you're already sending the error all the way out to the user anyway)</li>
+</ul>
+
+
+
+<a name="497295864"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497295864" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497295864">(Feb 02 2025 at 22:08)</a>:</h4>
+<p>exception-throwing systems and <code>null</code>-based systems seem to result in more unintentionally u handled errors than <code>Result</code>/<code>Option</code>/<code>Maybe</code></p>
+
+
+
+<a name="497296036"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497296036" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497296036">(Feb 02 2025 at 22:11)</a>:</h4>
+<p>maybe a better way to frame my thinking on this is:</p>
+<p>"Okay, so this will break purity, but hear me out..."<br>
+"Yikes, this had better be the most incredible upside I've ever heard of to compensate for that downside"<br>
+"Well it has a bunch of other tradeoffs"<br>
+"Okay then absolutely not"</p>
+
+
+
+<a name="497296064"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497296064" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497296064">(Feb 02 2025 at 22:11)</a>:</h4>
+<p>like I don't really think it's worth spending more time talking about it, sorry <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="497296309"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497296309" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497296309">(Feb 02 2025 at 22:15)</a>:</h4>
+<p>I have, if nothing else, won myself the right to feel smug the day people start complaining about not having stack traces <span aria-label="stuck out tongue" class="emoji emoji-1f61b" role="img" title="stuck out tongue">:stuck_out_tongue:</span></p>
+
+
+
+<a name="497296341"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497296341" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497296341">(Feb 02 2025 at 22:15)</a>:</h4>
+<p>hahaha <span aria-label="joy" class="emoji emoji-1f602" role="img" title="joy">:joy:</span></p>
+
+
+
+<a name="497348749"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497348749" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497348749">(Feb 03 2025 at 07:28)</a>:</h4>
+<p>I went to bed feeling weird about this, because I think most arguments against this proposal are not based on the proposal itself, but rather just perceptions of what it is. Maybe that's on me for communicating it poorly, so I want to try again!</p>
+<p>Just to get it out of the way: my proposal does not mess with purity in any way <span class="user-mention" data-user-id="281383">@Richard Feldman</span> </p>
+<p>As I laid out in the original post, today it is up to users to construct their error types such that they can actually be traced back to their origin. You do this by wrapping layers upon layers of error types, with the associated risks that you forget wrapping some places and/or you reuse names of these error wrapper types. This makes it very easy to have an error that is only partially traceable, because you weren't 100% disciplined about the tracing.</p>
+<p>My proposal takes that work that users need to be doing today themselves, and automates it. It's the same fundamental mechanism, just handled by the language as opposed to the user. And because it doesn't rely on effects, it works just as well for libraries as for applications (where <code>backtrace!</code> needs to be hooked up in a library for example).</p>
+
+
+
+<a name="497350868"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497350868" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497350868">(Feb 03 2025 at 07:40)</a>:</h4>
+<p>Regarding security, the only way a library would be able to read from a stack trace is if you pass it a <code>Result</code> as input (but it's still pure!). This is actually <strong>less</strong> invasive than calling <code>backtrace!</code>, because you can only see where the code has been since it became an <code>Err</code>, whereas <code>backtrace!</code> will give the code the full trace.</p>
+
+
+
+<a name="497351268"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497351268" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497351268">(Feb 03 2025 at 07:42)</a>:</h4>
+<p>One thing that's not really clear to me here though, is whether we would want to encourage people to use <code>backtrace!</code> <em>instead</em> of creating these adhoc tracing structures in their error.</p>
+
+
+
+<a name="497352093"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497352093" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497352093">(Feb 03 2025 at 07:47)</a>:</h4>
+<p>I think that becomes important for the argument of the type complexity at least. Because the argument that the stack trace complicates <code>Err</code> is <em>kind of</em> fair, but also ignores a bunch of other complexity.</p>
+<p>The type signature <code>Err err</code> is obviously simpler than <code>Err StackTrace err</code> of course, but that's also glossing over the complexity of <code>err</code>. Without <code>StackTrace</code> in there, users are asked to build that structure themselves and contain it in <code>err</code> (and most likely do a somewhat poor job with it). Introducing the <code>StackTrace</code> type is not about introducing new complexity. It's about taking complexity away from <code>err</code>, and by extension the user, and automating it.</p>
+
+
+
+<a name="497401214"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497401214" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497401214">(Feb 03 2025 at 11:07)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="557981">Kasper Møller Andersen</span> <a href="#narrow/stream/304641-ideas/topic/Errors.20with.20stack.20traces/near/497348749">said</a>:</p>
+<blockquote>
+<p>Just to get it out of the way: my proposal does not mess with purity in any way <span class="user-mention silent" data-user-id="281383">Richard Feldman</span> </p>
+</blockquote>
+<p><span class="user-mention silent" data-user-id="557981">Kasper Møller Andersen</span> <a href="#narrow/stream/304641-ideas/topic/Errors.20with.20stack.20traces/near/497251899">said</a>:</p>
+<blockquote>
+<p>So here's a revised proposal for how this might look!</p>
+<p><code>Result</code> looks like this:</p>
+<div class="codehilite"><pre><span></span><code>Result ok err :
+    [
+        Ok ok,
+        Err StackTrace err
+    ]
+</code></pre></div>
+<p>where <code>StackTrace</code> is a nominal type that stores stack trace lines (we'll get back to how it does so later).</p>
+<p>[...]</p>
+<p>where there exists a function <code>line_to_string</code> that does this:</p>
+<div class="codehilite"><pre><span></span><code>when line is
+    MyRocProject__Config line -&gt; Str.concat(&quot;MyRocProject/Config.roc:&quot;, Num.to_str line)
+    ...
+</code></pre></div>
+<p>[...]</p>
+<ul>
+<li><code>Err</code> should have a function <code>trace_to_string</code> that converts the full stack trace to a human readable string.</li>
+</ul>
+<p>[...]</p>
+<p>And any time you use <code>?</code> and whatever else we have to handle errors these days, the compiler basically desugars that to the same code as today, except it also inserts the corresponding <code>StackTraceLine</code> into the <code>StackTrace</code>.</p>
+</blockquote>
+<p>the parts I just quoted mean:</p>
+<ul>
+<li>I can take a "pure function" which returns a <code>Result</code> and call it from two different functions, passing the same arguments</li>
+<li>I can then call <code>trace_to_string</code> on the returned <code>Result</code></li>
+<li>I will end up with two different strings, even though I passed the same arguments, because I called the two functions from two different places in my code base</li>
+<li>pure functions always return the same values when given the same arguments, and now no function that returns <code>Result</code> has this property</li>
+</ul>
+<p>what am I missing? <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="497402561"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497402561" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497402561">(Feb 03 2025 at 11:13)</a>:</h4>
+<p>oh I guess it's that the trace only starts when you call <code>fail</code> for the first time?</p>
+<p>in that case, you get way less info than with <code>backtrace!()</code> because you don't get to see which calls led to the error in the first place.</p>
+
+
+
+<a name="497402798"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497402798" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497402798">(Feb 03 2025 at 11:14)</a>:</h4>
+<p>assuming that's correct, this still has the problem that now reorganizing pure functions can break them</p>
+
+
+
+<a name="497402862"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497402862" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497402862">(Feb 03 2025 at 11:14)</a>:</h4>
+<p>like I can take working code, add a comment somewhere, and now the code breaks</p>
+
+
+
+<a name="497403090"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497403090" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497403090">(Feb 03 2025 at 11:15)</a>:</h4>
+<p>because pure functions that return <code>Result</code> now incorporate their own source path and line numbers into their own return values</p>
+
+
+
+<a name="497403598"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497403598" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497403598">(Feb 03 2025 at 11:17)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="557981">Kasper Møller Andersen</span> <a href="#narrow/stream/304641-ideas/topic/Errors.20with.20stack.20traces/near/497352093">said</a>:</p>
+<blockquote>
+<p>The type signature <code>Err err</code> is obviously simpler than <code>Err StackTrace err</code> of course, but that's also glossing over the complexity of <code>err</code>. Without <code>StackTrace</code> in there, users are asked to build that structure themselves and contain it in <code>err</code> (and most likely do a somewhat poor job with it). Introducing the <code>StackTrace</code> type is not about introducing new complexity. It's about taking complexity away from <code>err</code>, and by extension the user, and automating it.</p>
+</blockquote>
+<p>I'm just not convinced by the fundamental premise that accumulating and passing around stack traces is actually the right way to organize error handling code</p>
+
+
+
+<a name="497404130"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497404130" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497404130">(Feb 03 2025 at 11:19)</a>:</h4>
+<p>like if an error happens in my webserver, and I want to log a stack trace to a reporting service, literally what I want is to call <code>bugsnag.error!("This should never happen...")</code> and have it capture a stack trace for me. This is what error logging services do in languages that support getting a stack trace anywhere.</p>
+
+
+
+<a name="497404462"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497404462" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497404462">(Feb 03 2025 at 11:20)</a>:</h4>
+<p>I actively do not want to pass the stack trace around anywhere in that scenario</p>
+
+
+
+<a name="497404568"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497404568" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497404568">(Feb 03 2025 at 11:20)</a>:</h4>
+<p>I just want bugsnag to put it in my logs and then I want to move on</p>
+
+
+
+<a name="497404645"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497404645" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497404645">(Feb 03 2025 at 11:20)</a>:</h4>
+<p>I'm never going to do anything with it again</p>
+
+
+
+<a name="497405676"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497405676" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497405676">(Feb 03 2025 at 11:24)</a>:</h4>
+<p>moreover, I'm often not going to return a <code>Result</code></p>
+
+
+
+<a name="497405972"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497405972" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497405972">(Feb 03 2025 at 11:25)</a>:</h4>
+<p>I'm going to try to gracefully handle the error for the end user, but I still want to have captured the trace of how I got to the point where gracefully recovering was necessary, so I can fix it next time and not have to recover</p>
+
+
+
+<a name="497406587"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497406587" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497406587">(Feb 03 2025 at 11:28)</a>:</h4>
+<p>in contrast, other times I'm translating from one error type to another because I want to report it to the end user <em>without</em> a stack trace, since a stack trace would not help them</p>
+
+
+
+<a name="497406770"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497406770" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497406770">(Feb 03 2025 at 11:28)</a>:</h4>
+<p>again, in that scenario I want to log that the problem happened, right where it happened (possibly just locally via log levels rather than to an external service, depending on what the program does) and then after that point I'm not going to use the trace ever again</p>
+
+
+
+<a name="497406966"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497406966" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497406966">(Feb 03 2025 at 11:29)</a>:</h4>
+<p>so I think if Roc changed <code>Result</code> in this way, I would be inconvenienced by the type and performance costs and then never use the thing it's encouraging me to do</p>
+
+
+
+<a name="497409018"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497409018" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497409018">(Feb 03 2025 at 11:39)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497404130">said</a>:</p>
+<blockquote>
+<p>like if an error happens in my webserver, and I want to log a stack trace to a reporting service, literally what I want is to call <code>bugsnag.error!("This should never happen...")</code> and have it capture a stack trace for me. This is what error logging services do in languages that support getting a stack trace anywhere.</p>
+</blockquote>
+<p>How would it get the stack trace in this case?</p>
+
+
+
+<a name="497411692"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497411692" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497411692">(Feb 03 2025 at 11:51)</a>:</h4>
+<p>by calling <code>backtrace!()</code> - as the application author, I'd pass it in both that function as well as the function to do an http request, and it would store both of them</p>
+
+
+
+<a name="497411810"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497411810" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497411810">(Feb 03 2025 at 11:51)</a>:</h4>
+<p>(on initialization, when I'm providing the API key - not every time)</p>
+
+
+
+<a name="497413124"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497413124" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497413124">(Feb 03 2025 at 11:57)</a>:</h4>
+<p>one possible design:</p>
+<div class="codehilite" data-code-language="Ruby"><pre><span></span><code><span class="no">Bugsnag</span><span class="o">.</span><span class="n">add_backtrace</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="no">Request</span><span class="p">,</span><span class="w"> </span><span class="no">List</span><span class="w"> </span><span class="no">TracedCall</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="no">Request</span>
+
+<span class="no">Bugsnag</span><span class="o">.</span><span class="n">init</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="p">(</span><span class="no">Request</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{})</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="no">Bugsnag</span>
+</code></pre></div>
+<p>example:</p>
+<div class="codehilite" data-code-language="Ruby"><pre><span></span><code><span class="no">Bugsnag</span><span class="o">.</span><span class="n">init</span><span class="p">(</span><span class="o">|</span><span class="n">req</span><span class="o">|</span>
+<span class="w">    </span><span class="n">_</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="n">req</span>
+<span class="w">        </span><span class="o">.</span><span class="p">(</span><span class="no">Bugsnag</span><span class="o">.</span><span class="n">add_backtrace</span><span class="p">(</span><span class="n">backtrace!</span><span class="p">()))</span>
+<span class="w">        </span><span class="o">.</span><span class="p">(</span><span class="no">Bugsnag</span><span class="o">.</span><span class="n">add_api_key</span><span class="p">(</span><span class="n">key</span><span class="p">))</span>
+<span class="w">        </span><span class="o">.</span><span class="p">(</span><span class="no">Http</span><span class="o">.</span><span class="n">send!</span><span class="p">)</span>
+
+<span class="w">    </span><span class="p">{}</span><span class="w"> </span><span class="c1"># if logging fails, do nothing</span>
+<span class="p">)</span>
+</code></pre></div>
+
+
+
+<a name="497413511"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497413511" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497413511">(Feb 03 2025 at 11:58)</a>:</h4>
+<p>nice properties of this design:</p>
+<ul>
+<li>the bugsnag library never actually sees the API key, so it can't be compromised even if the package is compromised (maybe not critical for Bugsnag in particular, but seems like a good pattern for libraries with more sensitive API keys)</li>
+<li>one arg to the init function, that's it.</li>
+<li>backtraces in all error logs (the package can trim off the outermost fn call from the trace)</li>
+</ul>
+
+
+
+<a name="497484229"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497484229" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497484229">(Feb 03 2025 at 16:39)</a>:</h4>
+<p>Note, even if this doesn't break purity cause it accumulates one function at a time as a result is returned, it still breaks correctness in roc.</p>
+<p>A pure roc function should return the same thing no matter the compilation mode or target. These back traces would depend on inlining, file location, and potentially target (due to different debug info on windows and wasm)</p>
+
+
+
+<a name="497739238"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497739238" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497739238">(Feb 04 2025 at 19:20)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497403090">sagde</a>:</p>
+<blockquote>
+<p>because pure functions that return <code>Result</code> now incorporate their own source path and line numbers into their own return values</p>
+</blockquote>
+<p>It feels weird because Roc doesn't have other meta programming built in I suppose. If it was clearer that this actually takes the entire code base as input, then it would still be considered pure, because any code relying on the output would only "break" if the input was changed. Not that I think Roc should have more meta programming, it just still makes sense to call this a pure function to me <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497484229">sagde</a>:</p>
+<blockquote>
+<p>Note, even if this doesn't break purity cause it accumulates one function at a time as a result is returned, it still breaks correctness in roc.</p>
+<p>A pure roc function should return the same thing no matter the compilation mode or target. These back traces would depend on inlining, file location, and potentially target (due to different debug info on windows and wasm)</p>
+</blockquote>
+<p>I don't get how this would break across targets? Wouldn't it work exactly the same as the current error mapping and propagation does with respect to inlining and so on? This wouldn't rely on debuginfo at all in my mind.</p>
+
+
+
+<a name="497742282"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497742282" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497742282">(Feb 04 2025 at 19:39)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497404130">sagde</a>:</p>
+<blockquote>
+<p>like if an error happens in my webserver, and I want to log a stack trace to a reporting service, literally what I want is to call <code>bugsnag.error!("This should never happen...")</code> and have it capture a stack trace for me. This is what error logging services do in languages that support getting a stack trace anywhere.</p>
+</blockquote>
+<p>I think about it this way:</p>
+<ul>
+<li>At some point I get an error, but it's not always easy to tell if you're at the point where the error "just happened". Maybe you called a function from a library that failed, so from your point of view, the error just occurred, but inside the library, the error may have occurred 20 layers away.</li>
+<li>I may not have all the information I need to decide if I want to recover from an error or not right where it happened, and I may need to propagate the error out some layers before this can be decided. I only want to report the error to bugsnag if I determine that it is in fact not an error I can handle.</li>
+</ul>
+<p>In this view, <code>backtrace!</code> and my proposal are complimentary actually. <code>backtrace!</code> tells you how you reached function <code>x</code>, whereas the <code>Result</code> stack trace states what went on inside of <code>x</code>.</p>
+
+
+
+<a name="497750004"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497750004" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497750004">(Feb 04 2025 at 20:24)</a>:</h4>
+<p>I think it would help me to break this down by error type here too.</p>
+<p>The two overall categories of errors are <strong>predictable</strong> (<code>Result</code>) and <strong>unpredictable</strong> (<code>crash</code> essentially).</p>
+<p>When <a href="#narrow/channel/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc">talking about unpredictable errors</a>, I <em>think</em> we concluded that those aren't recoverable in Roc unless the platforms specifically gives the tools needed for that (spawn a new process that is allowed to crash for example).</p>
+<p>Predictable errors on the other hand can be either recoverable or unrecoverable. That depends entirely on the error. And when I say "recoverable", I mean the error is entirely within the normal functioning of the system, and all ends up being good.</p>
+<p>I assume the different approaches we're talking about here pertain to predictable unrecoverable errors. But I think I'm missing parts of the larger picture still.</p>
+
+
+
+<a name="497751650"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497751650" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497751650">(Feb 04 2025 at 20:35)</a>:</h4>
+<p>In <a href="#narrow/channel/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc">the thread about unpredictable errors</a> with <code>crash</code>es and recoveries, I also believe we discussed that the platform would be the stability boundary, and if you had an unrecoverable error (even from a <code>Result</code>), it was better to crash and let the platform handle the error.</p>
+<p>The reason I made this proposal is really to help capture what goes on <em>before</em> you decide to <code>crash</code>. That is, when you get a <code>Result</code>, you will presumably do some analysis and propagate it around a bit before you conclude that it is indeed unrecoverable and you decide to <code>crash</code>. But capturing the stack trace inside the <code>Result</code> from the first <code>Err</code> instance through to calling <code>crash</code>, helps provide a fuller stack trace. Because the stack trace from <code>crash</code> is only the trace from when you finished your analysis, and not from the original error actually occurred.</p>
+
+
+
+<a name="497751757"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497751757" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497751757">(Feb 04 2025 at 20:35)</a>:</h4>
+<p>But maybe I got the wrong impression from that thread, and <code>crash</code> is no longer the preferred option for dealing with unrecoverable errors?</p>
+
+
+
+<a name="497752894"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497752894" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497752894">(Feb 04 2025 at 20:43)</a>:</h4>
+<p>I know there's also a lot of moving parts here and that it's uncharted territory for Roc, so I'm not blaming anyone if it's all down to things having yet to settle <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="497764574"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/497764574" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#497764574">(Feb 04 2025 at 21:59)</a>:</h4>
+<blockquote>
+<blockquote>
+<p>Note, even if this doesn't break purity cause it accumulates one function at a time as a result is returned, it still breaks correctness in roc.</p>
+<p>A pure roc function should return the same thing no matter the compilation mode or target. These back traces would depend on inlining, file location, and potentially target (due to different debug info on windows and wasm)</p>
+</blockquote>
+<p>I don't get how this would break across targets? Wouldn't it work exactly the same as the current error mapping and propagation does with respect to inlining and so on? This wouldn't rely on debuginfo at all in my mind.</p>
+</blockquote>
+<p>Let's not even think across targets. Let's just think solely across optimization levels. An optimized build can inline functions. This changes the stack trace. An optimized build can also remove debug info. That also changes the names in a stack trace.</p>
+<p>Unless an effect occurs, roc will return the exact same result across targets and optimization levels. Adding stack traces to results without some sort of explicit <code>backtrace!</code> effect would break that.</p>
+
+
+
+<a name="499271576"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499271576" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499271576">(Feb 12 2025 at 16:05)</a>:</h4>
+<p>What if there was a syntax that generated a unique tag that the roc toolchain/debugger/etc could easily map back to a specific source location? Something like <code>$MyTagName</code>, with some tooling/library functions that could extract the name and source location it was instantiated from.</p>
+<p>You'd use it like so:</p>
+<div class="codehilite"><pre><span></span><code>File.readUtf8!(my_path) ? $ErrorReadingConfig
+</code></pre></div>
+<p>If that read fails you get back something that'd print as <code>Err($ErrorReadingConfig:1234(FileNotFound))</code>. The actual representation would be a guaranteed-unique tag value, even unique across callsites where the same $tag name is used.</p>
+<p>And you could match on that (relatively) normally, like so:</p>
+<div class="codehilite"><pre><span></span><code>match err {
+  $ErrorReadingConfig(FileNotFound) -&gt; Stdout.line!(&quot;Config file ${config_path} was not found&quot;)
+  # etc
+}
+</code></pre></div>
+<p>That would use a global table to grab the "canonical" tag id and match on that (mapping potentially several source locations where $ErrorReadingConfig is constructed, down to a single value suitable for matching).</p>
+<p>You'd have something like <code>Tag.source_location(err)</code>, which would use a similar global table to map back to the filename name line/col number and return that.</p>
+<p>You'd need some utilities that could take roc binary and a string "backtrace" like the above, and map that back to source locations. Or perhaps that just gets compiled into the binary.</p>
+<p>That gets you 70% of the way to full backtraces and encourages wrapping errors with useful, match-able context.</p>
+
+
+
+<a name="499274725"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499274725" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499274725">(Feb 12 2025 at 16:19)</a>:</h4>
+<p>What enables this mapping from source location to backtraces? Is it simply recursive with tons of tag wrapping?</p>
+
+
+
+<a name="499275433"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499275433" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499275433">(Feb 12 2025 at 16:22)</a>:</h4>
+<p>With this, the back trace -is- the ‘inspect’ output. You’d have another tool that maps the generated ids parsed from that string back into source locations that are more human readable.</p>
+
+
+
+<a name="499276366"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499276366" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499276366">(Feb 12 2025 at 16:26)</a>:</h4>
+<p>Generally stack traces represent recursion and mutual recursion, but tags don't.</p>
+
+
+
+<a name="499277167"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499277167" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499277167">(Feb 12 2025 at 16:29)</a>:</h4>
+<p>If you make your stacktrace represent recursion or mutual recursion, you are back to allocating a ton for an error that likely will just get thrown away and handled.</p>
+<p>On top of that, you still lose information if some chunk of code doesn't opt into this form of error. I know one important call put above is that you may want a stack trace from a library, but this would be opt-in at a perf cost, so libraries probably wouldn't opt in.</p>
+<p>I'm not sure this would turn out well in practice, but maybe.</p>
+
+
+
+<a name="499277404"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499277404" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499277404">(Feb 12 2025 at 16:30)</a>:</h4>
+<p>Yeah, you’d have to be careful with recursive cases. I’d probably just not add tags there.</p>
+
+
+
+<a name="499277763"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499277763" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499277763">(Feb 12 2025 at 16:32)</a>:</h4>
+<p>The perf cost should be very low, if the backtrace isn’t inspected.</p>
+
+
+
+<a name="499277774"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499277774" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499277774">(Feb 12 2025 at 16:32)</a>:</h4>
+<p>Even for flat tags, you likely would devour stack space. Assuming no recursion, but a large branching tree of functions, the top level main has to allocate stack space for a nested tag that can represent any possible call chain</p>
+
+
+
+<a name="499277830"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499277830" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499277830">(Feb 12 2025 at 16:32)</a>:</h4>
+<p>And the next function down the same but with one less wrapping and same again</p>
+
+
+
+<a name="499277866"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499277866" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499277866">(Feb 12 2025 at 16:32)</a>:</h4>
+<p>So you would get gigantic error result payloads</p>
+
+
+
+<a name="499277888"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499277888" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499277888">(Feb 12 2025 at 16:33)</a>:</h4>
+<p>Hence why this would be judicious and manually added</p>
+
+
+
+<a name="499277954"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499277954" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499277954">(Feb 12 2025 at 16:33)</a>:</h4>
+<p>Don’t want that to happen automatically for all calls, just semantically important ones</p>
+
+
+
+<a name="499278459"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499278459" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499278459">(Feb 12 2025 at 16:35)</a>:</h4>
+<p>This solves the problem of getting “just enough” source location info back to understand errors from production.</p>
+
+
+
+<a name="499278702"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499278702" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499278702">(Feb 12 2025 at 16:36)</a>:</h4>
+<p>And it’s less annoying than manually choosing unique tag names</p>
+
+
+
+<a name="499281545"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Errors%20with%20stack%20traces/near/499281545" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Errors.20with.20stack.20traces.html#499281545">(Feb 12 2025 at 16:49)</a>:</h4>
+<p>Possibly. Still block any library introspection (without author opt in), but is definitely something.</p>
+
+
+
+<hr><p>Last updated: Jul 01 2026 at 14:01 UTC</p>
+</html>

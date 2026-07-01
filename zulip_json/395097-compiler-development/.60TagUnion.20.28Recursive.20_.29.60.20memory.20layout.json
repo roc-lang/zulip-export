@@ -1,0 +1,152 @@
+[
+    {
+        "content": "<p>So far I've been using old <code>RustGlue.roc</code> for hints as to how types are laid out, but <code>TagUnion (Recursive _)</code> just seems to reuse <code>TagUnion (NullableWrapped _)</code> implementation, which uses pointer tagging to store the discriminant. Hower, it seemse to still try to do this when there's more variants than can be stored in the pointer tag. I still have no idea how to figure out these data layouts from the compiler itself. Does anyone know how the Roc compiler actually lays a type like this out, or how I could find out?</p>",
+        "id": 480888045,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730888747
+    },
+    {
+        "content": "<p>Generate an app LLVM IR and the  you can see it.</p>",
+        "id": 480892201,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1730890153
+    },
+    {
+        "content": "<p>So write a fake or test app, preferably with a super simple platform API, no host even required, then generate the LLVM IR using <code>roc build --no-link --emit-llvm-ir app.roc</code></p>",
+        "id": 480892393,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1730890212
+    },
+    {
+        "content": "<p>I usually cheat and make the platform mainForHost or an effect take the type I'm inspecting as an argument so it's easy to search for in the IR and see.</p>",
+        "id": 480892597,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1730890289
+    },
+    {
+        "content": "<p>Sometimes I'll just copy paste the slab of LLVM IR for the effect or at a callsite and give it to claude who seems to be happy to parse it and tell me any details I'm interested in.</p>",
+        "id": 480892972,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1730890422
+    },
+    {
+        "content": "<p>I followed your advice! I've been avoiding LLVM IR till now cause I figured it would be too opaque to read without prior experience, but getting an LLM involved really did help!</p>",
+        "id": 481066256,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730967750
+    },
+    {
+        "content": "<p>The data structure in question was:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kt\">Expr</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">    </span><span class=\"kt\">String</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Concat</span><span class=\"w\"> </span><span class=\"kt\">Expr</span><span class=\"w\"> </span><span class=\"kt\">Expr</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag3</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag4</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag5</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag6</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag7</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag9</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag11</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag12</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag13</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag14</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag15</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag16</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag17</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag18</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag19</span><span class=\"p\">,</span>\n<span class=\"p\">]</span>\n</code></pre></div>\n<p>ChatGPT pointed me to this: <code>{ [3 x i64], i8 }</code>, which looks like space reserved for a RocStr/whatever <code>Concat</code>'s payload looks like followed by a tag union discriminant</p>",
+        "id": 481066574,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730967904
+    },
+    {
+        "content": "<p>It doesn't seem to be a very exact science, as I still have to guess which bytes mean what, but it certainly helps!</p>",
+        "id": 481066667,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730967946
+    },
+    {
+        "content": "<p>I figured if I wrote a function that matches on the tag union, it'd tell me more about the data layout of each variant:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">app</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nv\">main</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"nv\">test</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">platform</span><span class=\"w\"> </span><span class=\"s\">\"platform.roc\"</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"kr\">main </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">expr</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"nv\">expr</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">        </span><span class=\"kt\">Concat</span><span class=\"w\"> </span><span class=\"nv\">_e1</span><span class=\"w\"> </span><span class=\"nv\">e2</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nv\">e2</span>\n<span class=\"w\">        </span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nv\">crash</span><span class=\"w\"> </span><span class=\"s\">\"uh oh\"</span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"k\">define</span><span class=\"w\"> </span><span class=\"k\">internal</span><span class=\"w\"> </span><span class=\"k\">fastcc</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"vg\">@_mainForHost_c610e85212d0697cb161d4ba431ba63f273feee7dcb7927c9ff5d74ae6cbfa3</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!12</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"nl\">entry:</span>\n<span class=\"w\">  </span><span class=\"k\">ret</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"k\">zeroinitializer</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!17</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>but this function appears to be a no-op. There's no sign of the \"uh oh\" string anywhere either. Taking out the crash or moving the function to <code>platform.roc</code> doesn't appear to make a difference</p>",
+        "id": 481071178,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730969669
+    },
+    {
+        "content": "<p>replacing the string with a longer string that doesn't get SSO'd, or returning that string from the function rather than crashing with it doesn't make it appear in the llvm bytecode either</p>",
+        "id": 481082210,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730973422
+    },
+    {
+        "content": "<p>But having <code>main</code> be a value with a long string in it rather than a function does seem to make the string appear</p>",
+        "id": 481082566,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730973531
+    },
+    {
+        "content": "<p>I have a a lot to learn here it seems</p>",
+        "id": 481082622,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730973546
+    },
+    {
+        "content": "<p>Is that the right mainForHost function in the IR? There's usually a few generated. Can you share the full IR in a gist? Also what is the platform API that your using here for main?</p>",
+        "id": 481094407,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1730977290
+    },
+    {
+        "content": "<p>As in, what does the platform do with the main provided by the app, so how does that relate back to mainForHost or the entrypoint into roc</p>",
+        "id": 481094564,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1730977335
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"625912\">@Sven van Caem</span> here's my attempt at that Expr showing my method of using the free Claude in Zed Assistant</p>\n<p><a href=\"https://gist.github.com/lukewilliamboswell/0adb8b1e95e4bf44c65a93b634713812\">https://gist.github.com/lukewilliamboswell/0adb8b1e95e4bf44c65a93b634713812</a></p>",
+        "id": 481098331,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1730978619
+    },
+    {
+        "content": "<p>Challenging Claude a bit more on this one, and he's sounding pretty confident. <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span> </p>\n<ol>\n<li>\n<p>All Expr values are handled through pointers (note all the <code>ptr</code> return types)</p>\n</li>\n<li>\n<p>When the <code>String</code> variant is created (in previously shown IR), it:</p>\n<ul>\n<li>Allocates 32 bytes</li>\n<li>Places the RocStr contents in the first 24 bytes</li>\n<li>Sets tag ID 1 at offset 24</li>\n</ul>\n</li>\n<li>\n<p>When the <code>Concat</code> variant is created (in previously shown IR), it:</p>\n<ul>\n<li>Allocates 32 bytes</li>\n<li>Stores two pointers to other Expr values in the first 16 bytes</li>\n<li>Sets tag ID 0 at offset 24</li>\n</ul>\n</li>\n<li>\n<p>The exposed size function confirms that Exprs are passed by pointer:</p>\n</li>\n</ol>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"k\">define</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"vg\">@roc__mainForHost_1_exposed_size</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"k\">ret</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"k\">ptrtoint</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"k\">getelementptr</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">ptr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"k\">null</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i32</span><span class=\"w\"> </span><span class=\"m\">1</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">to</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">)</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>This returns 8 (on 64-bit), confirming we're dealing with pointer-sized values in the interface.</p>\n<p>And notably:</p>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"k\">define</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@roc__mainForHost_1_exposed_generic</span><span class=\"p\">(</span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%0</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>Shows that the exposed interface takes/returns Expr values as pointers, which matches our C representation where we'd pass <code>Expr*</code> around rather than the full 32-byte structure directly.</p>\n<p>So yes, this IR fully supports our earlier C representation:</p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"k\">typedef</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Expr</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">union</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">RocStr</span><span class=\"w\"> </span><span class=\"n\">string</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Expr</span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"n\">left</span><span class=\"p\">;</span>\n<span class=\"w\">            </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">Expr</span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"n\">right</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"n\">concat</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"n\">payload</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"kt\">uint8_t</span><span class=\"w\"> </span><span class=\"n\">tag</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"kt\">uint8_t</span><span class=\"w\"> </span><span class=\"n\">padding</span><span class=\"p\">[</span><span class=\"mi\">7</span><span class=\"p\">];</span>\n<span class=\"p\">}</span><span class=\"w\"> </span><span class=\"n\">Expr</span><span class=\"p\">;</span>\n</code></pre></div>",
+        "id": 481101010,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1730979603
+    },
+    {
+        "content": "<p>Then digging around in gen_llvm specifically in <code>crates/compiler/gen_llvm/src/llvm/convert.rs</code> it looks like <code>struct_type_from_union_layout</code> is related... we make a struct layout from the tag union and then when we generate the LLVM we cast that to a ptr. So I think this is probably also a useful reference for understanding the different kinds of layouts with tag unions.</p>",
+        "id": 481102974,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1730980336
+    },
+    {
+        "content": "<p>Oh wow, this really useful!</p>",
+        "id": 481120272,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730985988
+    },
+    {
+        "content": "<p>The platform file I was using looks like this:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">platform</span><span class=\"w\"> </span><span class=\"s\">\"test-platform\"</span>\n<span class=\"w\">    </span><span class=\"nv\">requires</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">main</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"nv\">exposes</span><span class=\"w\"> </span><span class=\"p\">[]</span>\n<span class=\"w\">    </span><span class=\"nv\">packages</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n<span class=\"w\">    </span><span class=\"nv\">imports</span><span class=\"w\"> </span><span class=\"p\">[]</span>\n<span class=\"w\">    </span><span class=\"nv\">provides</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nv\">mainForHost</span><span class=\"p\">]</span>\n\n<span class=\"kt\">Expr</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">    </span><span class=\"kt\">String</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Concat</span><span class=\"w\"> </span><span class=\"kt\">Expr</span><span class=\"w\"> </span><span class=\"kt\">Expr</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag3</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag4</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag5</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag6</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag7</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag9</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag11</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag12</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag13</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag14</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag15</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag16</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag17</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag18</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"kt\">Tag19</span><span class=\"p\">,</span>\n<span class=\"p\">]</span>\n\n<span class=\"nv\">mainForHost</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Expr</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Expr</span>\n<span class=\"nv\">mainForHost</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">main</span>\n</code></pre></div>",
+        "id": 481120342,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730986017
+    },
+    {
+        "content": "<p>And here's the <a href=\"https://gist.github.com/svcxc/30cf328dcb7341b1588b2d23fd220135\">generated llvm</a></p>",
+        "id": 481120477,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730986056
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/channel/395097-compiler-development/topic/.60TagUnion.20.28Recursive.20_.29.60.20memory.20layout/near/481098331\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"625912\">Sven van Caem</span> here's my attempt at that Expr showing my method of using the free Claude in Zed Assistant</p>\n<p><a href=\"https://gist.github.com/lukewilliamboswell/0adb8b1e95e4bf44c65a93b634713812\">https://gist.github.com/lukewilliamboswell/0adb8b1e95e4bf44c65a93b634713812</a></p>\n</blockquote>\n<p>I wonder how you got it to generate what look like constructors for the <code>Concat</code> and <code>String</code> variants? I feel like that's what must've allowed Claude to figure out the layouts of those</p>",
+        "id": 481120706,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1730986133
+    },
+    {
+        "content": "<p>You can see the way I setup the platform.roc in that gist. I made a few top level functions to do exactly that and isolate the Expr values I wanted to see being constructed.</p>",
+        "id": 481165952,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1730999795
+    },
+    {
+        "content": "<p>Oh sweet! So it'll just generate the top level functions so long as they're used</p>",
+        "id": 481197196,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1731012277
+    },
+    {
+        "content": "<p>Thanks! This helps a lot</p>",
+        "id": 481197217,
+        "sender_full_name": "Sven van Caem",
+        "timestamp": 1731012288
+    },
+    {
+        "content": "<p>Glad to help.</p>",
+        "id": 481197701,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731012493
+    }
+]

@@ -1,0 +1,850 @@
+<html>
+<head><meta charset="utf-8"><title>Narrowing types in when expressions · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html">Narrowing types in when expressions</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="270922405"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/270922405" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#270922405">(Feb 07 2022 at 01:14)</a>:</h4>
+<p>Some time ago on some GitHub issue I can't find now (<span class="user-mention" data-user-id="281383">@Richard Feldman</span>  and <span class="user-mention" data-user-id="281543">@Folkert de Vries</span> may know), we noted the behavior of the following code:</p>
+<div class="codehilite"><pre><span></span><code>» \x -&gt; when x is
+…   A -&gt; B
+…   C -&gt; D
+…   a -&gt; a
+
+&lt;function&gt; : [ A, B, C, D ]a -&gt; [ A, B, C, D ]a
+</code></pre></div>
+<p>With a certain perspective, the ideal type for this function would be <code>[A, C]a -&gt; [B, D]a</code>. In order to do this, at the branch <code>a -&gt; a</code>, we need to "remove" the variants <code>A</code> and <code>C</code> from the set of tags that might be in the type of <code>a</code>. This kind of typing-based-on-control-flow is generally known as <a href="https://en.wikipedia.org/wiki/Flow-sensitive_typing">flow typing</a>, and the removal of types that cannot appear in a branch is called "narrowing".</p>
+<p>Here are two more (somewhat contrived) examples where type narrowing might be useful. Suppose that <code>error</code> is a function that immediately yields a runtime error and stops the active thread.</p>
+<div class="codehilite"><pre><span></span><code>printAddError = \m, n, err -&gt;
+  when err is
+    ...
+    Overflow | Underflow -&gt;
+      overUnder = when err is
+        Overflow -&gt; &quot;over&quot;
+        Underflow -&gt; &quot;under&quot;
+        # Note that we need this branch because `err` is not narrowed!
+        _ -&gt; error &quot;unreachable&quot;
+
+      &quot;Adding \(m) and \(n) results in a value that \(overUnder)flows the type&quot;
+    ...
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>retryWithDelay : [ RateLimited Request Delay ] -&gt; Response
+
+retryUnauthorized : [ RateLimited Request ] -&gt; Response
+
+when response is
+  Ok body -&gt; printBody body
+  # The below two would result in a type error today because `reponse` is not
+  # narrowed in the respective branches
+  RateLimited _ _ -&gt; retryWithDelay reponse
+  NotAuthorized _ -&gt; retryUnauthorized response
+</code></pre></div>
+<p>With type narrowing in when branches, the issues in both examples above would be resolved. So the proposal here has two components:</p>
+<ol>
+<li>Branches associated with a specific type have the matched expression narrowed to that type. So for example,</li>
+</ol>
+<div class="codehilite"><pre><span></span><code>when x is
+  A -&gt; x # x has type [A] here
+  ...
+</code></pre></div>
+<ol start="2">
+<li>Default branches have types covered in other branches excluded from them. So for example,</li>
+</ol>
+<div class="codehilite"><pre><span></span><code>f : [A, B, C, D]a -&gt; _
+f = \x -&gt; when x is
+  A -&gt; x # x has type [A] here
+  B -&gt; .. # x has type [B] here
+  o -&gt; o # o has type [C, D]a here
+</code></pre></div>
+<p>This idea is not new; TypeScript does it, and Java byte code also does a version of it. It turns out it's <a href="https://ayazhafiz.com/articles/21/type-inference-for-flow-typing">tricky to do this in a language with subtyping and type inference</a>, but it's doable - and in Roc it would be even more tractable, because for us what it means to "subtract" a type is very easy to define.</p>
+<p>Anyway this is a tangent. So why don't other languages with pattern matching usually support this? I think the biggest reason is the performance cost - by changing the type of a variable in a branch, Roc would also have to change its runtime representation; that is, its value. In the last example above, when <code>x</code> goes from <code>[A,B,C,D]a</code> to <code>[B]</code>, we must change the value referenced by <code>x</code> to have the layout of the type <code>[B]</code> (which is different from <code>[A,B,C,D]a</code>)! This is basically involves a few memory access and memory stores, not any data modification. This means the CPU/RAM usage isn't a lot, but it's something.</p>
+<p>I'm curious what others think of this and if you all think it's worth implementing. The way I see it, there are three options:</p>
+<ol>
+<li>Don't support this</li>
+<li>Support this in all <code>when</code> expressions</li>
+<li>Introduce a new expression like <code>when</code>, but that supports type narrowing. For example, <code>when &lt;e&gt; is</code> could be <code>narrow &lt;e&gt; to</code>. This means the user gets to choose whether they want to pay the runtime cost of type narrowing, but it also means there are two very similar concepts in the language that could get confusing to look at.</li>
+</ol>
+<p>Personally I like (3) the most.</p>
+
+
+
+<a name="270923941"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/270923941" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#270923941">(Feb 07 2022 at 01:53)</a>:</h4>
+<p>hm, I wonder what the workarounds look like in these cases?</p>
+<p>e.g. <code>printAddError</code> could use a helper function instead:</p>
+<div class="codehilite"><pre><span></span><code>printAddError = \m, n, err -&gt;
+  when err is
+    ...
+    Overflow -&gt; toMessage m n &quot;over&quot;
+    Underflow -&gt; toMessage m n &quot;under&quot;
+    ...
+
+toMessage = \m, n, overUnder -&gt;
+    &quot;Adding \(m) and \(n) results in a value that \(overUnder)flows the type&quot;
+</code></pre></div>
+<p>personally I prefer the way this reads to the <code>Overflow | Underflow -&gt; ...</code> approach, and I'd also expect it to run faster because it has 1 <code>when</code> instead of 2 - so in this case it seems like it would be better to encourage the helper function style!</p>
+<p>in the <code>retryWithDelay</code> example, I'd make the two helper functions take normal arguments instead of a single-tag union:</p>
+<div class="codehilite"><pre><span></span><code>retryWithDelay : Request, Delay -&gt; Response
+
+retryUnauthorized : Request -&gt; Response
+
+when response is
+  Ok body -&gt; printBody body
+  # The below two would result in a type error today because `reponse` is not
+  # narrowed in the respective branches
+  RateLimited req delay -&gt; retryWithDelay req delay
+  NotAuthorized req -&gt; retryUnauthorized req
+</code></pre></div>
+<p>I personally prefer this style - it's a little more verbose to call, but the types are more concise, and I'd feel weird manually calling <code>retryWithDelay (RateLimited req delay)</code> if I ever wanted to call it from somewhere else - e.g. from a test <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="272351962"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/272351962" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#272351962">(Feb 18 2022 at 02:18)</a>:</h4>
+<p>I forgot to follow up on this until <span class="user-mention" data-user-id="465225">@Tommy Graves</span> reminded me yesterday :) Here is a more complicated, realistic example of where having type narrowing may be useful, in Roc's codebase: <a href="https://github.com/rtfeldman/roc/blob/5374f6d6b83e6665e363750d6ea251b3441514ac/compiler/gen_llvm/src/llvm/build.rs#L5682-L5716">https://github.com/rtfeldman/roc/blob/5374f6d6b83e6665e363750d6ea251b3441514ac/compiler/gen_llvm/src/llvm/build.rs#L5682-L5716</a>, and in particular the call of <a href="https://github.com/rtfeldman/roc/blob/5374f6d6b83e6665e363750d6ea251b3441514ac/compiler/gen_llvm/src/llvm/build.rs#L7065-L7138">https://github.com/rtfeldman/roc/blob/5374f6d6b83e6665e363750d6ea251b3441514ac/compiler/gen_llvm/src/llvm/build.rs#L7065-L7138</a> from that function</p>
+
+
+
+<a name="272351997"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/272351997" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#272351997">(Feb 18 2022 at 02:19)</a>:</h4>
+<p>The workarounds still apply, they're just bulky to write ): and not narrowing the type is unpleasant because you must manually expect that you covered all the cases you expected to</p>
+
+
+
+<a name="272352128"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/272352128" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#272352128">(Feb 18 2022 at 02:21)</a>:</h4>
+<p>I also thought about this some more and I've realized the performance issue need not be a concern. Indeed we don't need to do a type conversion at all. During type checking and exhaustiveness checking we can do the type narrowing on the surface syntax, so that the programmer is guaranteed the program is type-correct, but during code generation (in particular monomorphization) we can use the "shadow" type representation which is the larger, unnarrowed type. This is still sound because we'll have already proved the unused branches of that type are never inhabited, and we avoid having to do any conversion.</p>
+
+
+
+<a name="360887668"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360887668" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360887668">(May 24 2023 at 20:10)</a>:</h4>
+<p>wow that's awesome!</p>
+
+
+
+<a name="360887693"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360887693" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360887693">(May 24 2023 at 20:10)</a>:</h4>
+<p>so that means this is the clear winner then, yeah?</p>
+<blockquote>
+<ol start="2">
+<li>Support this in all when expressions</li>
+</ol>
+</blockquote>
+
+
+
+<a name="360887723"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360887723" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360887723">(May 24 2023 at 20:10)</a>:</h4>
+<p>in other words, we can make it Just Work the way people expect</p>
+
+
+
+<a name="360887975"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360887975" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360887975">(May 24 2023 at 20:12)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="454654">Ayaz Hafiz</span> <a href="#narrow/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions/near/272352128">said</a>:</p>
+<blockquote>
+<p>I also thought about this some more and I've realized the performance issue need not be a concern. Indeed we don't need to do a type conversion at all. During type checking and exhaustiveness checking we can do the type narrowing on the surface syntax, so that the programmer is guaranteed the program is type-correct, but during code generation (in particular monomorphization) we can use the "shadow" type representation which is the larger, unnarrowed type. This is still sound because we'll have already proved the unused branches of that type are never inhabited, and we avoid having to do any conversion.</p>
+</blockquote>
+<p>I totally forgot about this lol, I need to think about how I came to this conclusion. I'm not sure it's correct <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span> Perhaps the poor wisdom of me a year and half ago</p>
+
+
+
+<a name="360888169"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360888169" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360888169">(May 24 2023 at 20:13)</a>:</h4>
+<p>My intuition (now) is that the old message is not possible unless we also embrace subtyping but that is a huge change</p>
+
+
+
+<a name="360888952"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360888952" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360888952">(May 24 2023 at 20:17)</a>:</h4>
+<p>yeah one counterexample to that old message is suppose that <code>main</code> is defined as follows and escapes to the host</p>
+<div class="codehilite"><pre><span></span><code>main : [A, B] -&gt; [A]
+main = \t -&gt;
+  when t is
+    A -&gt; t
+    _ -&gt; A
+</code></pre></div>
+<p>having <code>t</code> shadow and be compiled as <code>[A,B]</code> in the output position cannot work without subtyping semantics and the appropriate compilation model change</p>
+
+
+
+<a name="360889349"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360889349" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360889349">(May 24 2023 at 20:19)</a>:</h4>
+<p>this extends to non-host-exposed functions as well, imagine that the branch <code>A -&gt; t</code> is instead <code>A -&gt; f t</code> where <code>f : [A] -&gt; [A]</code>. Now we again need subtyping semantics for compilation, or else compile <code>f</code> as we do polymorphic functions (even though f was not declared as polymorphic, it is relative to this use site)</p>
+
+
+
+<a name="360889854"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360889854" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360889854">(May 24 2023 at 20:22)</a>:</h4>
+<p>Maybe a reasonable idea is to have semantics like</p>
+<div class="codehilite"><pre><span></span><code>when ... is
+  A -&gt; ... # no narrows in this branch
+  other -&gt; ... # if `other` is referenced in this branch, it is narrowed at runtime, otherwise it is unaffected
+</code></pre></div>
+<p>since presumably, if you are naming a catchall branch like this, you are intending to opt in to narrowing. So this has no runtime effect for anything where the compiler does not assume you want to narrow (and it will type check that you indeed wanted to narrow, because otherwise you'll get a type error)</p>
+
+
+
+<a name="360890291"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360890291" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360890291">(May 24 2023 at 20:25)</a>:</h4>
+<p>Fundamentally, changing from <code>[A, B SomeData, ...]</code> to <code>[B SomeData]</code>, would just be changing a tag number, correct? Cause<code>B SomeData</code> with all of it's data is guaranteed to fit into <code>[A, B SomeData, ...]</code>. Of course, you need to copy to update the tag number if the orginal var is ever used elsewhere.</p>
+
+
+
+<a name="360890724"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360890724" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360890724">(May 24 2023 at 20:27)</a>:</h4>
+<p>What do you mean by tag number?<br>
+As a simple example, <code>[A Str, B Str]</code> is represented equivalently to the struct <code>{ tag: 1 byte, payload: RocStr}</code>. But <code>[A Str]</code> is represented as "just" <code>RocStr</code>. Since there is a difference in the size of the runtime representation there is a runtime conversion to do.</p>
+
+
+
+<a name="360891065"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360891065" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360891065">(May 24 2023 at 20:29)</a>:</h4>
+<p>Oh yeah, single tag means no index at all.</p>
+
+
+
+<a name="360891262"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360891262" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360891262">(May 24 2023 at 20:30)</a>:</h4>
+<p>even in the case where there is a tag index, if the narrowed union type has a different payload size, the conversion is necessary</p>
+
+
+
+<a name="360891453"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360891453" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360891453">(May 24 2023 at 20:31)</a>:</h4>
+<p>so how much runtime overhead are we talking about here, in practice?</p>
+
+
+
+<a name="360891501"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360891501" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360891501">(May 24 2023 at 20:32)</a>:</h4>
+<p>that said (I think) the conversion will mostly be trivial in cost since it’s only moving top-level wrappers around</p>
+
+
+
+<a name="360891523"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360891523" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360891523">(May 24 2023 at 20:32)</a>:</h4>
+<p>yeah</p>
+
+
+
+<a name="360891544"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360891544" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360891544">(May 24 2023 at 20:32)</a>:</h4>
+<p>yeah i think almost zero Richard</p>
+
+
+
+<a name="360891576"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360891576" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360891576">(May 24 2023 at 20:32)</a>:</h4>
+<p>my default feeling here is that we should have it Just Work even though there's nonzero runtime cost</p>
+
+
+
+<a name="360891597"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360891597" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360891597">(May 24 2023 at 20:32)</a>:</h4>
+<p>like one load and store</p>
+
+
+
+<a name="360891621"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360891621" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360891621">(May 24 2023 at 20:32)</a>:</h4>
+<p>because it's so low that it's not worth making a distinction in userspace</p>
+
+
+
+<a name="360892246"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360892246" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360892246">(May 24 2023 at 20:36)</a>:</h4>
+<p>Yeah, would just be moving some bytes on the stack.</p>
+
+
+
+<a name="360892303"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360892303" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360892303">(May 24 2023 at 20:36)</a>:</h4>
+<p>And tags generally should not be too large.</p>
+
+
+
+<a name="360892367"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360892367" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360892367">(May 24 2023 at 20:36)</a>:</h4>
+<p>i guess you may have to update some refcounts which is random loads and that would be the slowest part.</p>
+
+
+
+<a name="360892463"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360892463" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360892463">(May 24 2023 at 20:37)</a>:</h4>
+<p>So only bad if you have a list of strings in a tag. Then it may update every refcount in the entire list.</p>
+
+
+
+<a name="360892553"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360892553" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360892553">(May 24 2023 at 20:37)</a>:</h4>
+<p>Hmm..<br>
+Actually, i guess you have to do that either way if you keep around the original var. So that isn't special to this case</p>
+
+
+
+<a name="360892589"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360892589" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360892589">(May 24 2023 at 20:37)</a>:</h4>
+<p>So yeah, small in terms of extra per cost.</p>
+
+
+
+<a name="360892997"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360892997" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360892997">(May 24 2023 at 20:40)</a>:</h4>
+<p>I think it’s also important to note that I believe this to be a zero-cost abstraction</p>
+
+
+
+<a name="360893093"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360893093" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360893093">(May 24 2023 at 20:40)</a>:</h4>
+<p>because if you indeed wanted to narrow you would have to do all this anyway</p>
+
+
+
+<a name="360893186"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360893186" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360893186">(May 24 2023 at 20:40)</a>:</h4>
+<p>and if you didn’t then you will end up passing a smaller type to a larger context and the compiler will error to you because the narrowed type will be closed.</p>
+
+
+
+<a name="360893309"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360893309" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360893309">(May 24 2023 at 20:41)</a>:</h4>
+<p>Is the extra cost only incurred when you refine to a union with a single tag? I wouldn’t expect refining to a single tag to be as common</p>
+
+
+
+<a name="360893455"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360893455" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360893455">(May 24 2023 at 20:42)</a>:</h4>
+<p>no, it would be any refinement (at least this is my proposal)</p>
+
+
+
+<a name="360893484"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360893484" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Agus Zubiaga <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360893484">(May 24 2023 at 20:42)</a>:</h4>
+<p>Gotcha</p>
+
+
+
+<a name="360893653"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360893653" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360893653">(May 24 2023 at 20:43)</a>:</h4>
+<p>Would both of these work?</p>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nv">a</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="nx">A</span><span class="p">,</span><span class="w"> </span><span class="nx">B</span><span class="w"> </span><span class="p">,</span><span class="nx">C</span><span class="p">]</span>
+<span class="k">when</span><span class="w"> </span><span class="nx">a</span><span class="w"> </span><span class="o">is</span>
+<span class="w">    </span><span class="nx">A</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">B</span>
+<span class="w">    </span><span class="nx">x</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">x</span>
+
+<span class="c1"># is the final output type here a [B, C] or an [A, B, C].</span>
+</code></pre></div>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nv">a</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="w"> </span><span class="nx">A</span><span class="w"> </span><span class="nx">I32</span><span class="p">,</span><span class="w"> </span><span class="nx">B</span><span class="w"> </span><span class="p">,</span><span class="nx">C</span><span class="p">]</span>
+<span class="k">when</span><span class="w"> </span><span class="nx">a</span><span class="w"> </span><span class="o">is</span>
+<span class="w">    </span><span class="nx">A</span><span class="w"> </span><span class="nx">val</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">A</span><span class="w"> </span><span class="p">(</span><span class="nx">val</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">x</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">x</span>
+</code></pre></div>
+
+
+
+<a name="360893802"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360893802" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360893802">(May 24 2023 at 20:44)</a>:</h4>
+<p>for the first one it would be [B,C]</p>
+
+
+
+<a name="360893932"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360893932" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360893932">(May 24 2023 at 20:45)</a>:</h4>
+<p>the second we should probably discuss but we could make it [A I32, B, C], or a type error</p>
+
+
+
+<a name="360894158"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360894158" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360894158">(May 24 2023 at 20:47)</a>:</h4>
+<p>I think it would be quite surprising if the second one was an error.</p>
+
+
+
+<a name="360894189"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360894189" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360894189">(May 24 2023 at 20:47)</a>:</h4>
+<p>Like, in the second we might assume that the bottom branch wanted to narrow to [B, C] exactly, but then you tried to add the A variant to it. We can either make that work, or say that if you did not actually want to narrow the return value, change that branch to be _ -&gt; a instead</p>
+
+
+
+<a name="360894235"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360894235" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360894235">(May 24 2023 at 20:47)</a>:</h4>
+<p>that's fair.</p>
+
+
+
+<a name="360894256"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360894256" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360894256">(May 24 2023 at 20:47)</a>:</h4>
+<p>I guess a very basic work around.</p>
+
+
+
+<a name="360894774"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360894774" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360894774">(May 24 2023 at 20:50)</a>:</h4>
+<p>making it “just work” won’t catch unnecessary narrows but it does make seamless type expansion possible (<a href="https://ayazhafiz.com/articles/22/simple-flow-refinement-of-anonymous-sum-types#type-expansion">https://ayazhafiz.com/articles/22/simple-flow-refinement-of-anonymous-sum-types#type-expansion</a>)</p>
+
+
+
+<a name="360894786"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360894786" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360894786">(May 24 2023 at 20:50)</a>:</h4>
+<p>I don’t know how useful that actually is though</p>
+
+
+
+<a name="360894903"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360894903" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360894903">(May 24 2023 at 20:51)</a>:</h4>
+<p>the simple answer to type expansion is open unions so maybe it’s always possible to work around that way actually</p>
+
+
+
+<a name="360897712"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360897712" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360897712">(May 24 2023 at 21:08)</a>:</h4>
+<p>the type error does mean though that you couldn't write things like</p>
+<div class="codehilite"><pre><span></span><code>f : [A]a -&gt; [B]a
+f = \t -&gt; when t is
+  A -&gt; B
+  x -&gt; x
+</code></pre></div>
+<p>anymore though</p>
+
+
+
+<a name="360897950"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360897950" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360897950">(May 24 2023 at 21:10)</a>:</h4>
+<p>oh nevermind, that doesn't work today either lol</p>
+
+
+
+<a name="360898343"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360898343" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360898343">(May 24 2023 at 21:13)</a>:</h4>
+<p>thinking about it more, maybe it would be best to never have it type error if you pass in the narrowed type to a larger context, and instead have the narrowing scheme perform type expansion as appropriate if needed. In the case of</p>
+<div class="codehilite"><pre><span></span><code>a : [ A I32, B ,C]
+when a is
+    A val -&gt; A (val + 1)
+    x -&gt; x
+</code></pre></div>
+<p>we would see that the "narrowed" type of <code>x</code> is actually <code>[A I32, B, C]</code>, and so actually no conversion at all is necessary, and can be eliminated</p>
+
+
+
+<a name="360899679"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/360899679" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#360899679">(May 24 2023 at 21:22)</a>:</h4>
+<p>If you had</p>
+<div class="codehilite"><pre><span></span><code>f : [B, C]* -&gt; {}
+
+a : [ A I32, B ,C]
+when a is
+    A val -&gt; A (val + 1)
+    x -&gt; f x
+</code></pre></div>
+<p>this would perform a conversion when we didn't need to, so that is not zero-cost, but this seems like a contrived case (and the cost is negligible anyway). maybe the compiler could be smarter here too</p>
+
+
+
+<a name="361312386"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361312386" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sky Rose <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361312386">(May 26 2023 at 12:30)</a>:</h4>
+<p>I agree it would be nice if it never errored. For example, this should not error</p>
+<div class="codehilite"><pre><span></span><code>fancyColorName : [ Red, Green, Blue ] -&gt; Str
+fancyColorName = \c -&gt; when c is
+  Red -&gt; &quot;Scarlet&quot;
+  _ -&gt; defaultColorName c
+</code></pre></div>
+<p>whether <code>defaultColorName</code> is defined as</p>
+<div class="codehilite"><pre><span></span><code>defaultColorName : [ Red, Green, Blue ] -&gt; Str
+defaultColorName = \c -&gt; when c is
+  Red -&gt; &quot;Red&quot;
+  Green -&gt; &quot;Green&quot;
+  Blue -&gt; &quot;Blue&quot;
+</code></pre></div>
+<p>or</p>
+<div class="codehilite"><pre><span></span><code>defaultColorName : [ Green, Blue ] -&gt; Str
+defaultColorName = \c -&gt; when c is
+  Green -&gt; &quot;Green&quot;
+  Blue -&gt; &quot;Blue&quot;
+</code></pre></div>
+<p>and whether the <code>_</code> case is written as <code>_ -&gt; defaultColorName c</code>, <code>gb -&gt; defaultColorName gb</code>, or <code>Green | Blue -&gt; defaultColorName c</code>.</p>
+
+
+
+<a name="361312745"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361312745" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sky Rose <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361312745">(May 26 2023 at 12:31)</a>:</h4>
+<p>Those would all be normal things for a programmer to write, and it would be frustrating if they behaved differently.</p>
+
+
+
+<a name="361385379"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361385379" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361385379">(May 26 2023 at 16:49)</a>:</h4>
+<p>I think there is an important difference between <code>_ -&gt; defaultColorName c</code> and <code>gb -&gt; defaultColorName gb</code>. The former is a form of shadowing (which Roc doesn't currently support), and the latter makes it more explicit " in this branch, here is how I narrow this type "</p>
+
+
+
+<a name="361385752"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361385752" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361385752">(May 26 2023 at 16:50)</a>:</h4>
+<p>maybe we could give an error message to tell you what to change it to</p>
+
+
+
+<a name="361385868"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361385868" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361385868">(May 26 2023 at 16:51)</a>:</h4>
+<p>I don't think it would be a significant inconvenience in that case, although without an error message like that, it could be surprising/confusing and people might not know what to do to solve it <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="361391441"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361391441" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361391441">(May 26 2023 at 17:10)</a>:</h4>
+<p>Seeing <code>_ -&gt; defaultColorName c</code> I assume you are intentially re-expanding the type for some reason.</p>
+
+
+
+<a name="361430021"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361430021" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361430021">(May 26 2023 at 20:14)</a>:</h4>
+<p>Here is a concrete proposal for this feature: <a href="https://rwx.notion.site/Union-Refinement-5bef5072afb84675948f89525a25dbb7">https://rwx.notion.site/Union-Refinement-5bef5072afb84675948f89525a25dbb7</a></p>
+<p>(Part of it is a bit technical, but I wanted to describe the exact mechanics under proposal.) I think this aligns with the previous ideas discussed in this thread, for the most part. There is a section of multiple examples at the bottom of the document - let me know if there are others that should be discussed!</p>
+
+
+
+<a name="361814109"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361814109" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ajai Nelson <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361814109">(May 28 2023 at 19:59)</a>:</h4>
+<p>This is probably due to my lack of understanding of the current type system, but I'm kind of confused about the last section ("Catch-all named variable has larger type than condition"), particularly this part:</p>
+<blockquote>
+<p>Since tag unions are open by default in output position, the value of this is nebulous - you could instead get the conversion automatically just because of how tag unions work. In fact, the compiler would see that! Nevertheless, this is noted for completeness.</p>
+</blockquote>
+<p>Just yesterday, I ran into a situation like this:</p>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nv">toString</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">Io</span><span class="w"> </span><span class="nx">Str</span><span class="p">,</span><span class="w"> </span><span class="nx">Net</span><span class="w"> </span><span class="nx">Str</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Str</span>
+<span class="nv">toString</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">e</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">e</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="nx">Io</span><span class="w"> </span><span class="nx">str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">str</span>
+<span class="w">        </span><span class="nx">Net</span><span class="w"> </span><span class="nx">str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">str</span>
+
+<span class="nv">doStuff</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">Io</span><span class="w"> </span><span class="nx">Str</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Str</span>
+<span class="nv">doStuff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">e</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nx">toString</span><span class="w"> </span><span class="nx">e</span><span class="w"> </span><span class="c1"># fails to type-check</span>
+</code></pre></div>
+<p>The workaround I know of is the following. (The paragraph quoted above kind of makes it sound like maybe there's another easy way? But I'm not sure what that would be.)</p>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nv">toString</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">Io</span><span class="w"> </span><span class="nx">Str</span><span class="p">,</span><span class="w"> </span><span class="nx">Net</span><span class="w"> </span><span class="nx">Str</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Str</span>
+<span class="nv">toString</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">e</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">e</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="nx">Io</span><span class="w"> </span><span class="nx">str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">str</span>
+<span class="w">        </span><span class="nx">Net</span><span class="w"> </span><span class="nx">str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">str</span>
+
+<span class="nv">doStuff</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">Io</span><span class="w"> </span><span class="nx">Str</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Str</span>
+<span class="nv">doStuff</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">e</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nx">toString</span><span class="w"> </span><span class="p">(</span><span class="nx">expandError</span><span class="w"> </span><span class="nx">e</span><span class="p">)</span>
+
+<span class="c1"># (The type can also just be written [Io Str] -&gt; [Io Str])</span>
+<span class="nv">expandError</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">Io</span><span class="w"> </span><span class="nx">Str</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">[</span><span class="nx">Io</span><span class="w"> </span><span class="nx">Str</span><span class="p">,</span><span class="w"> </span><span class="nx">Net</span><span class="w"> </span><span class="nx">Str</span><span class="p">]</span>
+<span class="nv">expandError</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">e</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">e</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="nx">Io</span><span class="w"> </span><span class="nx">str</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Io</span><span class="w"> </span><span class="nx">str</span>
+</code></pre></div>
+<p>Apparently with this change, I could write <code>expandError</code> like this instead:</p>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nv">expandError</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">Io</span><span class="w"> </span><span class="nx">Str</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">[</span><span class="nx">Io</span><span class="w"> </span><span class="nx">Str</span><span class="p">,</span><span class="w"> </span><span class="nx">Net</span><span class="w"> </span><span class="nx">Str</span><span class="p">]</span>
+<span class="nv">expandError</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">e</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">e</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="nx">error</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">error</span>
+</code></pre></div>
+<p>That seems pretty useful to me! It doesn't look like a big difference here, but it could save a few lines if there were more tags in the original union. And more importantly, any time I ran into a situation like this, wouldn't I be able to write the exact same function?</p>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="c1"># Because of type inference, this could expand any tag union I want, right?</span>
+<span class="c1"># Though I don't know whether I would need to write a different `expand` function for each type.</span>
+<span class="nv">expand</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">x</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">x</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="nx">a</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">a</span>
+</code></pre></div>
+<p>I'm really confusing myself over this, and I'm probably misunderstanding something.</p>
+
+
+
+<a name="361814750"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361814750" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ajai Nelson <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361814750">(May 28 2023 at 20:05)</a>:</h4>
+<p>(I guess in that specific example, you could just write <code>doStuff = \Io str -&gt; toString (Io str)</code>. But as far as I know, you still need a <code>when</code> expression if there's more than one tag in the original union.)</p>
+
+
+
+<a name="361823814"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361823814" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361823814">(May 28 2023 at 21:38)</a>:</h4>
+<p>I think you should also be able to make <code>doStuff</code> take an <code>[Io Str]*</code></p>
+
+
+
+<a name="361823845"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361823845" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361823845">(May 28 2023 at 21:39)</a>:</h4>
+<p>Or just make it take the full type instead of just half of the type.</p>
+
+
+
+<a name="361840768"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361840768" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361840768">(May 29 2023 at 01:25)</a>:</h4>
+<p>Your interpretation is correct</p>
+
+
+
+<a name="361841050"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361841050" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361841050">(May 29 2023 at 01:29)</a>:</h4>
+<p>In your specific example, you are right that the only way to do it currently is via the conversion function you would have and the proposal would make the alternative you suggested possible.</p>
+<p>Do you have a concrete example of what you ran into? I am surprised you ran into this, I can only think of one case I have before. Unfortunately, changing <code>doStuff</code> to take an <code>[Io Str]*</code> would not work, because then you also need to make <code>toString</code> take an open tag union.</p>
+
+
+
+<a name="361853582"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361853582" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ajai Nelson <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361853582">(May 29 2023 at 04:10)</a>:</h4>
+<p>Sure! Now that I'm looking at it, my case was probably unusual. I think I just assumed it was common just because it was one of the first things I ran into. It was pretty easy to work around, and this feature would only have made it slightly more convenient if at all.</p>
+<p>I've been working through the first few chapters of the book <em>Types and Programming Languages</em>, and I was implementing <a href="https://cs.stackexchange.com/a/43333">big-step evaluation</a> of the untyped <a href="https://en.wikipedia.org/wiki/Lambda_calculus">lambda calculus</a> with <a href="https://en.wikipedia.org/wiki/De_Bruijn_index">De Bruijn indexing</a>.</p>
+<div class="spoiler-block"><div class="spoiler-header">
+<p>Code</p>
+</div><div class="spoiler-content" aria-hidden="true">
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nx">app</span><span class="w"> </span><span class="s">"lambda"</span>
+<span class="w">    </span><span class="nx">packages</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">pf</span><span class="o">:</span><span class="w"> </span><span class="s">"https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br"</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="nx">imports</span><span class="w"> </span><span class="p">[</span><span class="nx">pf</span><span class="p">.</span><span class="nx">Stdout</span><span class="p">]</span>
+<span class="w">    </span><span class="nx">provides</span><span class="w"> </span><span class="p">[</span><span class="nx">main</span><span class="p">]</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">pf</span>
+
+<span class="nv">Term</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="nx">Var</span><span class="w"> </span><span class="nx">I64</span><span class="p">,</span><span class="w"> </span><span class="c1"># variable, uses a De Bruijn index</span>
+<span class="w">    </span><span class="nx">Abs</span><span class="w"> </span><span class="nx">Term</span><span class="p">,</span><span class="w"> </span><span class="c1"># lambda</span>
+<span class="w">    </span><span class="nx">App</span><span class="w"> </span><span class="nx">Term</span><span class="w"> </span><span class="nx">Term</span><span class="p">,</span><span class="w"> </span><span class="c1"># application</span>
+<span class="p">]</span>
+
+<span class="c1"># This could be just `Term`, but because `bigStepEval` should always return `Abs`s (lambdas),</span>
+<span class="c1"># I wanted to be more specific so I wouldn't have to handle impossible recursive cases.</span>
+<span class="c1"># I ended up changing it back to `Term` because of the very minor inconveniences this caused.</span>
+<span class="c1">#                            ||||||||||</span>
+<span class="nv">bigStepEval</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Term</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Result</span><span class="w"> </span><span class="p">[</span><span class="nx">Abs</span><span class="w"> </span><span class="nx">Term</span><span class="p">]</span><span class="w"> </span><span class="p">[</span><span class="nx">NoRuleApplies</span><span class="p">]</span>
+<span class="nv">bigStepEval</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">term</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">term</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="c1"># v ⇓ v</span>
+<span class="w">        </span><span class="nx">Abs</span><span class="w"> </span><span class="nx">body</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="c1"># value</span>
+<span class="w">            </span><span class="nx">Ok</span><span class="w"> </span><span class="p">(</span><span class="nx">Abs</span><span class="w"> </span><span class="nx">body</span><span class="p">)</span>
+
+<span class="w">        </span><span class="nx">App</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="nx">t2</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="k">when</span><span class="w"> </span><span class="nx">bigStepEval</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="o">is</span>
+<span class="w">                </span><span class="c1"># Without De Bruijn:</span>
+<span class="w">                </span><span class="c1"># t1 ⇓ λx.t12      t2 ⇓ t2p      [x ↦ t2p]t12 ⇓ t'</span>
+<span class="w">                </span><span class="c1"># ------------------------------------------------</span>
+<span class="w">                </span><span class="c1">#                  t1 t2 ⇓ t'</span>
+<span class="w">                </span><span class="nx">Ok</span><span class="w"> </span><span class="nf">(Abs t12) -&gt;</span>
+<span class="w">                    </span><span class="c1"># I originally wanted to do the following:</span>
+<span class="w">                    </span><span class="c1">#     t2p &lt;- Result.try (bigStepEval t2)</span>
+<span class="w">                    </span><span class="c1">#     bigStepEval (termSubst t12 0 t2p)</span>
+<span class="w">                    </span><span class="c1"># but I couldn't because `t2p` is a `Result [Abs Term] [NoRuleApplies]`,</span>
+<span class="w">                    </span><span class="c1"># and `termSubst` expects a `Result Term [NoRuleApplies]`. It was easy</span>
+<span class="w">                    </span><span class="c1"># to fix by destructuring in this case, though.</span>
+<span class="w">                    </span><span class="nx">Abs</span><span class="w"> </span><span class="nx">t2pBody</span><span class="w"> </span><span class="o">&lt;-</span><span class="w"> </span><span class="nx">Result</span><span class="p">.</span><span class="nx">try</span><span class="w"> </span><span class="p">(</span><span class="nx">bigStepEval</span><span class="w"> </span><span class="nx">t2</span><span class="p">)</span>
+<span class="w">                    </span><span class="nx">bigStepEval</span><span class="w"> </span><span class="p">(</span><span class="nx">apply</span><span class="w"> </span><span class="nx">t12</span><span class="w"> </span><span class="p">(</span><span class="nx">Abs</span><span class="w"> </span><span class="nx">t2pBody</span><span class="p">))</span>
+
+<span class="w">                </span><span class="c1"># Ok (Var _) | Ok (App _ _) -&gt; Err NoRuleApplies</span>
+<span class="w">                </span><span class="c1"># ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span>
+<span class="w">                </span><span class="c1"># Because bigStepEval never returns a `Var` or `App`,</span>
+<span class="w">                </span><span class="c1"># this case will never happen, so I thought it would</span>
+<span class="w">                </span><span class="c1"># be cool for the type system to recognize that.</span>
+
+<span class="w">                </span><span class="nx">Err</span><span class="w"> </span><span class="nx">NoRuleApplies</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Err</span><span class="w"> </span><span class="nx">NoRuleApplies</span>
+
+<span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nx">Err</span><span class="w"> </span><span class="nx">NoRuleApplies</span>
+
+<span class="nv">main</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="c1"># https://en.wikipedia.org/wiki/De_Bruijn_index example (shifted to use 0-indexing)</span>
+<span class="w">    </span><span class="nv">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">3</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span><span class="w"> </span><span class="p">(</span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">2</span><span class="p">))))</span>
+<span class="w">    </span><span class="nv">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">4</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span>
+<span class="w">    </span><span class="nv">c</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">0</span><span class="p">))))</span><span class="w"> </span><span class="p">(</span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">0</span><span class="p">))))))</span>
+
+<span class="w">    </span><span class="p">[</span>
+<span class="w">        </span><span class="s">"Expected value:"</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">termToStr</span><span class="w"> </span><span class="nx">c</span><span class="p">,</span>
+<span class="w">        </span><span class="c1"># I originally wanted to do the following</span>
+<span class="w">        </span><span class="c1">#     resultToStr (bigStepEval (App (Abs a) b)),</span>
+<span class="w">        </span><span class="c1"># Of course, it's not that hard to fix:</span>
+<span class="w">        </span><span class="nx">resultToStr</span><span class="w"> </span><span class="p">(</span>
+<span class="w">            </span><span class="k">when</span><span class="w"> </span><span class="nx">bigStepEval</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Abs</span><span class="w"> </span><span class="nx">a</span><span class="p">)</span><span class="w"> </span><span class="nx">b</span><span class="p">)</span><span class="w"> </span><span class="o">is</span>
+<span class="w">                </span><span class="nx">Ok</span><span class="w"> </span><span class="nf">(Abs t) -&gt;</span><span class="w"> </span><span class="nx">Ok</span><span class="w"> </span><span class="p">(</span><span class="nx">Abs</span><span class="w"> </span><span class="nx">t</span><span class="p">)</span>
+<span class="w">                </span><span class="nx">Err</span><span class="w"> </span><span class="nx">NoRuleApplies</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Err</span><span class="w"> </span><span class="nx">NoRuleApplies</span>
+<span class="w">        </span><span class="p">),</span>
+<span class="w">        </span><span class="s">"Actual value^"</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="w">    </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">Str</span><span class="p">.</span><span class="nx">joinWith</span><span class="w"> </span><span class="s">"\n"</span>
+<span class="w">    </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">Stdout</span><span class="p">.</span><span class="nx">line</span>
+
+<span class="c1">######### Helper functions (implementations not particularly relevant)</span>
+<span class="c1"># I had already written the following functions as part of the implementation of</span>
+<span class="c1"># small-step evaluation, so I couldn't change their signatures.</span>
+
+<span class="c1">## Shift the indices of every free variable by the specified amount</span>
+<span class="nv">termShift</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Term</span><span class="p">,</span><span class="w"> </span><span class="nx">I64</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Term</span>
+<span class="nv">termShift</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">term</span><span class="p">,</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">walk</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Term</span><span class="p">,</span><span class="w"> </span><span class="nx">I64</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Term</span>
+<span class="w">    </span><span class="nv">walk</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">cutoff</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">        </span><span class="k">when</span><span class="w"> </span><span class="nx">t</span><span class="w"> </span><span class="o">is</span>
+<span class="w">            </span><span class="nx">Var</span><span class="w"> </span><span class="nx">n</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">                </span><span class="nv">isBound</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">n</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="nx">cutoff</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="nx">isBound</span><span class="w"> </span><span class="k">then</span>
+<span class="w">                    </span><span class="nx">Var</span><span class="w"> </span><span class="nx">n</span>
+<span class="w">                </span><span class="k">else</span>
+<span class="w">                    </span><span class="nx">Var</span><span class="w"> </span><span class="p">(</span><span class="nx">n</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="k">by</span><span class="p">)</span>
+
+<span class="w">            </span><span class="nx">Abs</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">                </span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">walk</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="p">(</span><span class="nx">cutoff</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span>
+
+<span class="w">            </span><span class="nx">App</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="nx">t2</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">                </span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">walk</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="nx">cutoff</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">walk</span><span class="w"> </span><span class="nx">t2</span><span class="w"> </span><span class="nx">cutoff</span><span class="p">)</span>
+
+<span class="w">    </span><span class="nx">walk</span><span class="w"> </span><span class="nx">term</span><span class="w"> </span><span class="mi">0</span>
+
+<span class="nx">expect</span><span class="w"> </span><span class="nx">termShift</span><span class="w"> </span><span class="p">(</span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">4</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">0</span><span class="p">)))</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">5</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span>
+<span class="nx">expect</span><span class="w"> </span><span class="nx">termShift</span><span class="w"> </span><span class="p">(</span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">4</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">0</span><span class="p">)))</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">6</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Var</span><span class="w"> </span><span class="mi">0</span><span class="p">))</span>
+
+<span class="c1">## Substitute `beforeVar` with `afterExpr` in `term`</span>
+<span class="nv">termSubst</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Term</span><span class="p">,</span><span class="w"> </span><span class="nx">I64</span><span class="p">,</span><span class="w"> </span><span class="nx">Term</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Term</span>
+<span class="nv">termSubst</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">term</span><span class="p">,</span><span class="w"> </span><span class="nx">beforeVar</span><span class="p">,</span><span class="w"> </span><span class="nx">afterExpr</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">term</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="nx">Var</span><span class="w"> </span><span class="nx">n</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">n</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">beforeVar</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nx">afterExpr</span>
+
+<span class="w">        </span><span class="nx">Var</span><span class="w"> </span><span class="nx">n</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nx">Var</span><span class="w"> </span><span class="nx">n</span>
+
+<span class="w">        </span><span class="nx">App</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="nx">t2</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nx">App</span><span class="w"> </span><span class="p">(</span><span class="nx">termSubst</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="nx">beforeVar</span><span class="w"> </span><span class="nx">afterExpr</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">termSubst</span><span class="w"> </span><span class="nx">t2</span><span class="w"> </span><span class="nx">beforeVar</span><span class="w"> </span><span class="nx">afterExpr</span><span class="p">)</span>
+
+<span class="w">        </span><span class="nx">Abs</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nx">Abs</span><span class="w"> </span><span class="p">(</span><span class="nx">termSubst</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="p">(</span><span class="nx">beforeVar</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">termShift</span><span class="w"> </span><span class="nx">afterExpr</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span>
+
+<span class="c1">## Helper function for applying a function to an argument (given the function body)</span>
+<span class="nv">apply</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Term</span><span class="p">,</span><span class="w"> </span><span class="nx">Term</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Term</span>
+<span class="nv">apply</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">functionBody</span><span class="p">,</span><span class="w"> </span><span class="nx">arg</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nx">functionBody</span>
+<span class="w">    </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">termSubst</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">(</span><span class="nx">termShift</span><span class="w"> </span><span class="nx">arg</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
+<span class="w">    </span><span class="o">|&gt;</span><span class="w"> </span><span class="nx">termShift</span><span class="w"> </span><span class="o">-</span><span class="mi">1</span>
+
+<span class="nv">resultToStr</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Result</span><span class="w"> </span><span class="nx">Term</span><span class="w"> </span><span class="p">[</span><span class="nx">NoRuleApplies</span><span class="p">]</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Str</span>
+<span class="nv">resultToStr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">res</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">res</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="nx">Ok</span><span class="w"> </span><span class="nx">t</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">termToStr</span><span class="w"> </span><span class="nx">t</span>
+<span class="w">        </span><span class="nx">Err</span><span class="w"> </span><span class="nx">NoRuleApplies</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="s">"No rule applies"</span>
+
+<span class="nv">termToStr</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Term</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Str</span>
+<span class="nv">termToStr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">term</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="k">when</span><span class="w"> </span><span class="nx">term</span><span class="w"> </span><span class="o">is</span>
+<span class="w">        </span><span class="nx">Var</span><span class="w"> </span><span class="nx">n</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nv">str</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Num</span><span class="p">.</span><span class="nx">toStr</span><span class="w"> </span><span class="nx">n</span>
+<span class="w">            </span><span class="s">"\(str)"</span>
+
+<span class="w">        </span><span class="nx">Abs</span><span class="w"> </span><span class="nx">t</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nv">str</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">termToStr</span><span class="w"> </span><span class="nx">t</span>
+<span class="w">            </span><span class="s">"λ.\(str)"</span>
+
+<span class="w">        </span><span class="nx">App</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="nx">t2</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="nv">str1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">termToStr</span><span class="w"> </span><span class="nx">t1</span>
+<span class="w">            </span><span class="nv">str1Paren</span><span class="w"> </span><span class="o">=</span>
+<span class="w">                </span><span class="k">when</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="o">is</span>
+<span class="w">                    </span><span class="nx">Var</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">str1</span>
+<span class="w">                    </span><span class="nx">Abs</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="s">"(\(str1))"</span>
+<span class="w">                    </span><span class="nx">App</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">str1</span>
+<span class="w">            </span><span class="nv">str2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">termToStr</span><span class="w"> </span><span class="nx">t2</span>
+<span class="w">            </span><span class="nv">str2Paren</span><span class="w"> </span><span class="o">=</span>
+<span class="w">                </span><span class="k">when</span><span class="w"> </span><span class="nx">t1</span><span class="w"> </span><span class="o">is</span>
+<span class="w">                    </span><span class="nx">Var</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">str2</span>
+<span class="w">                    </span><span class="nx">Abs</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="s">"(\(str2))"</span>
+<span class="w">                    </span><span class="nx">App</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="s">"(\(str2))"</span>
+<span class="w">            </span><span class="s">"\(str1Paren) \(str2Paren)"</span>
+</code></pre></div>
+</div></div>
+
+
+
+<a name="361854138"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/361854138" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ajai Nelson <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#361854138">(May 29 2023 at 04:17)</a>:</h4>
+<p>By the way, I really like the proposal! Sorry to fill up this topic with my weird example. Part of the reason I'm studying types right now is because I want to be able to think in more detail about Roc's type system and type inference implementation!</p>
+
+
+
+<a name="362344878"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/362344878" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#362344878">(May 31 2023 at 05:05)</a>:</h4>
+<p>de Bruijn indeces.. i remember how painful those were <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span> I never had a great intuition for them; like it’s fine to implement, but never “pleasant”. Thankfully in practice I’ve found it’s not really needed unless you need to test for higher-kind or dependent type equivalence.</p>
+
+
+
+<a name="362345033"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/362345033" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#362345033">(May 31 2023 at 05:06)</a>:</h4>
+<p>(if you want to talk about any of this stuff feel free to DM me or post in <a class="stream" data-stream-id="316715" href="/#narrow/stream/316715-contributing">#contributing</a> about possible type-related projects for Roc- we have a few!)</p>
+
+
+
+<a name="362345085"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/362345085" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#362345085">(May 31 2023 at 05:07)</a>:</h4>
+<p>What is the status of this proposal? Are we comfortable with it? Are there outstanding questions or concerns?</p>
+
+
+
+<a name="362424873"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/362424873" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#362424873">(May 31 2023 at 11:21)</a>:</h4>
+<p>I have no concerns, <span aria-label="thumbs up" class="emoji emoji-1f44d" role="img" title="thumbs up">:thumbs_up:</span> from me!</p>
+
+
+
+<a name="363194052"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/363194052" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#363194052">(Jun 03 2023 at 01:13)</a>:</h4>
+<p>Here's an issue for implementing this proposal: <a href="https://github.com/roc-lang/roc/issues/5504">https://github.com/roc-lang/roc/issues/5504</a></p>
+<p>If you'd like to work on it, feel free to message in <a class="stream" data-stream-id="316715" href="/#narrow/stream/316715-contributing">#contributing</a> and we'd be happy to help as much as is wanted! This is kind of a larger change, but it's well scoped and will give you a feel for the entirety of Roc's type system implementation, if you are interested in that.</p>
+
+
+
+<a name="364165966"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/364165966" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ajai Nelson <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#364165966">(Jun 07 2023 at 05:25)</a>:</h4>
+<p><span class="user-mention" data-user-id="454654">@Ayaz Hafiz</span> Under this proposal, would this type check? Because the type of <code>bar</code> would get expanded to <code>[Bar1, Bar2, Bar3, Bar4, Bar5]</code>?</p>
+<div class="codehilite"><pre><span></span><code>Foo : [A, B Bar]
+Bar : [Bar1, Bar2, Bar3, Bar4]
+
+f : Foo -&gt; I64
+f = \foo -&gt;
+    when foo is
+        A -&gt; 1
+        B bar -&gt;
+            when bar is
+                Bar1 -&gt; 10
+                Bar2 -&gt; 20
+                Bar3 -&gt; 30
+                Bar4 -&gt; 40
+                Bar5 -&gt; 50
+                #^ including the last branch (Bar5) was almost certainly a mistake
+</code></pre></div>
+
+
+
+<a name="364287575"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/364287575" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#364287575">(Jun 07 2023 at 13:56)</a>:</h4>
+<p>Yeah I think so. It's a more general problem though. I have an idea for it, <a href="https://github.com/roc-lang/roc/pull/3601">bidirectional exhaustiveness checking</a>, but it's an orthogonal proposal I think.</p>
+
+
+
+<a name="445308557"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/445308557" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ajai Nelson <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#445308557">(Jun 18 2024 at 09:09)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="454654">Ayaz Hafiz</span> <a href="#narrow/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions/near/361430021">said</a>:</p>
+<blockquote>
+<p>Here is a concrete proposal for this feature: <a href="https://rwx.notion.site/Union-Refinement-5bef5072afb84675948f89525a25dbb7">https://rwx.notion.site/Union-Refinement-5bef5072afb84675948f89525a25dbb7</a></p>
+<p>(Part of it is a bit technical, but I wanted to describe the exact mechanics under proposal.) I think this aligns with the previous ideas discussed in this thread, for the most part. There is a section of multiple examples at the bottom of the document - let me know if there are others that should be discussed!</p>
+</blockquote>
+<p>I was thinking about working on this again, but I can't seem to access the proposal on Notion anymore</p>
+
+
+
+<a name="445492786"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/445492786" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#445492786">(Jun 19 2024 at 01:57)</a>:</h4>
+<p><a href="https://github.com/roc-lang/rfcs/blob/092d53e4a26f34154c7583717183510e483f7f36/0011-union-refinement.md">https://github.com/roc-lang/rfcs/blob/092d53e4a26f34154c7583717183510e483f7f36/0011-union-refinement.md</a></p>
+
+
+
+<a name="445494231"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Narrowing%20types%20in%20when%20expressions/near/445494231" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ajai Nelson <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions.html#445494231">(Jun 19 2024 at 02:09)</a>:</h4>
+<p>Thanks!</p>
+
+
+
+<hr><p>Last updated: Jul 01 2026 at 14:01 UTC</p>
+</html>

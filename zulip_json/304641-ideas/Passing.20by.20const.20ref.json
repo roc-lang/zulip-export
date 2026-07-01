@@ -1,0 +1,230 @@
+[
+    {
+        "content": "<p>Currently everything in Roc is essentially passed as a constant value, with the special exception that lists and strings can be edited in place if they only have a single reference. That being said, they are technically still passed by constant value. Just the data they point to is not constant.</p>\n<p>In many cases this does not matter, but depending on the calling convention, this can have horrible performance characteristics. Specifically in Roc's case, passing large structs and unions has a lot of overhead in many calling conventions. For every call, the large struct must be copied to a new stack location. This means that if you are passing a model down the stack, you are copying the entire model for every single call, wasting stack space and time. Here is an example in c++ of the difference between passing by <a href=\"https://godbolt.org/z/3Yhqxdcqq\">const value</a> and passing by <a href=\"https://godbolt.org/z/Wfr34Tdfs\">const ref</a>. The cost is approximately 30 memory copy assembly instructions even in this simple example. When looking at the performance cost using only a struct that is 4 usizes (pretty tiny), it already is about <a href=\"https://www.quick-bench.com/q/6GOGl2JzEP_nCq2HTPtQV86f3EA\">3x slower</a> to pass by const value instead of const reference for these small functions.</p>\n<p>Given Roc is a functional language focused on high performance, I think taking advantage of passing by const reference is extremely important. I think we should follow along with C++ guidelines, for anything that is trivially copy-able, pass it by value. For everything else, pass it by const reference. In our specific case, I propose that any value over 2 usizes should be passed by const reference. Then it will only be copied if a sub-function needs to return a modified version of the struct, rather than being copied for every single function call. The reason for 2 usizes is that it matches along with most modern function calls. Things that are 2 usizes or smaller will be passed in registers instead of on the stack. Anything larger than 2 usizes requires copying to the stack for passing.</p>\n<p>I think this will be paramount to performance and avoiding stack overflows for large models and structs being passed around. It also will make boxing fit in naturally. If we are boxing a large object, we can still just pass the pointer down the call stack like with all other structs. No need to every truly unbox and copy all of the data out of the box. A box is just a constant reference to a chunk of data.</p>\n<p>Thoughts?</p>",
+        "id": 272751140,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645493512
+    },
+    {
+        "content": "<blockquote>\n<p>In our specific case, I propose that any value over 2 usizes should be passed by const reference.</p>\n</blockquote>\n<p>that sounds like a great heuristic! I've been thinking about this for awhile, but didn't know what a good cutoff point would be...I like your reasoning for choosing that!</p>",
+        "id": 272751650,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1645494166
+    },
+    {
+        "content": "<p>actually a good example of where this will come up is GUIs, e.g. for editor plugins</p>",
+        "id": 272751655,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1645494197
+    },
+    {
+        "content": "<p>you have the entire application state value being passed around to all sorts of functions</p>",
+        "id": 272751663,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1645494217
+    },
+    {
+        "content": "<p>if that thing has like 20 fields in it, RIP performance unless we're passing pointers <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 272751670,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1645494231
+    },
+    {
+        "content": "<p>a separate consideration: what if we have a bunch of arguments?</p>",
+        "id": 272751750,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1645494353
+    },
+    {
+        "content": "<p>for example:</p>",
+        "id": 272751755,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1645494361
+    },
+    {
+        "content": "<p>As an extra note, in some simple benchmarks, even <a href=\"https://www.quick-bench.com/q/VOfVjo8qqPRXmdK633Ygn-NFhxg\">at 3 usizes</a>, it is still faster to pass by reference than by value. Of coures, <a href=\"https://www.quick-bench.com/q/o9ZzCJFYpBP6vK-VdcopFZx4xjI\">at 2 usizes</a>, passing by ref is much worse due to not taking advantage of registers.</p>",
+        "id": 272751815,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645494414
+    },
+    {
+        "content": "<p>consider a function with 20 arguments. Should we copy all 20 every time the function gets called?</p>\n<p>I could see arguments for two designs:</p>\n<ol>\n<li>Automatically turn some of those arguments into a struct and pass them that way, so we aren't copying 20 things on the stack</li>\n<li>If you're doing it this way, it's because for some reason you explicitly want that to happen (if you don't want it to happen, you could just accept a single-tag union with a 20-field payload), and we shouldn't take away that option from you</li>\n</ol>",
+        "id": 272751824,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1645494434
+    },
+    {
+        "content": "<p>usually I'd default to #2 in a case like this - give people <em>some</em> way to get the behavior, so we're not eliminating potential performance optimizations - but the thing is, I can't think of a single motivating use case to support #2 where you'd ever actually prefer that it copy all 20 arguments to having them be automatically \"tupled\" and passed by reference <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 272751883,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1645494492
+    },
+    {
+        "content": "<p>So with many arguments, it gets a lot more calling conventions specific. For example, on x86-64 linux, I can pass 14 arguments in registers if 6 of them are ints, and the other 8 are floats, but on windows, I get 4 arguments total passed in registers, int or float.</p>",
+        "id": 272751904,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645494571
+    },
+    {
+        "content": "<p>This being said, I don't think making a tuple would help much. The only case where it would be an advantage is if the same 20 arguments are passed to multiple functions, or always in order linear subsets of the arguments.</p>",
+        "id": 272751970,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645494624
+    },
+    {
+        "content": "<p>Because if you swap order or only use some the parameters, you would still have to copy around to make the new expected tuple for the sub function.</p>",
+        "id": 272751989,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645494671
+    },
+    {
+        "content": "<p>Also with 20 args, as many as possible will still be in registers before we start pushing to the stack, so that is another advantage over the tuple. With individual args, I might get 8 in registers and 12 on the stack instead of 20 on the stack with a reference to it being passed as an arg.</p>",
+        "id": 272752059,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645494759
+    },
+    {
+        "content": "<p>In fact, in shallow cases, or cases where the args for each function change a lot, splitting a struct into many values and passing it as a ton of arguments instead of just one, it can be faster. But in most cases where you pass the same struct around to multiple functions, that will be generally better than direct args.</p>",
+        "id": 272752092,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645494835
+    },
+    {
+        "content": "<p>oh that's a good point! <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 272752749,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1645495645
+    },
+    {
+        "content": "<p>The Wasm backend is already passing all data structure arguments as pointers. Only primitive numbers are passed by value.</p>",
+        "id": 272777436,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1645521660
+    },
+    {
+        "content": "<p>Is it possible to in-place mutate an argument?</p>",
+        "id": 272777442,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1645521664
+    },
+    {
+        "content": "<p>The answer should be no to my knowledge, which is why I want to make passing by const ref an explicit rule of the language. That being said, with the llvm backend, it's optimizations totally are allowed to violate that. For example if it is passed a struct on the stack, modifies a field, and then  uses it, llvm could update that struct argument because it knows the value was copied in and it has ownership. Technically in the dev backend basic linear scan optimizations could probably be made, but it is not part of our mono ir.<br>\nSo for wasm, does the \"C\" calling convention just always use pointers? Also, this means that the wasm backend already doesn't copy data if it passes a struct from one function to the next, just sends the pointer farther down?</p>",
+        "id": 272834749,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645549710
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Passing.20by.20const.20ref/near/272834749\">said</a>:</p>\n<blockquote>\n<p>So for wasm, does the \"C\" calling convention just always use pointers? Also, this means that the wasm backend already doesn't copy data if it passes a struct from one function to the next, just sends the pointer farther down?</p>\n</blockquote>\n<p>That's right, yes.</p>",
+        "id": 272839677,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1645551744
+    },
+    {
+        "content": "<p>It always uses pointers for data structures.</p>",
+        "id": 272839868,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1645551837
+    },
+    {
+        "content": "<p>Yeah, so this all just doesn't effect wasm, I guess.</p>",
+        "id": 272853801,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645557719
+    },
+    {
+        "content": "<p>In x86-64, if a function is passed a 4 element struct and it then passes the struct to another function, it has to copy the struct to a new stack offset. So switching to const ref is important. I assume everything in wasm is already pointers because registers and some memory management are abstracted away.</p>",
+        "id": 272854201,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645557874
+    },
+    {
+        "content": "<p>for LLVM this should be mitigated by inlining, but is probably still worth looking at</p>",
+        "id": 272854883,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1645558251
+    },
+    {
+        "content": "<p>question is though: at what level of abstraction do we want to think about this? in the mono IR, or in the backends themselves?</p>",
+        "id": 272854963,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1645558295
+    },
+    {
+        "content": "<p>wasm already does its own thing, so that makes it a bit weird to put it into mono IR</p>",
+        "id": 272855000,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1645558316
+    },
+    {
+        "content": "<p>inlining will help, but will not solve all problems, especially with a large model (or subsets of them) are threaded through most functions. It is unlikely all of the functions will be inlined and then some calls will lead to copying.</p>",
+        "id": 272857076,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645559333
+    },
+    {
+        "content": "<p>As for IR or not, I think it should probably be in the IR.<br>\nI think it needs to be explicit because the platform needs to know about it in order to pass args correctly.</p>",
+        "id": 272857337,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645559445
+    },
+    {
+        "content": "<p>If struct greater than 2 usize, platforms must pass by constant ref.</p>",
+        "id": 272857380,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645559478
+    },
+    {
+        "content": "<p>Also, if the platform is passing a value, even in wasm (to my understanding), the host might still need to make a copy of the value and then pass it in, rather than just passing the pointer to the existing value.</p>",
+        "id": 272857623,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645559598
+    },
+    {
+        "content": "<p>The issue is that const values that are function args can still be modified and a copy will be required if the host wants to use or modify the value later.</p>",
+        "id": 272857675,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645559626
+    },
+    {
+        "content": "<p>I don't see why anything other than the copy needs to be explicit in the IR</p>",
+        "id": 272873280,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1645567647
+    },
+    {
+        "content": "<p>Checking if something is bigger than 2 usize can be done anywhere. I'm already doing it in the wasm backend.</p>",
+        "id": 272873368,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1645567687
+    },
+    {
+        "content": "<p>From a certain point of view it's already in the IR because the Layout tells you the size of the structure so you have the info you need.</p>",
+        "id": 272873526,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1645567783
+    },
+    {
+        "content": "<p>That is true. I guess it is just important that the platform author has an explicit rule to follow when passing data to Roc (also builtins from roc to zig). Otherwise, internally, all backends can technically make up whatever calling conventions they want.</p>",
+        "id": 272876962,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645569626
+    },
+    {
+        "content": "<p>I think that I would prefer something in the IR because it will specify consistency across the backends and help to ensure a platform won't be messed up on a specific backend. That being said, the explicitness could just be a bool flag or another enum value with the same data (<code>Struct</code> and <code>StructRef</code>. I don' think we need to explicitly add pointer loading and such. So for the wasm backend, it actually wouldn't change anything since everything is already references.</p>",
+        "id": 272877767,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645570171
+    },
+    {
+        "content": "<p>On the flip side, in some situations, not having the explicit IR could enable a tiny bit more performance optimizations. For example, with avx2, it is technically possible to pass 4 doubles by value in a single register using the <code>__m256d</code> type.</p>",
+        "id": 272878477,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645570564
+    },
+    {
+        "content": "<p>Not sure if Roc would or could ever take advantage of that, but maybe.</p>",
+        "id": 272878515,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1645570591
+    }
+]

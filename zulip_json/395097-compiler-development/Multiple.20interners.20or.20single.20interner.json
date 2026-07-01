@@ -1,0 +1,458 @@
+[
+    {
+        "content": "<p>Currently the new compiler has multiple interners based roughly on the outline Agus made for the Rust-based compiler's <code>specialize_types</code> pass. There's an array of tag_names, field_names, idents, etc. I thought that copying this would be a good pattern to help get the type safety that we got in Rust, e.g. an <code>Index&lt;TagName&gt;</code> in Rust can only be used for looking up tag names, mirrored in the Zig rewrite with a <code>TagName.Idx</code>.</p>\n<p>However, I'm not sure if this is the right move. For one, the interners for everything but string literals are deduplicated, meaning we can't deduplicate variables names and record field names with the same names, taking more space. More importantly, if we want to look up a name, we can only look for things with that intern kind, meaning we can't do constant-time lookup of a tag name using a type name. That shouldn't be too much of a problem though: the only place I think the same token represents two different interned types is name punning, AKA records like <code>{ field_name }</code>. That just means we'd need to convert that to <code>{ field_name: field_name }</code> during desugaring and potentially copy the name <code>field_name</code> from the record field interner to the ident one.</p>\n<p>So with that in mind, I'm not seeing one option as <em>definitely better</em> but I'd rather have type safety than a little space conservation.</p>\n<p>For the parsing team, would there be any problems with interning into different interners based on the token type? I presume we'd be good to do that. If so, I'll probably make a change to break into more groups of types, e.g. one for module names, one for type names, etc.</p>",
+        "id": 499161465,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739343755
+    },
+    {
+        "content": "<p>And to those outside of <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> and <span class=\"user-mention\" data-user-id=\"781658\">@Anthony Bullard</span> , do you think there's a strong reason to prefer one or multiple interners?</p>",
+        "id": 499161544,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739343804
+    },
+    {
+        "content": "<p>My thinking right now is to have interning happen in canonicalization, not parsing</p>",
+        "id": 499162045,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344048
+    },
+    {
+        "content": "<p>Hmm. Anthony suggested otherwise, but it'd be okay</p>",
+        "id": 499162137,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344087
+    },
+    {
+        "content": "<p>I don't think there's a strong benefit to doing it earlier, since the ast needs to be carrying around references/indices into the text anyway - and if that's all it's carrying around we can maybe keep the ast smaller.</p>",
+        "id": 499162218,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344147
+    },
+    {
+        "content": "<p>The benefit of doing it during parsing is that it's an O(n) pass over the data which allows us to do mostly constant time string comparisons (outside of checking imports) and also carry around less data starting with canonicalization</p>",
+        "id": 499162238,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344165
+    },
+    {
+        "content": "<p>I guess it's a question if dropping the full text earlier during compilation would be considered beneficial</p>",
+        "id": 499162344,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344218
+    },
+    {
+        "content": "<p>I definitely buy constant time string comparisons as a benefit</p>",
+        "id": 499162361,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344233
+    },
+    {
+        "content": "<p>That happens as soon as interning happens</p>",
+        "id": 499162386,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344251
+    },
+    {
+        "content": "<p>... but I don't want the parser to have to talk to some complicated multithreaded interning system</p>",
+        "id": 499162397,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344259
+    },
+    {
+        "content": "<p>It's not multithreaded</p>",
+        "id": 499162413,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344267
+    },
+    {
+        "content": "<p>That's going to slow down the parser</p>",
+        "id": 499162414,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344267
+    },
+    {
+        "content": "<p>There's an interner per module</p>",
+        "id": 499162427,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344272
+    },
+    {
+        "content": "<p>Ahhh; ok; that's somewhat less concerning</p>",
+        "id": 499162453,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344286
+    },
+    {
+        "content": "<p>Specifically one of these: <a href=\"https://github.com/roc-lang/roc/blob/main/src/base/ModuleEnv.zig\">https://github.com/roc-lang/roc/blob/main/src/base/ModuleEnv.zig</a></p>",
+        "id": 499162459,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344288
+    },
+    {
+        "content": "<p>The other thought is that we could check for ident attributes and problems in the same pass as we tokenize, or at least as we parse</p>",
+        "id": 499162559,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344328
+    },
+    {
+        "content": "<p>Still, I'd rather have more work in can than in parsing (supposing we're just shifting it around, and not making lots more/less work). That way, things like formatting can be faster (very common to do across a whole file or even whole codebase!)</p>",
+        "id": 499162598,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344349
+    },
+    {
+        "content": "<p>Because if we intern during canonicalization, we have to read over each ident in full (not just the starting and ending chars) to check for warning info, like multiple underscores in a row or uppercase letters in a lowercase ident (we want to warn on camelCase)</p>",
+        "id": 499162648,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344380
+    },
+    {
+        "content": "<p>You're right, this would make formatting faster...</p>",
+        "id": 499162704,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344413
+    },
+    {
+        "content": "<p>(re)building an ast after saving a file, too</p>",
+        "id": 499162783,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344449
+    },
+    {
+        "content": "<p>It'd be nice to have some estimate whether interning during parsing would be faster for overall compilation time</p>",
+        "id": 499162817,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344466
+    },
+    {
+        "content": "<p>Because if it's not, then it should <em>definitely</em> be done during can</p>",
+        "id": 499162838,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344482
+    },
+    {
+        "content": "<p>I only suggested it because I thought it would speed up overall compilation, even if it makes formatting slower</p>",
+        "id": 499162879,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344501
+    },
+    {
+        "content": "<p>If anything, I'd intern during tokenization rather than parsing</p>",
+        "id": 499162898,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344510
+    },
+    {
+        "content": "<p>Yeah, that was my thought too</p>",
+        "id": 499162919,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344519
+    },
+    {
+        "content": "<p>That way the parser never has to look at the source</p>",
+        "id": 499162927,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344526
+    },
+    {
+        "content": "<p>yep</p>",
+        "id": 499162938,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344531
+    },
+    {
+        "content": "<p>(just the tokens)</p>",
+        "id": 499162939,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344531
+    },
+    {
+        "content": "<p>I'd still like to push that later, until/unless we have some evidence to the contrary</p>",
+        "id": 499162982,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739344557
+    },
+    {
+        "content": "<p>A reasonable decision</p>",
+        "id": 499163052,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344574
+    },
+    {
+        "content": "<p>Not sure how to get that evidence</p>",
+        "id": 499163068,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344580
+    },
+    {
+        "content": "<p>Let me ask in a separate thread about regions if you have a plan for those</p>",
+        "id": 499163219,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344679
+    },
+    {
+        "content": "<p>For other readers, if you have an opinion on the root question of this thread, I'd still love to hear it</p>",
+        "id": 499163590,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739344827
+    },
+    {
+        "content": "<p>if we're doing <code>roc check</code>, doing it during tokenization makes the most sense because the whole string will be in L1 cache right then</p>",
+        "id": 499227981,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739365740
+    },
+    {
+        "content": "<p>if we're doing <code>roc format</code>, not doing it at all makes the most sense <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 499228015,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739365750
+    },
+    {
+        "content": "<p>deduplicating string literals only comes up if we're doing <code>roc build</code> and not using the interpreter as the backend</p>",
+        "id": 499228434,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739365843
+    },
+    {
+        "content": "<p>I think doing it per-module instead of globally makes the most sense</p>",
+        "id": 499233190,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739366951
+    },
+    {
+        "content": "<p>it avoids contention when we get to parallelizing things, because the interns are only used by the current module</p>",
+        "id": 499233361,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739366989
+    },
+    {
+        "content": "<p>(or if they're being used by other modules it's because we're translating IDs from one module to another, but at that point they aren't being written to)</p>",
+        "id": 499233759,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739367089
+    },
+    {
+        "content": "<p>I think we'll also need to serialize them to disk as part of caching, which of course we want to do on a per-module basis instead of globally</p>",
+        "id": 499234205,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739367196
+    },
+    {
+        "content": "<p>also having them per-module makes it easier for the language server to manage their memory, since otherwise we'd need to refcount each individual interned string to know when it was safe to free, compared to just resetting a particular module's arena and redoing parsing etc</p>",
+        "id": 499234716,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739367324
+    },
+    {
+        "content": "<p>oh and also per-module means there's more cache coherence, so fewer cache misses when using interns because there aren't a bunch of gaps from indentifiers that aren't even used in the module and won't come up</p>",
+        "id": 499235104,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739367414
+    },
+    {
+        "content": "<p>as an aside, I think there are some potentially very interesting ways we can reduce memory usage in interns by packing them into size and capitalization categories and using simd to find matches, but all of that is definitely not stuff we should do for 0.1.0 <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 499237803,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739368052
+    },
+    {
+        "content": "<p>Ok, if I’m reading things right, the lexer for Carbon (for which I know that team has been very performance-focused), does ident interning. Here: <a href=\"https://github.com/carbon-language/carbon-lang/blob/trunk/toolchain/lex/lex.cpp\">https://github.com/carbon-language/carbon-lang/blob/trunk/toolchain/lex/lex.cpp</a></p>",
+        "id": 499257974,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739373019
+    },
+    {
+        "content": "<p>That’s good enough reason to me</p>",
+        "id": 499258056,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739373041
+    },
+    {
+        "content": "<p>At least we can be relatively confident it’s not a serious perf problem</p>",
+        "id": 499258131,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739373063
+    },
+    {
+        "content": "<p>yeah and in the future we can potentially have <code>roc format</code> tell it to use a \"null interner\" which just returns 0 for every ident (or something) because we know it's never going to look them up again</p>",
+        "id": 499261637,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739373966
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Multiple.20interners.20or.20single.20interner/near/499228434\">said</a>:</p>\n<blockquote>\n<p>deduplicating string literals only comes up if we're doing <code>roc build</code> and not using the interpreter as the backend</p>\n</blockquote>\n<p>During canonicalization, we can check if the same variable/type/tag/etc. name is used while scope checking in constant time if all strings are interned, so I think it's beneficial before interpreting too</p>",
+        "id": 499275826,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739377434
+    },
+    {
+        "content": "<p>I mean string literals specifically</p>",
+        "id": 499280546,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378689
+    },
+    {
+        "content": "<p>like <code>\"foo\"</code> in the Roc code <code>cli_arg_name = \"foo\"</code></p>",
+        "id": 499280585,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378699
+    },
+    {
+        "content": "<p>as opposed to identifier names in code</p>",
+        "id": 499280629,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378710
+    },
+    {
+        "content": "<p>Ah, do we need to unique those?</p>",
+        "id": 499280725,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739378743
+    },
+    {
+        "content": "<p>we want to deduplicate those when compiling to a static binary, so that we don't put the same string in the binary's readonly section more than once</p>",
+        "id": 499280730,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378745
+    },
+    {
+        "content": "<p>there's no benefit to having duplicates since they're readonly</p>",
+        "id": 499280774,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378760
+    },
+    {
+        "content": "<p>Ah true; but I would assume that happens later</p>",
+        "id": 499280827,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739378764
+    },
+    {
+        "content": "<p>yeah that's what I mean</p>",
+        "id": 499280852,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378771
+    },
+    {
+        "content": "<p>we only need to dedupe those if we're building a binary</p>",
+        "id": 499280874,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378779
+    },
+    {
+        "content": "<p>but <code>check</code> and <code>format</code> have no reason to do that work</p>",
+        "id": 499280891,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378787
+    },
+    {
+        "content": "<p>(and those strings can be pretty big!)</p>",
+        "id": 499280929,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378799
+    },
+    {
+        "content": "<p>Yep, those are not deduped right now</p>",
+        "id": 499281023,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739378830
+    },
+    {
+        "content": "<p>Because big and unique</p>",
+        "id": 499281041,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739378835
+    },
+    {
+        "content": "<p>yeah, so I don't think we should use interns for those (at least at this stage)</p>",
+        "id": 499281073,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378843
+    },
+    {
+        "content": "<p>better to leave that for a later pass</p>",
+        "id": 499281107,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378855
+    },
+    {
+        "content": "<p>We still put them in a big array to keep IR nodes smaller</p>",
+        "id": 499281183,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739378881
+    },
+    {
+        "content": "<p>Not sure if you think that's actively a bad idea</p>",
+        "id": 499281270,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739378897
+    },
+    {
+        "content": "<p>oh I think we can just reference original source range</p>",
+        "id": 499281289,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378901
+    },
+    {
+        "content": "<p>Oh, that's better</p>",
+        "id": 499281321,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739378908
+    },
+    {
+        "content": "<p>I'll hook that up</p>",
+        "id": 499281385,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739378930
+    },
+    {
+        "content": "<p>that does mean the interpreter has to redo a bit of work</p>",
+        "id": 499281421,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378941
+    },
+    {
+        "content": "<p>to do things like resolve <code>\\</code> escapes</p>",
+        "id": 499281440,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378947
+    },
+    {
+        "content": "<p>which maybe isn't worth it</p>",
+        "id": 499281555,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739378977
+    },
+    {
+        "content": "<p>could always have 2 different IR nodes, one for like \"literal with no escapes\" that just stores a source code range and another for \"escaped string literal\" which points to the post-processed one</p>",
+        "id": 499281707,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739379013
+    },
+    {
+        "content": "<p>I guess that's okay complexity to eat today since we'd only need to deal with this during check</p>",
+        "id": 499281927,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739379072
+    },
+    {
+        "content": "<p>The later phases would get back a normal string</p>",
+        "id": 499281978,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739379087
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Multiple.20interners.20or.20single.20interner/near/499280730\">said</a>:</p>\n<blockquote>\n<p>we want to deduplicate those when compiling to a static binary, so that we don't put the same string in the binary's readonly section more than once</p>\n</blockquote>\n<p>I think we can trivially do that when generating llvm ir. We generate a single ir module so we can literally keep a map of seen strings if we want.</p>",
+        "id": 499349874,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404005
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Multiple.20interners.20or.20single.20interner/near/499281421\">said</a>:</p>\n<blockquote>\n<p>that does mean the interpreter has to redo a bit of work</p>\n</blockquote>\n<p>I guess that would mean we have to keep all source in memory which doesn't sound good. Or the interpreter has to re-open every file to pull all the strings, which sounds kinda strange, but ok.</p>",
+        "id": 499350029,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404098
+    }
+]

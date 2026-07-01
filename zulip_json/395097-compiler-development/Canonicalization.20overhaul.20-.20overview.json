@@ -1,0 +1,566 @@
+[
+    {
+        "content": "<p>For those of you that don't know, I am working on reworking the canonicalization code in <code>roc_can</code> for a few reasons:</p>\n<ul>\n<li>We have lots of language changes that need to be implemented, and it'll be faster to just implement those all in one go instead of incrementally. I'm talking:<ul>\n<li>static dispatch</li>\n<li>removing tracking of lambda sets/captures (this will be done later)</li>\n<li>setting up for the rest of the new compiler pipeline</li>\n<li>and more...</li>\n</ul>\n</li>\n<li>We want to support caching by making canonicalization deterministic</li>\n<li>It's some of the oldest code in the compiler. It generally works pretty well, but it could use some love</li>\n</ul>\n<p>In order to achieve these goals, the plan is to break <code>roc_can</code> into two new crates:</p>\n<ul>\n<li><code>roc_can_solo</code>: Canonicalize a module pretending that no other modules exist. Imports are treated as things that might or might not exist, stuff like that. This will be doing the majority of the work in canonicalization. When this is finished, its output will be 100% determined by the source code, independent of where it is in the filesystem. That way, we can cache this output keyed by a hash of the files contents, very simple and performant.</li>\n<li><code>roc_can_combine</code>: Take the outputs of the <code>roc_can_solo</code> crate and stitch them together, including:<ul>\n<li>resolving imports</li>\n<li>resolving ingested files (e.g. <code>import \"path/to/file.json\" as data : List U8</code>)</li>\n<li>resolving aliases</li>\n<li>etc.</li>\n</ul>\n</li>\n</ul>\n<p>Once <code>roc_can_combine</code> is finished, we can pass the results to the type checker as before. In the future, we can even do partial typechecking on the values in each solo module, which should not even require that many changes to <code>roc_constrain</code>, but I don't know how feasible that is.</p>\n<p>Some nice things that will come out of this change:</p>\n<ul>\n<li>This new pair of cans should be much more robust, as I plan to never crash. As was suggested by Richard and used by Agus in the new monomorphization code, we can make a new type of problem be a <code>CompilerProblem</code>, and all places where we \"need to crash\" can just use one of those as a runtime error-generating AST node. This is more threading in the compiler than before, but it's way safer.</li>\n<li>We are now putting everything into bump allocators, and will eventually ensure we don't do global allocations by making these crates <code>#![no_std]</code>, which makes that impossible. By having all canonicalization info under the same bump allocator, we get caching for free, not to mention a good performance improvement!</li>\n<li>I'm trying to put all work post-parsing into these crates, meaning that much less of the work is in <code>load_internal</code>. This should make canonicalization more modular than before.</li>\n</ul>\n<p>The plan for implementing this change comes down to me understanding the final outcome's shape well enough to implement it in small, peer-reviewable chunks. To that end, I'm working in <a href=\"https://github.com/smores56/roc/tree/can-two\">this branch of my fork</a> with a machete to roughly shape a copy of <code>roc_can</code> into the right shape. At the same time, I have a markdown document on my machine where I'm writing down what the \"plain English\" recipe for a solo module canonicalization, and then a combined one, will look like. Once I have those together, I'll start making PRs!</p>\n<p>Feel free to ask any questions.</p>",
+        "id": 493464022,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736807564
+    },
+    {
+        "content": "<p>Awesome!!!</p>",
+        "id": 493464494,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736807711
+    },
+    {
+        "content": "<p>Think I'll take a pause on trying to resolve <code>can</code> panics for the moment then</p>",
+        "id": 493464533,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736807724
+    },
+    {
+        "content": "<p>This is really my main focus when working on Roc at the moment, but I am just one person. If anyone is concerned by the likely slowdown to implementing static dispatch in a big bundle with all of these other changes, I understand and partly share your concern. Since this doesn't immediately slot into the rest of the compiler plan, it might be a couple months for us to have static dispatch available. So if someone really wants it now, I'd be happy to talk about how we can parallelize this work</p>",
+        "id": 493465491,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736808042
+    },
+    {
+        "content": "<p>Otherwise, I'm happy to do this myself. It's really so enriching to get to put blood, sweat, and tears into what will be the best language someday</p>",
+        "id": 493465577,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736808084
+    },
+    {
+        "content": "<p>Ah man, you're taking all the fun jobs <span aria-label=\"smiling face\" class=\"emoji emoji-263a\" role=\"img\" title=\"smiling face\">:smiling_face:</span></p>",
+        "id": 493466715,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736808504
+    },
+    {
+        "content": "<p>I volunteer to help find all the bugs you leave behind</p>",
+        "id": 493466833,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736808564
+    },
+    {
+        "content": "<p>Oh yeah, I forgot lmao. When I was writing the <code>snake_case</code> conversion, I wanted to break a test intentionally and write <code>panic!(\"Luke, you're my only hope\")</code> or something.</p>",
+        "id": 493467060,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736808665
+    },
+    {
+        "content": "<p>I'll make sure to do that for this next set of PRs just for you</p>",
+        "id": 493467085,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736808679
+    },
+    {
+        "content": "<blockquote>\n<p>We have lots of language changes that need to be implemented, and it'll be faster to just implement those all in one go instead of incrementally. I'm talking:</p>\n<ul>\n<li>static dispatch</li>\n<li>removing tracking of lambda sets/captures (this will be done later)</li>\n<li>setting up for the rest of the new compiler pipeline</li>\n<li>and more...</li>\n</ul>\n</blockquote>\n<p>These are not like the syntax changes, it seems like difficult bugs are a real possibility here. For debugging it can help a lot if you only need to consider a small set of changes. Are you sure this will be faster if you include potential debug time for issues that may pop up from the entire Roc ecosystem?</p>",
+        "id": 493552040,
+        "sender_full_name": "Anton",
+        "timestamp": 1736849752
+    },
+    {
+        "content": "<p>The plan is not to make one giant PR with all changes included, but to make the changes incrementally on a new canonicalization code</p>",
+        "id": 493552519,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736849942
+    },
+    {
+        "content": "<p>I just have no idea what it'll look like yet. What change do I make first?</p>",
+        "id": 493552634,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736849990
+    },
+    {
+        "content": "<p>I don't know how to make these changes in steps. One benefit to this approach is that I get to ignore a lot of features to begin with. I'm starting without tracking lambda sets, without module params, etc.</p>",
+        "id": 493552872,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850074
+    },
+    {
+        "content": "<blockquote>\n<p>changes incrementally on a new canonicalization code</p>\n</blockquote>\n<p>Can you explain this in more detail?</p>",
+        "id": 493552962,
+        "sender_full_name": "Anton",
+        "timestamp": 1736850115
+    },
+    {
+        "content": "<p>If someone would know how to do this without such a nuclear option that wouldnt take 6 months, it'd be great to hear</p>",
+        "id": 493552970,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850120
+    },
+    {
+        "content": "<p>I'm planning on modelling my changes on the strategy Agus has been taking with the new monomorphization code, more or less</p>",
+        "id": 493553133,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850179
+    },
+    {
+        "content": "<p>Start by outlining the end shape, and leaving a whole lot of \"implement this and TODO\" in places where it's obvious what needs to happen</p>",
+        "id": 493553215,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850223
+    },
+    {
+        "content": "<p>That can help us start with PRs that other people can understand</p>",
+        "id": 493553323,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850251
+    },
+    {
+        "content": "<p>To help with the robustness of this, I think a very important step will also be defining a testing strategy for all of these features</p>",
+        "id": 493553383,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850279
+    },
+    {
+        "content": "<p>Makes sense!</p>",
+        "id": 493553500,
+        "sender_full_name": "Anton",
+        "timestamp": 1736850327
+    },
+    {
+        "content": "<p>I've not dug too deeply into that side of things, but the canonicalization testing today is mostly testing individual warnings here or there, and a lot of desugaring testing.</p>",
+        "id": 493553679,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850389
+    },
+    {
+        "content": "<p>We'll need to figure that out as well. My hope is that we can do more unit testing on \"just canonicalize this alias\", not \"create a whole module with aliases and check the problems that arise\"</p>",
+        "id": 493553804,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850437
+    },
+    {
+        "content": "<p>That should make it more readable, and more modular</p>",
+        "id": 493553829,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850447
+    },
+    {
+        "content": "<p>Probably once I figure out the overall plan, I'll try to write it up in more detail and jump on a call with someone. That will give me an opportunity to make sure that there isn't a big hole in it somewhere.</p>",
+        "id": 493553982,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850494
+    },
+    {
+        "content": "<p>I think the main steps before I can start drafting an outline for PR are:</p>\n<ul>\n<li>make sure that <code>var</code> and shadowing works with the new scope plan</li>\n<li>make sure that type checking for methods (and *.func's, what should we call these?) will work</li>\n<li>Figure out if we should have a separate IR for <code>roc_can_solo</code> and <code>roc_can_combine</code></li>\n<li>Figure out if we can/should do typechecking after solo canonicalization, or if we can only do it with the combined and canonicalized modules</li>\n<li>And maybe check the plan for handling builtins in a solo context, but that's not really blocking</li>\n</ul>",
+        "id": 493554734,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736850742
+    },
+    {
+        "content": "<blockquote>\n<p>If someone would know how to do this without such a nuclear option that wouldnt take 6 months, it'd be great to hear</p>\n</blockquote>\n<p>I've been thinking about this.</p>\n<p>We will be in a position with two Can stages, the current (legacy) one, and the (new) one being developed. Both of these take the same input, Parser AST... and eventually produce the same output, Mono IR?? right? </p>\n<p>Can we wire up a test harness that can feed the same input in, and confirm it's getting the same output? </p>\n<p>Starting with the most basic of expressions, but over time as the new Can implementation matures we can add tests and eventually be in a position where we have feature parity.</p>",
+        "id": 493684213,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736894973
+    },
+    {
+        "content": "<p>Or maybe there is a way to use the fuzzer, and incrementally add supported AST nodes</p>",
+        "id": 493684355,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736895052
+    },
+    {
+        "content": "<p>The same output won't come out because of a number of changes. Static dispatch for instance</p>",
+        "id": 493684415,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895091
+    },
+    {
+        "content": "<p>This won't catch all the new features... but maybe it helps get us something we can use sooner</p>",
+        "id": 493684437,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736895109
+    },
+    {
+        "content": "<p>And I'm avoiding supporting abilities</p>",
+        "id": 493684446,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895111
+    },
+    {
+        "content": "<p>But yes</p>",
+        "id": 493684449,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895114
+    },
+    {
+        "content": "<p>For those things in common, it should output the same Mono IR</p>",
+        "id": 493684519,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895138
+    },
+    {
+        "content": "<p>Well...</p>",
+        "id": 493684535,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895146
+    },
+    {
+        "content": "<p>Lambda sets are getting built differently as well</p>",
+        "id": 493684550,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895164
+    },
+    {
+        "content": "<p>In that they're supposed to be built later in the compiler</p>",
+        "id": 493684593,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895187
+    },
+    {
+        "content": "<p>Even without Abilities and Lambda sets... we could still cover a lot of the AST though</p>",
+        "id": 493684604,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736895192
+    },
+    {
+        "content": "<p>Probably</p>",
+        "id": 493684625,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895210
+    },
+    {
+        "content": "<p>Worth a try to make sure we're on the right track</p>",
+        "id": 493684644,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895223
+    },
+    {
+        "content": "<p>If we had the new Can module (even just stubbed out) <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> might be able to help with the test harness</p>",
+        "id": 493684903,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736895361
+    },
+    {
+        "content": "<p>Sure!</p>",
+        "id": 493684991,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895390
+    },
+    {
+        "content": "<p>I think I'd be able to get something in the next few weeks as a stub</p>",
+        "id": 493685016,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736895407
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"461444\">Sam Mohr</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview/near/493684446\">said</a>:</p>\n<blockquote>\n<p>And I'm avoiding supporting abilities</p>\n</blockquote>\n<p>Is there a way we could rip this out of current Can, and make it another pass to the side, or move it to the end or something? Basically... could we do something now so we can keep the current impl and then it could be compatible with the new Can? </p>\n<p>And I guess lambda sets are in the same boat</p>",
+        "id": 493685649,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736895747
+    },
+    {
+        "content": "<p>In my professional experience, it can be very very tempting to do a rewrite _and_ make significant functionality changes at the same time, but it's almost always a terrible idea</p>",
+        "id": 493685831,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736895856
+    },
+    {
+        "content": "<p>Yeah, I'm trying to find ways we can keep everything online and enable an incremental approach.</p>",
+        "id": 493685942,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736895939
+    },
+    {
+        "content": "<p>That's why I think the first step is to try to understand the end state, and then write down a plan that outlines what things should look like at the end state, and then break that into incremental changes as much as is feasible</p>",
+        "id": 493686082,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736896009
+    },
+    {
+        "content": "<p>It's also ok to start and change course along the way. More of a discovery or R&amp;D type approach than an up front engineering effort</p>",
+        "id": 493686202,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736896079
+    },
+    {
+        "content": "<p>Yes, I'd call this the R&amp;D stage for sure</p>",
+        "id": 493686259,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736896097
+    },
+    {
+        "content": "<p>An idea: between <code>roc_can_solo</code> and <code>roc_can_combine</code>, the latter is basically what we do today, but separated. We can maybe start by making a very small <code>roc_can_solo</code> that only does a little bit of work, and then passes everything else to the old <code>roc_can</code></p>",
+        "id": 493686289,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736896116
+    },
+    {
+        "content": "<p>And eventually we move as much as possible to <code>roc_can_solo</code> until it all works</p>",
+        "id": 493686337,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736896153
+    },
+    {
+        "content": "<p>So step two would be to figure out the caching mechanism and roughly set that up</p>",
+        "id": 493686369,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736896173
+    },
+    {
+        "content": "<p>And step one is to do the prep work of making <code>roc_can</code> ready for this work</p>",
+        "id": 493686400,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736896199
+    },
+    {
+        "content": "<p>Meaning moving to use arenas as much as possible, changing names of things, using <code>CompilerProblem</code>s where possible</p>",
+        "id": 493686490,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736896228
+    },
+    {
+        "content": "<p>What if we did something like:</p>\n<ul>\n<li>Introduce a new \"desugared AST\" type, which initially looks a lot like the current AST</li>\n<li>Start caching that</li>\n<li>Incrementally evolve from there as necessary</li>\n</ul>",
+        "id": 493686493,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736896228
+    },
+    {
+        "content": "<p>Yeah, so for anything low technical maturity/R&amp;D I would highly recommend taking a more agile/incremental approach -- keeping everything online and running ops normal. </p>\n<p>I think the biggest risk here is the unkown-unkowns (sorry for the cliche's).</p>",
+        "id": 493686511,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736896242
+    },
+    {
+        "content": "<p>Yeah, Josh's suggestion is basically what I was expecting. I can try it</p>",
+        "id": 493686556,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736896271
+    },
+    {
+        "content": "<p>The subtle difference is that I think that <code>roc_can_solo</code> and <code>roc_can_combine</code> will use the same IR</p>",
+        "id": 493686670,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736896333
+    },
+    {
+        "content": "<p>There's no reason that can't be the case eventually</p>",
+        "id": 493686864,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736896478
+    },
+    {
+        "content": "<p>Well, one option is for the new <code>desugared</code> IR to be a <code>roc_can_solo::Expr</code> that looks just like desugared IR to start with, but over time we change it bit by bit, and once <code>roc_can_solo::Expr</code> and <code>roc_can_combine::Expr</code> are the same thing, we can use <code>roc_can_solo::Expr</code></p>",
+        "id": 493686874,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736896484
+    },
+    {
+        "content": "<p>I would try to get there incrementally tho</p>",
+        "id": 493686876,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1736896485
+    },
+    {
+        "content": "<p>so now that the Frontend Masters stuff is wrapped up, I have a backlog of things I should be doing...but what I'm fired up to do instead is to write some Zig canonicalization code <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 511704956,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1744393687
+    },
+    {
+        "content": "<p>what's the current status of that? I have no idea how far along things are!</p>",
+        "id": 511704995,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1744393712
+    },
+    {
+        "content": "<p>I'm assuming <span class=\"user-mention\" data-user-id=\"461444\">@Sam Mohr</span> might know?</p>",
+        "id": 511705031,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1744393727
+    },
+    {
+        "content": "<p>I have some local changes to implement sexprs for the can ir, planning on submitting a pr “soon”</p>",
+        "id": 511707761,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1744394685
+    },
+    {
+        "content": "<p>I'd love to see Richard working on it! I don't have that much work done, but I can put it in a branch and see what comes out.</p>\n<p>If it's not already obvious, I've been burned out on Roc development for like a month and I don't know how to fix it. I was hoping taking time to play games and not think about it would work, but nothing seems to be working... Life outside has been tough. I'll give an update soon when I have the energy to come back.</p>",
+        "id": 511715172,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1744397569
+    },
+    {
+        "content": "<p>So yes, thank you Richard for picking up my slack!</p>",
+        "id": 511715198,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1744397582
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"461444\">Sam Mohr</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Canonicalization.20overhaul.20-.20overview/near/511715172\">said</a>:</p>\n<blockquote>\n<p>If it's not already obvious, I've been burned out on Roc development for like a month and I don't know how to fix it. I was hoping taking time to play games and not think about it would work, but nothing seems to be working... Life outside has been tough.</p>\n</blockquote>\n<p>This is normal and something that might just take time or the right break/inspiration. My time invest in roc significantly varies month by month. Often times, it just takes a while to revive. Generally, certain things re-energize and inspire (like community events and longer vacations eg holidays).</p>",
+        "id": 511719620,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1744399253
+    },
+    {
+        "content": "<p>Take the time you need and don't worry about roc. It will keep moving and it will still be here when you get back.</p>",
+        "id": 511719747,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1744399285
+    },
+    {
+        "content": "<p>We will miss your presence in the chat, hope to see talk to you soon buddy</p>",
+        "id": 511720871,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1744399785
+    },
+    {
+        "content": "<p>Thanks Brendan</p>",
+        "id": 511720892,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1744399796
+    },
+    {
+        "content": "<p>Yeah, maybe when work chills out</p>",
+        "id": 511720992,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1744399821
+    },
+    {
+        "content": "<p>yeah super normal feeling... please don't feel bad about it! You're welcome whenever you're feeling it, just drop in and we'll catch you up on whatever's been happening <span aria-label=\"heart\" class=\"emoji emoji-2764\" role=\"img\" title=\"heart\">:heart:</span></p>",
+        "id": 511739761,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1744407741
+    },
+    {
+        "content": "<p>and thanks for all your awesome contributions so far!</p>",
+        "id": 511739777,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1744407753
+    },
+    {
+        "content": "<p>also <span class=\"user-mention\" data-user-id=\"461444\">@Sam Mohr</span> I'm happy to start from a blank slate, so no need to push a WIP branch unless you really want to <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 511742707,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1744409490
+    },
+    {
+        "content": "<blockquote>\n<p>Life outside has been tough.</p>\n</blockquote>\n<p>It pains me to hear that, I hope things get better <span aria-label=\"hugging\" class=\"emoji emoji-1fac2\" role=\"img\" title=\"hugging\">:hugging:</span></p>",
+        "id": 511789624,
+        "sender_full_name": "Anton",
+        "timestamp": 1744445472
+    },
+    {
+        "content": "<p>Adding sexpr formatting to the can IR: <a href=\"https://github.com/roc-lang/roc/pull/7737\">https://github.com/roc-lang/roc/pull/7737</a><br>\nNote that this is largely untested &amp; doesn't get hit (yet)</p>",
+        "id": 511854490,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1744501735
+    },
+    {
+        "content": "<p>I’m constantly impressed by how mature and emotionally healthy the Roc community is <span aria-label=\"heart\" class=\"emoji emoji-2764\" role=\"img\" title=\"heart\">:heart:</span></p>",
+        "id": 511860132,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1744506853
+    },
+    {
+        "content": "<p>Yeah, it's really nice to see</p>",
+        "id": 511945562,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1744580842
+    },
+    {
+        "content": "<p>There's a selection bias in this group for people that are willing to give their free time for no pay to improve the state of programming</p>",
+        "id": 511945643,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1744580885
+    },
+    {
+        "content": "<p>So how surprised can we be?</p>",
+        "id": 511945651,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1744580892
+    },
+    {
+        "content": "<p>I wonder if anyone has made any progress here?</p>",
+        "id": 518844428,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747507896
+    },
+    {
+        "content": "<p>I'd really love to do enough to get a Hello World program to be able to run (in an interpreter)</p>",
+        "id": 518844503,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747507940
+    },
+    {
+        "content": "<p>I know this PR is moving, but not sure how much else has moved: <a href=\"https://github.com/roc-lang/roc/pull/7772\">https://github.com/roc-lang/roc/pull/7772</a></p>",
+        "id": 518844647,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747508076
+    },
+    {
+        "content": "<p>I'd love to sit with someone as they review this and learn how to even make it through it.  It's just too much code in an area I am not an expert in for me to review with any sort of authority at the moment</p>",
+        "id": 518844831,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747508229
+    },
+    {
+        "content": "<p>I've implemented a few simple type checkers, and unification once before (but not to completion).  But this is a LOT</p>",
+        "id": 518844879,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747508262
+    },
+    {
+        "content": "<p>Haha, this is an area of the compiler I tend to avoid. I don't feel like it is that complicated, but I have never felt like groking all the type checking pieces.</p>",
+        "id": 518845079,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747508428
+    },
+    {
+        "content": "<p>yeah I took a bunch of notes about that PR on the plane (no wifi, couldn't comment) - overall looks good, I just want to leave some comments</p>",
+        "id": 518846361,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747509344
+    },
+    {
+        "content": "<p>but yeah I'm planning to merge it this weekend!</p>",
+        "id": 518846372,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747509357
+    },
+    {
+        "content": "<p>I also have some cache serialization stuff that's close but needs some more work</p>",
+        "id": 518846462,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747509409
+    },
+    {
+        "content": "<p>I've been following along with all the commits. But I also don't feel qualified to really comment on it.</p>",
+        "id": 518966811,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1747610091
+    },
+    {
+        "content": "<p>Yeah, sorry the PR is so huge — I know it makes it really hard to digest. I debate breaking it up, just didn’t have time. I’ll make sure to chunk things up better in the future for ease of review.</p>\n<p>Planning on looking at Richard’s comments in detail later today, but probably will merge as-is then open a follow up PR addressing comments this week.</p>\n<p>And I’m happy to find a time with whoever is interested (<span class=\"user-mention\" data-user-id=\"781658\">@Anthony Bullard</span> ?) and talk through it to share the knowledge!</p>",
+        "id": 519185278,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1747677797
+    },
+    {
+        "content": "<p>heck yeah!  thanks Jared!</p>",
+        "id": 519218058,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747686941
+    },
+    {
+        "content": "<p>I'd love to join that discussion too</p>",
+        "id": 519244019,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1747695873
+    },
+    {
+        "content": "<p>I think if no one else is working on it, I'd like to try to set up desugaring.  Should I start a new topic on that?</p>",
+        "id": 519377195,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747745590
+    },
+    {
+        "content": "<p>I'm going to assume so :-)</p>",
+        "id": 519377259,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747745611
+    }
+]

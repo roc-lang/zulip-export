@@ -1,0 +1,920 @@
+<html>
+<head><meta charset="utf-8"><title>Revamped Encode and Decode · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html">Revamped Encode and Decode</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="447120962"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447120962" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447120962">(Jun 26 2024 at 04:39)</a>:</h4>
+<p>Though the current iterations of <a href="https://github.com/roc-lang/roc/blob/main/crates/compiler/builtins/roc/Encode.roc">Encode</a> and <a href="https://github.com/roc-lang/roc/blob/main/crates/compiler/builtins/roc/Decode.roc">Decode</a> have served us well, they have restrictions that make them less than ideal. While they are roughly based off of <a href="https://serde.rs/">serde</a> from rust, they are not powerful enough to represent many of the patterns that serde can.</p>
+<h3>State in Roc</h3>
+<p>For <code>Decode</code> in roc, it is fundamentally a list of bytes along with a formatting config being converted into a result any type. That said, the error type is only allowed to be <code>TooShort</code>.</p>
+<p>For <code>Encode</code> in roc, it is any type with a formatting config to a list of bytes.</p>
+<h3>Roughly, how does that compare to serde?</h3>
+<p>For deserialization (decode), serde is any type (that a derserializer uses) to a result of any type with any error.</p>
+<p>For serialization (encode), serde is any type to a result of any type (that a serializer uses) with any error.</p>
+<h3>Roc is missing a ton of flexibility</h3>
+<p>The core missing piece is that <code>Encode</code> and <code>Decode</code> need to be able to define the an internal state and use that to generate input/output. They can not be restricted to <code>List U8</code>. They can not be restricted in allowed errors variants.</p>
+<h3>What would this look like?</h3>
+<p>Luckily, we already have a perfect template for what the correct interface would look like (at least for <code>Encode</code>). <code>Inspect</code> is a ability that can take any type as input and allows the specific ability implementation to define exactly what the output is. I would argue that today, <code>Inspect</code> is a better <code>Encode</code> than <code>Encode</code> is. A perfect example of this is the <a href="https://github.com/roc-lang/roc/blob/main/examples/GuiFormatter.roc">GuiFormatter</a>. Though a simple proof of concept, it is able to "encode" any data into a tree structure that can be render in a gui. It does this by allowing the implementation of <code>GuiFormatter</code> to define it's own internal state that is built up with ever call and eventual exposed as a tree.</p>
+<p>That said, <code>Inspect</code> does not replace <code>Encode</code>. We can't just one to one map. Inspect has a different set of autoderive rules and defaults related to opaque types and functions that don't makes sense in encode. On top of that, both <code>Encode</code> and <code>Decode</code> likely should enforce the final return value being a <code>Result</code> of something. So we still need a bespoke interface.</p>
+<h3>Important Note</h3>
+<p>One minor loss of the <code>Inspect</code> api is that without higher kinded types, it is not possible to have a generic <code>Inspect.inspect</code> method that returns the final wanted output type. Instead, <code>inspect</code> returns the <code>Formatter</code> which must be unwrapped by a different function.</p>
+<p>That said, I don't see this as a real drawback at all. It just means that the <code>Json</code> library will create a wrapper function that when called generates the formatter and then unwraps it. So the api will be <code>Json.decode someJson</code> instead of <code>Decode.decode someJson</code>. <code>Decode.decode someJson</code> would still work, but it would output a <code>JsonDecoder</code> instead of the final wanted roc type.</p>
+<h3>Proposed API</h3>
+<p>I don't want to write out this entire api, so just gonna note the core of the change.</p>
+<p>Instead of:<br>
+<code>Encoder fmt := List U8, fmt -&gt; List U8 where fmt implements EncoderFormatting</code><br>
+Where we strictly have a <code>List U8</code></p>
+<p>It would be:<br>
+<code>Encoder fmt err := fmt -&gt; Result fmt err where fmt implements EncoderFormatting</code><br>
+The <code>fmt</code> is able to store data type that it likes.</p>
+<blockquote>
+<p>Note: I am actually less sure this <code>Decode</code> change is correct. I noticed that serde had to use some sort of visitor builder pattern, so we may need to follow suit. But am not really sure.... Just would need to tinker with types.</p>
+</blockquote>
+<p><code>Decoder</code> would similarly be:<br>
+<code>Decoder val fmt err := fmt -&gt; Result { value: val, rest: fmt } err where fmt implements DecoderFormatting</code><br>
+where <code>fmt</code> is initialized with what is being decoded and would store all the internal state.</p>
+<p>From that change, some other minor api differences would be needed, but it would mostly be the same, just with corrected types.</p>
+<hr>
+<p>One important difference from <code>Inspect</code> and <code>Encode</code>/<code>Decode</code>. <code>Inspect</code> requires an <code>init</code> method that generates a formatter. I don't think <code>Encode</code>/<code>Decode</code> should have the same requirement. Instead, each api will decide what is required for initialization and expose that. For example, a <code>JsonFormatter</code> may require config options for initialization. So it would have <code>Json.encode : x, Config -&gt; List U8</code>. Where it takes a  piece of data to encode, a set of configurations options and then outputs a list of bytes. Internally, it would deal with intialization, running encode, extracting the <code>List U8</code> result from its formatter, and unwrapping the result (I'm assuming the error type was chosen to be <code>[]</code>)</p>
+<hr>
+<p>Extra minor note, when we do this change, we should also add a special encoding/decoding method for at least dictionaries. Other options that we should consider adding are listed in the <a href="https://docs.rs/serde/latest/serde/trait.Deserializer.html#required-methods">Deserializer trait required methods</a>.</p>
+
+
+
+<a name="447124069"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447124069" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447124069">(Jun 26 2024 at 04:53)</a>:</h4>
+<p>It seems like the majority of users would still have a very easy time using this API, but I just want to confirm that: we would still autoderive Encode and Decode, and it would be one extra function call, but otherwise basically the same effort to turn JSON into a Roc datatype?</p>
+
+
+
+<a name="447124336"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447124336" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447124336">(Jun 26 2024 at 04:56)</a>:</h4>
+<p>I guess two extra calls (though realistically, they would be all wrapped behind a single function call)</p>
+<div class="codehilite" data-code-language="Haskell"><pre><span></span><code><span class="o">#</span><span class="w"> </span><span class="kt">Json</span><span class="o">.</span><span class="n">roc</span>
+
+<span class="nf">encode</span><span class="w"> </span><span class="kt">:</span><span class="w"> </span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="kt">Config</span><span class="w"> </span><span class="ow">-&gt;</span><span class="w"> </span><span class="kt">List</span><span class="w"> </span><span class="kt">U8</span>
+<span class="nf">encode</span><span class="w"> </span><span class="ow">=</span><span class="w"> </span><span class="nf">\</span><span class="n">val</span><span class="p">,</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="ow">-&gt;</span>
+<span class="w">  </span><span class="n">initEncoder</span><span class="w"> </span><span class="n">config</span>
+<span class="w">  </span><span class="o">|&gt;</span><span class="w"> </span><span class="kt">Encode</span><span class="o">.</span><span class="n">encode</span><span class="w"> </span><span class="n">val</span>
+<span class="w">  </span><span class="o">|&gt;</span><span class="w"> </span><span class="n">unwrapEncoder</span>
+</code></pre></div>
+
+
+
+<a name="447124421"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447124421" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447124421">(Jun 26 2024 at 04:57)</a>:</h4>
+<p>And yeah still autoderive in the same cases as today.</p>
+
+
+
+<a name="447124629"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447124629" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447124629">(Jun 26 2024 at 04:59)</a>:</h4>
+<p>What is <code>unwrapFormatter</code> doing there?</p>
+
+
+
+<a name="447124821"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447124821" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447124821">(Jun 26 2024 at 05:00)</a>:</h4>
+<p>Is roc-json the only implementation of Encode/Decode in the wild? If so it shouldn't be too hard to update just that one package and avoid breaking lots of things for users. We need a way to test these changes and roc-json would probably be a good choice to have a pair PR developed.</p>
+
+
+
+<a name="447129277"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447129277" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447129277">(Jun 26 2024 at 05:45)</a>:</h4>
+<div class="codehilite"><pre><span></span><code>unwrapEncoder : Result JsonEncoder [] -&gt; List U8
+unwrapEncoder = \res -&gt;
+    when res is
+        Ok (@JsonEncoder {bytes}) -&gt; bytes
+</code></pre></div>
+
+
+
+<a name="447129439"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447129439" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447129439">(Jun 26 2024 at 05:46)</a>:</h4>
+<p>This is a case where I assume that json encoding chose to have no error types at all. So it's error tag is <code>[]</code>. And I am assuming <code>JsonEncoder := {bytes: List U8, config: Config}</code>.</p>
+
+
+
+<a name="447137222"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447137222" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447137222">(Jun 26 2024 at 06:53)</a>:</h4>
+<p>Slightly related. But for now I think we might want to throw an error if we are trying to encode something that we cant decode. For example with <a href="https://github.com/roc-lang/roc/issues/5294">#5294</a> we can't decode a <code>Dict</code>. I'd love it if we could include that functionality when we make this larger change, though not sure if that would only complicate things.</p>
+
+
+
+<a name="447236823"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447236823" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447236823">(Jun 26 2024 at 14:55)</a>:</h4>
+<p>Yeah. That should be doable with this change. Both encode and decode have the option to return errors.</p>
+
+
+
+<a name="447237006"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447237006" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447237006">(Jun 26 2024 at 14:56)</a>:</h4>
+<p>It is up to the specific encoder/decoder to pick what errors it might generate</p>
+
+
+
+<a name="447637698"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/447637698" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Settles <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#447637698">(Jun 28 2024 at 03:08)</a>:</h4>
+<p>I've started on something in <a href="https://github.com/roc-lang/roc/pull/6846">PR 6846</a>. So far it's just been brute force changes, after adjusting the types</p>
+
+
+
+<a name="449543309"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449543309" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449543309">(Jul 06 2024 at 18:44)</a>:</h4>
+<p>As I am working on sqlite in basic webserver, I realized that even these revamped versions of decode/encode are potentially missing a big feature.</p>
+<p>I'm not sure if it fits in standard decode or makes more sense in a separate ability (or always using bespoke code), but effectual decoding would be huge. For SQLite, I have a stmt and would like to decode directly from it. The decoding would be running effects to continue executing the query and load the data.</p>
+<p>I'm sure the same would happen with many network protocols where you may want to decode from a network stream instead of waiting for all bytes to be loaded into a roc list before beginning to decode.</p>
+
+
+
+<a name="449543333"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449543333" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449543333">(Jul 06 2024 at 18:44)</a>:</h4>
+<p>Hmm... actually, if the state was a task, would that enable effectful decoding. I think it would, but I also expect that it would fail to compile with the current compiler</p>
+
+
+
+<a name="449741495"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449741495" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449741495">(Jul 08 2024 at 00:34)</a>:</h4>
+<p>One other related update to this api to suggest. This is done <code>Inspect</code> already.</p>
+<p>I think we should make encode/decode have a function for both lists and dictionaries.<br>
+I also think that they should avoid being type locked to <code>List a</code> and <code>Dict k v</code>. Instead, they will take in any value and a walk function. So list would be an element walk function:</p>
+<div class="codehilite"><pre><span></span><code>ElemWalker state collection elem : collection, state, (state, elem -&gt; state) -&gt; state
+</code></pre></div>
+<p>This way a <code>List a</code>, <code>Set a</code>, any other <code>Container a</code> can be encoded/decoded as a list.<br>
+For decode, it will instead take a container builder function (like <code>List.append</code>).</p>
+
+
+
+<a name="449741566"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449741566" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449741566">(Jul 08 2024 at 00:35)</a>:</h4>
+<p>In <code>serde</code>, they call these two encoding types as <code>seq</code> and <code>map</code>. They are used for any sort of container / dict type structure.</p>
+
+
+
+<a name="449741816"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449741816" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449741816">(Jul 08 2024 at 00:38)</a>:</h4>
+<p>Serde api is built different, but for useful context:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// Seq</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">serialize</span><span class="o">&lt;</span><span class="n">S</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">serializer</span><span class="p">:</span><span class="w"> </span><span class="nc">S</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">S</span><span class="p">::</span><span class="nb">Ok</span><span class="p">,</span><span class="w"> </span><span class="n">S</span><span class="p">::</span><span class="n">Error</span><span class="o">&gt;</span>
+<span class="w">    </span><span class="k">where</span>
+<span class="w">        </span><span class="n">S</span><span class="p">:</span><span class="w"> </span><span class="nc">Serializer</span><span class="p">,</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">seq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serializer</span><span class="p">.</span><span class="n">serialize_seq</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">len</span><span class="p">()))</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="n">element</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="bp">self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">seq</span><span class="p">.</span><span class="n">serialize_element</span><span class="p">(</span><span class="n">element</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="n">seq</span><span class="p">.</span><span class="n">end</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="c1">// Map</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">serialize</span><span class="o">&lt;</span><span class="n">S</span><span class="o">&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">serializer</span><span class="p">:</span><span class="w"> </span><span class="nc">S</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">S</span><span class="p">::</span><span class="nb">Ok</span><span class="p">,</span><span class="w"> </span><span class="n">S</span><span class="p">::</span><span class="n">Error</span><span class="o">&gt;</span>
+<span class="w">    </span><span class="k">where</span>
+<span class="w">        </span><span class="n">S</span><span class="p">:</span><span class="w"> </span><span class="nc">Serializer</span><span class="p">,</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">map</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">serializer</span><span class="p">.</span><span class="n">serialize_map</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">len</span><span class="p">()))</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">k</span><span class="p">,</span><span class="w"> </span><span class="n">v</span><span class="p">)</span><span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="bp">self</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">map</span><span class="p">.</span><span class="n">serialize_entry</span><span class="p">(</span><span class="n">k</span><span class="p">,</span><span class="w"> </span><span class="n">v</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="n">map</span><span class="p">.</span><span class="n">end</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="449755993"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449755993" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449755993">(Jul 08 2024 at 02:41)</a>:</h4>
+<p><a href="https://gist.github.com/bhansconnect/3854d9bc5951ea306e777745a92ec924">https://gist.github.com/bhansconnect/3854d9bc5951ea306e777745a92ec924</a><br>
+cc: <span class="user-mention" data-user-id="479378">@Trevor Settles</span></p>
+<p>I am not 100% sure all of this is correct, but I think it is close. Also including changes from <a class="stream-topic" data-stream-id="383402" href="/#narrow/stream/383402-API-Design/topic/Encode.20with.20list.20manifesting">#API Design &gt; Encode with list manifesting</a>, I think this is what our <code>Encode.roc</code> and <code>Decode.roc</code> should be (maybe with an extra helper function or two). The types are a bit more complex in some places to deal with allocations and to make it more flexible.</p>
+<p>Specifically, any list like collection can encode/decode the same as a list. Currently, I named this <code>Encode.seq</code> for any sequence. Just matched serde here. But names of course can change. Same with any dict like collection. They can now encode/decode the same as a dict via <code>Encode.map</code>. Again, took the serde name. We can change it.</p>
+<p>Then also removed all <code>List ...</code> from the api. Instead requiring the use of lambdas that load values and build the type out. This avoids an allocation and instead makes things a few direct calls to build up the encoder.</p>
+<hr>
+<p>Compared to serde we are still missing a few minor pieces and require extra mapping in some cases.</p>
+<ol>
+<li>Serde supports named structs (honestly not sure if this matter, would only be important for opaque types if it does. I guess it would be a way to distinguish two specific opaque types with the same internal data)</li>
+<li>Serde passes both the tag name and the tag index to the constructor. We only allow for the name due to tags not being nominal types. So opaque types are required for tags to map as integer variants. That said, we don't have any way to encode an integer variant. It has be encoded as something like <code>{ tag: U8, data: * }</code>. I think we might need something special here that opaque types can opt into (but that definitely can be added later). </li>
+<li>Serde doesn't require field names in the serialized format to decode a record. Instead, the decoder is given a slice of field names and chooses how to use them. So it could ignore the names and just decode sequential like a tuple (many binary formats do this) or it could choose to check the names (like json would). This is likely something we may want to change, but I'm not fully sure. Otherwise, user need to change there decoder type to use a binary format. It would have to use all tuples and no records.</li>
+</ol>
+<p>Thoughts? (point 3 being the most important for opinions)</p>
+
+
+
+<a name="449756172"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449756172" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449756172">(Jul 08 2024 at 02:43)</a>:</h4>
+<p>Note, for 3 passing a list in isn't as big of a deal as our other lists. The other lists where List of <code>Encoders</code> that could only be generated at runtime. This list would be a constant list of strings that could be compiled directly into the binary.</p>
+<p>EDIT: I guess that would make the whole api change to be this:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="w">    </span><span class="nv">record</span><span class="w"> </span><span class="nf">:</span>
+<span class="w">        </span><span class="nv">state</span><span class="p">,</span>
+<span class="w">        </span><span class="kt">List</span><span class="w"> </span><span class="kt">Str</span><span class="p">,</span>
+<span class="w">        </span><span class="p">(</span><span class="nv">state</span><span class="p">,</span><span class="w"> </span><span class="kt">U64</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">[</span><span class="kt">Next</span><span class="w"> </span><span class="p">(</span><span class="kt">Decoder</span><span class="w"> </span><span class="nv">state</span><span class="w"> </span><span class="nv">state</span><span class="w"> </span><span class="nv">err</span><span class="p">),</span><span class="w"> </span><span class="kt">TooLong</span><span class="p">]),</span>
+<span class="w">        </span><span class="p">(</span><span class="nv">state</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Result</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nv">err</span><span class="p">)</span>
+<span class="w">        </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Decoder</span><span class="w"> </span><span class="nv">state</span><span class="w"> </span><span class="nv">val</span><span class="w"> </span><span class="nv">err</span><span class="w"> </span><span class="kr">where</span><span class="w"> </span><span class="nv">state</span><span class="w"> </span><span class="nv">implements</span><span class="w"> </span><span class="kt">DecoderFormatting</span>
+</code></pre></div>
+<p>Basically the exact same as a tuple, but you also pass in a <code>List Str</code> of field names. The implementation if encodes/decodes field names can look up the name in the list to get the index. If it doesn't encode field names, it can just ignore them</p>
+<p>EDIT 2: Since I realized this is simple, I just put it in the gist as well.</p>
+
+
+
+<a name="449756439"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449756439" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449756439">(Jul 08 2024 at 02:46)</a>:</h4>
+<p>Have we got a design for encoding/decoding Dicts?</p>
+
+
+
+<a name="449756460"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449756460" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449756460">(Jul 08 2024 at 02:47)</a>:</h4>
+<p>Yep! It's in that gist I posted.</p>
+
+
+
+<a name="449756486"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449756486" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449756486">(Jul 08 2024 at 02:47)</a>:</h4>
+<p>Ohk, having trouble seeing it</p>
+
+
+
+<a name="449756504"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449756504" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449756504">(Jul 08 2024 at 02:47)</a>:</h4>
+<p><a href="https://gist.github.com/bhansconnect/3854d9bc5951ea306e777745a92ec924#file-decode-roc-L92-L97">https://gist.github.com/bhansconnect/3854d9bc5951ea306e777745a92ec924#file-decode-roc-L92-L97</a></p>
+
+
+
+<a name="449756658"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449756658" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449756658">(Jul 08 2024 at 02:49)</a>:</h4>
+<p>I called it <code>map</code> to match serde...It is generic. So it could work for <code>Dict k v</code> or <code>OrderedMap k v</code> or <code>EtcMap k v</code></p>
+
+
+
+<a name="449756678"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449756678" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449756678">(Jul 08 2024 at 02:49)</a>:</h4>
+<p>maybe I should still call it <code>dict</code></p>
+
+
+
+<a name="449756696"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449756696" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449756696">(Jul 08 2024 at 02:49)</a>:</h4>
+<p>Ohk, I see. So <code>Seq</code> is for a collection that only has values, and <code>Map</code> is for collections with values and keys</p>
+
+
+
+<a name="449756778"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449756778" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449756778">(Jul 08 2024 at 02:50)</a>:</h4>
+<p>Yeah. So <code>Seq</code> for <code>List a</code>, <code>Set a</code>, etc</p>
+
+
+
+<a name="449756873"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449756873" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449756873">(Jul 08 2024 at 02:51)</a>:</h4>
+<p>May be a bit lame, but I find this simpler</p>
+<div class="codehilite"><pre><span></span><code>ValueInit
+ValueBuilder
+
+KeyValueInit
+KeyValueBuilder
+</code></pre></div>
+
+
+
+<a name="449757090"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449757090" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449757090">(Jul 08 2024 at 02:53)</a>:</h4>
+<p>Is it not possible to also combine record, tags and tuples in the same way? Like a record or tag is just a KeyValue but with Str names, and tuples might be KeyValue but with numbers for names?</p>
+
+
+
+<a name="449757103"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449757103" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449757103">(Jul 08 2024 at 02:53)</a>:</h4>
+<p>The original names where:</p>
+<div class="codehilite"><pre><span></span><code>ElemInit
+ElemBuilder
+
+KeyValueInit
+KeyValueBuilder
+</code></pre></div>
+<p>But it doesn't quite make sense. it isn't initializing an Elem or a KeyValue. It is initializing a <code>List elem</code> or <code>Dict key value</code></p>
+
+
+
+<a name="449757292"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449757292" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449757292">(Jul 08 2024 at 02:54)</a>:</h4>
+<blockquote>
+<p>Is it not possible to also combine record, tags and tuples in the same way? Like a record or tag is just a KeyValue but with Str names, and tuples might be KeyValue but with numbers for names?</p>
+</blockquote>
+<p>No. Cause this type of combination function only works if all elements are the same type, all keys are the same type, and all values are the same type. That is not true for tuples and records.</p>
+
+
+
+<a name="449757707"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449757707" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449757707">(Jul 08 2024 at 02:57)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode/near/449757103">said</a>:</p>
+<blockquote>
+<p>But it doesn't quite make sense. it isn't initializing an Elem or a KeyValue. It is initializing a <code>List elem</code> or <code>Dict key value</code></p>
+</blockquote>
+<p>Hence using the words <code>Seq</code>uence or <code>Map</code>ping to generate of of these things.</p>
+
+
+
+<a name="449757882"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449757882" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449757882">(Jul 08 2024 at 02:59)</a>:</h4>
+<p>Would you consider spelling them out in full, considering this isn't going to be seen every day. Like</p>
+<div class="codehilite"><pre><span></span><code>SequenceInit
+SequenceBuilder
+
+MappingInit
+MappingBuilder
+</code></pre></div>
+
+
+
+<a name="449757997"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449757997" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449757997">(Jul 08 2024 at 03:00)</a>:</h4>
+<p>Then <code>Encode.mapping</code> and <code>Encode.sequence</code>. I think that reads really well actually. I would be for it.</p>
+
+
+
+<a name="449758781"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449758781" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449758781">(Jul 08 2024 at 03:07)</a>:</h4>
+<p>Updated gist with new names.</p>
+
+
+
+<a name="449758803"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449758803" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449758803">(Jul 08 2024 at 03:07)</a>:</h4>
+<p>I think this API looks good. </p>
+<p>For point 3. -- If I understand correctly the issue is that when we pass the fields of a record to be decoded they won't be ordered. I would have assumed this ordering would be stable, like sorted by field name.</p>
+
+
+
+<a name="449759219"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449759219" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449759219">(Jul 08 2024 at 03:09)</a>:</h4>
+<p>I think we can just order it by name or order by alignment and name. Either would be fine. Just have to pick something stable and fly with it.</p>
+
+
+
+<a name="449759301"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449759301" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449759301">(Jul 08 2024 at 03:09)</a>:</h4>
+<p>Given we auto generate the encoder, the auto generated encoders can just pick something and sort</p>
+
+
+
+<a name="449759372"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449759372" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449759372">(Jul 08 2024 at 03:10)</a>:</h4>
+<p>For user generated encoders. They can pick any order they please.</p>
+
+
+
+<a name="449759532"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449759532" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449759532">(Jul 08 2024 at 03:11)</a>:</h4>
+<p>It is decided by the order of the list of names passed to decode for a decoder. For encoders, it is order by the order in with the field encoders are called. This is 100% controllable in code.</p>
+
+
+
+<a name="449759669"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449759669" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449759669">(Jul 08 2024 at 03:11)</a>:</h4>
+<p>Just can't be field declaration order for roc cause that has no meaning.</p>
+
+
+
+<a name="449759854"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449759854" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449759854">(Jul 08 2024 at 03:12)</a>:</h4>
+<p>Personally, I think alignment then name makes the most sense cause that is also what we expose to the platform (plus for some formats, it might make a difference on bytes used just like it does on hardware)</p>
+
+
+
+<a name="449759928"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449759928" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449759928">(Jul 08 2024 at 03:13)</a>:</h4>
+<p>That said, if we just want simplicity, I see zero problem with alphabetical by default.</p>
+
+
+
+<a name="449761459"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449761459" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Settles <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449761459">(Jul 08 2024 at 03:20)</a>:</h4>
+<p>This looks neat! Ok, just checking my understanding here. This new API would define a new way to encode/decode list-like things and map-like things either streaming, or all in one go. How would records and tuples fit into this? Since they don't contain a single type, but instead contain a mix of types</p>
+
+
+
+<a name="449761632"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449761632" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449761632">(Jul 08 2024 at 03:21)</a>:</h4>
+<p>Records and tuples still have their own special functions cause they can't use the sequence/mapping functions</p>
+
+
+
+<a name="449830556"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449830556" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449830556">(Jul 08 2024 at 10:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode/near/449759854">said</a>:</p>
+<blockquote>
+<p>Personally, I think alignment then name makes the most sense cause that is also what we expose to the platform (plus for some formats, it might make a difference on bytes used just like it does on hardware)</p>
+</blockquote>
+<p>yeah, although the downside would be that now application authors have to learn about alignment if they want to understand how fields are encoded <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="449830748"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449830748" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449830748">(Jul 08 2024 at 10:32)</a>:</h4>
+<p>that said, for binary formats I could imagine that making a significant performance difference <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="449904261"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449904261" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449904261">(Jul 08 2024 at 15:27)</a>:</h4>
+<p>It actually probably won't for most binary formats</p>
+
+
+
+<a name="449904333"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449904333" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449904333">(Jul 08 2024 at 15:27)</a>:</h4>
+<p>Most pack without any padding no matter the order</p>
+
+
+
+<a name="449904828"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449904828" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449904828">(Jul 08 2024 at 15:29)</a>:</h4>
+<p>So only a handful of more tailored binary formats would see benefits. Generally the binary formats that are tailored to attempt to match a languages runtime format.</p>
+
+
+
+<a name="449905430"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/449905430" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#449905430">(Jul 08 2024 at 15:30)</a>:</h4>
+<p>Also, I think it mostly would be opaque to application authors. More a funny quirk than something they have to learn about. If they want to control order they have to make an opaque type (or tuple I guess). If they have a standard record, they probably will just think that roc has a strange order and not know why....at least that would be my guess.</p>
+
+
+
+<a name="450011359"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450011359" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450011359">(Jul 09 2024 at 00:08)</a>:</h4>
+<p>One other random thought/question:</p>
+<p>Should <code>DecodeResult</code> return the decoder state even on failure? I changed it to <code>Result (state, val) err</code>. My thought was that on failure to decode, the decoder may be in an invalid state. So there isn't a point of returning a failed decoder. But maybe I am missing something.</p>
+
+
+
+<a name="450011905"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450011905" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450011905">(Jul 09 2024 at 00:12)</a>:</h4>
+<p>I'm not sure.</p>
+
+
+
+<a name="450012086"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450012086" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Settles <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450012086">(Jul 09 2024 at 00:13)</a>:</h4>
+<p>What about trying to get the results in the middle of a stream? There might be a better way around that though</p>
+
+
+
+<a name="450012911"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450012911" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450012911">(Jul 09 2024 at 00:18)</a>:</h4>
+<blockquote>
+<p>What about trying to get the results in the middle of a stream?</p>
+</blockquote>
+<p>Like skipping some part of the stream and then decoding into a result?</p>
+
+
+
+<a name="450050279"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450050279" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Trevor Settles <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450050279">(Jul 09 2024 at 03:42)</a>:</h4>
+<p>That was in reference to adding <code>state</code> to the <code>DecodeResult</code> type. (This may be a contrived example) Say you've got a steam of bytes. Calling <code>decode</code> part way through the stream would give part of the List of elems for <code>val</code>. Calling <code>decode</code> on the <code>state</code> from <code>Ok (state, val)</code>  would only return elems that haven't already been decoded.</p>
+<p>I was trying to come up with some example where the act of decoding itself would cause a change in state itself. If that's not clear, its on me. Its just the seed of an idea I just came up with</p>
+
+
+
+<a name="450050726"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450050726" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450050726">(Jul 09 2024 at 03:45)</a>:</h4>
+<p><code>state</code> is actually already in the decode result. The difference is if you get a state on the failure case or not:</p>
+<p><code>Result (state, val) err</code></p>
+<p>vs<br>
+<code>{ val: Result val err, rest: state }</code></p>
+
+
+
+<a name="450064958"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450064958" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450064958">(Jul 09 2024 at 05:17)</a>:</h4>
+<p>Also, I am now working on implementing a version of the new decoder and encoder just to make sure the types in my gist are correct. Definitely have some pieces that are off.</p>
+<p><a href="https://github.com/bhansconnect/roc-msgpack">https://github.com/bhansconnect/roc-msgpack</a></p>
+
+
+
+<a name="450065319"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450065319" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450065319">(Jul 09 2024 at 05:20)</a>:</h4>
+<p>I've just been updating the gist as I notice issues.</p>
+
+
+
+<a name="450070424"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450070424" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450070424">(Jul 09 2024 at 05:51)</a>:</h4>
+<p>Something definitely still doesn't feel right with the record encoding signature. Playing around with it as I am trying to implement the encoder.</p>
+
+
+
+<a name="450076889"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450076889" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450076889">(Jul 09 2024 at 06:33)</a>:</h4>
+<p>This is my current iteration of record encoding (not sure if this is the best way, but it avoids the list allocation):</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">TestRGB</span><span class="w"> </span><span class="nf">:=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">r</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">U8</span><span class="p">,</span><span class="w"> </span><span class="nv">g</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">U8</span><span class="p">,</span><span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">U8</span><span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="nv">implements</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="kt">FutureEncoding</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nv">toFutureEncoder</span><span class="nf">:</span><span class="w"> </span><span class="nv">toFutureEncoderTestRGB</span><span class="p">,</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">    </span><span class="p">]</span>
+
+<span class="nv">toFutureEncoderTestRGB</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">TestRGB</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">FutureEncoder</span><span class="w"> </span><span class="nv">state</span>
+<span class="nv">toFutureEncoderTestRGB</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="err">@</span><span class="kt">TestRGB</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">r</span><span class="p">,</span><span class="w"> </span><span class="nv">g</span><span class="p">,</span><span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">encodeFields</span><span class="w"> </span><span class="nf">=</span>
+<span class="w">        </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">namedField</span><span class="w"> </span><span class="s">"r"</span><span class="w"> </span><span class="p">(</span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">u8</span><span class="w"> </span><span class="nv">r</span><span class="p">)</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">chain</span><span class="w"> </span><span class="p">(</span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">namedField</span><span class="w"> </span><span class="s">"g"</span><span class="w"> </span><span class="p">(</span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">u8</span><span class="w"> </span><span class="nv">g</span><span class="p">))</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">chain</span><span class="w"> </span><span class="p">(</span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">namedField</span><span class="w"> </span><span class="s">"b"</span><span class="w"> </span><span class="p">(</span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">u8</span><span class="w"> </span><span class="nv">b</span><span class="p">))</span>
+
+<span class="w">    </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">record</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="nv">encodeFields</span>
+</code></pre></div>
+<p>The definition seems to be valid. Basically you define how to encode all fields and pass that into the record encoder function. That said, this form breaks the compiler if I try to call <code>encodeFields</code> in the record encoder:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">encodeRecord</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">size</span><span class="p">,</span><span class="w"> </span><span class="nv">addFields</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">encodeHeader</span><span class="w"> </span><span class="nv">size</span>
+<span class="w">    </span><span class="err">#</span><span class="w"> </span><span class="kt">Works</span><span class="w"> </span><span class="kr">if</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">following</span><span class="w"> </span><span class="nv">line</span><span class="w"> </span><span class="nv">is</span><span class="w"> </span><span class="nv">commented</span><span class="w"> </span><span class="nv">out</span>
+<span class="w">    </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">chain</span><span class="w"> </span><span class="nv">addFields</span>
+</code></pre></div>
+<p>Errors with:</p>
+<div class="codehilite"><pre><span></span><code>thread &#39;main&#39; panicked at crates/compiler/mono/src/borrow.rs:396:33:
+internal error: entered unreachable code: no borrow signature for LambdaName { name: `18.IdentId(119)`, niche: Niche(Captures([InLayout(146), InLayout(147)])) } layout
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</code></pre></div>
+
+
+
+<a name="450208721"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450208721" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450208721">(Jul 09 2024 at 15:53)</a>:</h4>
+<p>Oh, I think I found a nicer api for records:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">toFutureEncoderTestRGB</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">TestRGB</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">FutureEncoder</span><span class="w"> </span><span class="nv">state</span>
+<span class="nv">toFutureEncoderTestRGB</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="err">@</span><span class="kt">TestRGB</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">r</span><span class="p">,</span><span class="w"> </span><span class="nv">g</span><span class="p">,</span><span class="w"> </span><span class="nv">b</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">record</span><span class="w"> </span><span class="mi">3</span><span class="w"> </span><span class="nf">\</span><span class="nv">state</span><span class="p">,</span><span class="w"> </span><span class="nv">addNamedField</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">        </span><span class="nv">state</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="nv">addNamedField</span><span class="w"> </span><span class="s">"r"</span><span class="w"> </span><span class="p">(</span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">u8</span><span class="w"> </span><span class="nv">r</span><span class="p">)</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="nv">addNamedField</span><span class="w"> </span><span class="s">"g"</span><span class="w"> </span><span class="p">(</span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">u8</span><span class="w"> </span><span class="nv">g</span><span class="p">)</span>
+<span class="w">        </span><span class="nf">|&gt;</span><span class="w"> </span><span class="nv">addNamedField</span><span class="w"> </span><span class="s">"b"</span><span class="w"> </span><span class="p">(</span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">u8</span><span class="w"> </span><span class="nv">b</span><span class="p">)</span>
+</code></pre></div>
+
+
+
+<a name="450209304"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450209304" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450209304">(Jul 09 2024 at 15:55)</a>:</h4>
+<p>Then the actually encoder implementation looks like this:</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="nv">encodeRecord</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">U64</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="kt">MsgPack</span><span class="p">,</span><span class="w"> </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="kt">NamedFieldFn</span><span class="w"> </span><span class="kt">MsgPack</span><span class="w"> </span><span class="kt">MsgPack</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">MsgPack</span><span class="p">)</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">FutureEncoder</span><span class="w"> </span><span class="kt">MsgPack</span>
+<span class="nv">encodeRecord</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="nv">size</span><span class="p">,</span><span class="w"> </span><span class="nv">addFields</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">msgPack</span><span class="w"> </span><span class="nf">&lt;-</span><span class="w"> </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">custom</span>
+<span class="w">    </span><span class="nv">msgPack</span>
+<span class="w">    </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">appendWith</span><span class="w"> </span><span class="p">(</span><span class="nv">encodeHeader</span><span class="w"> </span><span class="nv">size</span><span class="p">)</span>
+<span class="w">    </span><span class="nf">|&gt;</span><span class="w"> </span><span class="nv">addFields</span><span class="w"> </span><span class="nv">encodeNamedField</span>
+
+<span class="nv">encodeNamedField</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">MsgPack</span><span class="p">,</span><span class="w"> </span><span class="kt">Str</span><span class="p">,</span><span class="w"> </span><span class="kt">FutureEncoder</span><span class="w"> </span><span class="kt">MsgPack</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">MsgPack</span>
+<span class="nv">encodeNamedField</span><span class="w"> </span><span class="nf">=</span><span class="w"> </span><span class="nf">\</span><span class="err">@</span><span class="kt">MsgPack</span><span class="w"> </span><span class="nv">res</span><span class="p">,</span><span class="w"> </span><span class="nv">key</span><span class="p">,</span><span class="w"> </span><span class="nv">value</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nv">when</span><span class="w"> </span><span class="nv">res</span><span class="w"> </span><span class="nv">is</span>
+<span class="w">        </span><span class="kt">Ok</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">bytes</span><span class="p">,</span><span class="w"> </span><span class="nv">encodeFieldNames</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="kr">if</span><span class="w"> </span><span class="nv">encodeFieldNames</span><span class="w"> </span><span class="kr">then</span>
+<span class="w">                </span><span class="err">@</span><span class="kt">MsgPack</span><span class="w"> </span><span class="p">(</span><span class="kt">Ok</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">bytes</span><span class="p">,</span><span class="w"> </span><span class="nv">encodeFieldNames</span><span class="w"> </span><span class="p">})</span>
+<span class="w">                </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">appendWith</span><span class="w"> </span><span class="p">(</span><span class="nv">encodeString</span><span class="w"> </span><span class="nv">key</span><span class="p">)</span>
+<span class="w">                </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">appendWith</span><span class="w"> </span><span class="nv">value</span>
+<span class="w">            </span><span class="kr">else</span>
+<span class="w">                </span><span class="err">@</span><span class="kt">MsgPack</span><span class="w"> </span><span class="p">(</span><span class="kt">Ok</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">bytes</span><span class="p">,</span><span class="w"> </span><span class="nv">encodeFieldNames</span><span class="w"> </span><span class="p">})</span>
+<span class="w">                </span><span class="nf">|&gt;</span><span class="w"> </span><span class="kt">FutureEncode</span><span class="nf">.</span><span class="nv">appendWith</span><span class="w"> </span><span class="nv">value</span>
+
+<span class="w">        </span><span class="kt">Err</span><span class="w"> </span><span class="nv">e</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">            </span><span class="err">@</span><span class="kt">MsgPack</span><span class="w"> </span><span class="p">(</span><span class="kt">Err</span><span class="w"> </span><span class="nv">e</span><span class="p">)</span>
+</code></pre></div>
+<p>Sadly, still can seem to win the type battle. Now hitting:</p>
+<div class="codehilite"><pre><span></span><code>ambient functions don&#39;t unify
+Location: crates/compiler/unify/src/unify.rs:201:18
+</code></pre></div>
+
+
+
+<a name="450237373"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450237373" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450237373">(Jul 09 2024 at 17:33)</a>:</h4>
+<p><span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span> in case it can still be of value;  I also just hit <code>no borrow signature for LambdaName</code> and it happened because I called a function (that takes one argument) with zero arguments.</p>
+
+
+
+<a name="450303595"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450303595" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450303595">(Jul 09 2024 at 22:46)</a>:</h4>
+<p>From what I can tell, the issue seems to be related to an encoder capturing another encoder in its lambda closure.</p>
+
+
+
+<a name="450305359"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450305359" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450305359">(Jul 09 2024 at 23:01)</a>:</h4>
+<p>Running with a debug build of the compiler I get:</p>
+<div class="codehilite"><pre><span></span><code>thread &#39;&lt;unnamed&gt;&#39; panicked at /Users/bren077s/Projects/roc/crates/compiler/unify/src/unify.rs:1217:5:
+member signature should not have solved lambda sets
+</code></pre></div>
+<p>Does that have meaning to anyone?</p>
+
+
+
+<a name="450313935"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450313935" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450313935">(Jul 10 2024 at 00:02)</a>:</h4>
+<p>After a bit more messing with types and trying slightly different apis, I at least have something which I think is useful:</p>
+<div class="codehilite"><pre><span></span><code>Full source: procedure `FutureEncode.appendWith` (`FutureEncode.state`, `FutureEncode.122`):
+    let `FutureEncode.164` : [C [C U64, C , C , C ], C {List U8, Int1}] = CallByName `MsgPack.163` `FutureEncode.state` `FutureEncode.122`;
+    ret `FutureEncode.164`;
+IR PROBLEMS FOUND:
+── PROC SPECIALIZATION NOT DEFINED ─────────────────────────────────────────────
+
+in appendWith : ([C [C U64, C , C , C ], C {List U8, Int1}], {U64, []}) -&gt;
+[C [C U64, C , C , C ], C {List U8, Int1}] ((niche {}))
+
+0│  procedure `FutureEncode.appendWith` (`FutureEncode.state`, `FutureEncode.122`):
+1│&gt;     let `FutureEncode.164` : [C [C U64, C , C , C ], C {List U8, Int1}] = CallByName `MsgPack.163` `FutureEncode.state` `FutureEncode.122`;
+2│      ret `FutureEncode.164`;
+
+No specialization
+
+163 : ([C [C U64, C , C , C ], C {List U8, Int1}], {U64, []}) -&gt;
+[C [C U64, C , C , C ], C {List U8, Int1}] ((niche {U64, []}))
+
+was found
+
+The following specializations of MsgPack.163 were built:163 :
+([C [C U64, C , C , C ], C {List U8, Int1}], {U64, {U8, U8, U8}}) -&gt;
+[C [C U64, C , C , C ], C {List U8, Int1}] ((niche {U64, {U8, U8, U8}}))
+</code></pre></div>
+<p>Caused by this test: <a href="https://github.com/bhansconnect/roc-msgpack/blob/3d545816c18b9a7fd74746137f280348c123f18c/package/MsgPack.roc#L443-L447">https://github.com/bhansconnect/roc-msgpack/blob/3d545816c18b9a7fd74746137f280348c123f18c/package/MsgPack.roc#L443-L447</a></p>
+
+
+
+<a name="450313989"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450313989" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450313989">(Jul 10 2024 at 00:02)</a>:</h4>
+<p>That said, I still don't really know how to debug it.</p>
+
+
+
+<a name="450337039"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450337039" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450337039">(Jul 10 2024 at 03:42)</a>:</h4>
+<p>Ok. A little more context that I have derived:</p>
+<ol>
+<li>The bug seems to always happen when calling one encoder from within another. So always when you are inside an encoder and call <code>FutureEncode.appendWith</code></li>
+<li>The expected lambdaset definition is wrong. It is missing captures.</li>
+</ol>
+<p>More specific on 2:<br>
+If you look at the printout above, the wanted specialization is missing <code>{U64, {U8, U8, U8}}</code>. <code>{U64, {U8, U8, U8}}</code> is the actual data captured by the passed in encoder. <code>U64</code> is the size. <code>{U8, U8, U8}</code> is <code>{ r : U8, g : U8, b : U8 } </code>.</p>
+<p>So fundamentally we are ending up with a call to the wrong specialization that is missing captures.</p>
+
+
+
+<a name="450337303"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450337303" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450337303">(Jul 10 2024 at 03:44)</a>:</h4>
+<p>I am uncertain why this affects the modified version of encode, but does not seem to affect <code>Inspect</code>. I think it also should have the same issue. (also possible it affects <code>Inspect</code> it just is more specific than I realize so I haven't hit it)</p>
+
+
+
+<a name="450338604"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450338604" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450338604">(Jul 10 2024 at 04:00)</a>:</h4>
+<p><span class="user-mention" data-user-id="454654">@Ayaz Hafiz</span> I know you are very busy nowadays, but if you have any time to give tips or take a quick look, it would be greatly appreciate. I don't know much of what level of complexity this form of error falls into. Like I get the rough idea of what is wrong, but I know nothing of the code that actually does with the wiring here.</p>
+
+
+
+<a name="450340577"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450340577" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450340577">(Jul 10 2024 at 04:15)</a>:</h4>
+<p>to be honest i’m not sure i can give any advice without debugging this, which i don’t have the bandwidth for ATM unfortunately. I would say probably the easiest thing to do here would be to finish implementing boxed closures. it will be much simpler and problems like this will likely not disappear, but be much easier diagnose and resolve for anyone</p>
+
+
+
+<a name="450340614"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450340614" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450340614">(Jul 10 2024 at 04:15)</a>:</h4>
+<p>Fair answer. Do we have any documentation on the state of that</p>
+
+
+
+<a name="450340666"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450340666" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450340666">(Jul 10 2024 at 04:16)</a>:</h4>
+<p>there’s a long standing issue with recursive structural types, which may be the problem here too, i discusses a suggestion for how it can be fixed elsewhere</p>
+
+
+
+<a name="450340674"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450340674" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450340674">(Jul 10 2024 at 04:16)</a>:</h4>
+<p>umm yes give me 10 minutes i’ll type it up</p>
+
+
+
+<a name="450340701"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450340701" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450340701">(Jul 10 2024 at 04:16)</a>:</h4>
+<p>Is the boxed closure work something that a layperson can work on, or does it really need expertise that's expensive to transfer? I should be able to help with that once I finish with built-in Tasks and documentation for the new record builder syntax.</p>
+
+
+
+<a name="450340765"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450340765" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450340765">(Jul 10 2024 at 04:17)</a>:</h4>
+<p>my hope is anyone can work on it</p>
+
+
+
+<a name="450340822"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450340822" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450340822">(Jul 10 2024 at 04:17)</a>:</h4>
+<p>Hell yeah brother</p>
+
+
+
+<a name="450340883"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450340883" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450340883">(Jul 10 2024 at 04:18)</a>:</h4>
+<p>that’s partially why i want it to land/am upset at myself that i didn’t land it when i had more time to give to Roc, it’s a much simpler and easier model than what currently exists (at the expense of other things obviously)</p>
+
+
+
+<a name="450340914"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450340914" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450340914">(Jul 10 2024 at 04:18)</a>:</h4>
+<p>Well, the nice thing is that Roc seems to be getting better with respect to its bus factor</p>
+
+
+
+<a name="450340936"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450340936" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450340936">(Jul 10 2024 at 04:19)</a>:</h4>
+<p>So you being unavailable isn't blocking the change from going through</p>
+
+
+
+<a name="450341007"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450341007" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450341007">(Jul 10 2024 at 04:19)</a>:</h4>
+<p>I think it's a good thing to recognize. And also, don't beat yourself up too much, you've already given so much for this project.</p>
+
+
+
+<a name="450341874"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450341874" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450341874">(Jul 10 2024 at 04:27)</a>:</h4>
+<p>alright here's the high level of how i think it should be implemented<br>
+<a href="https://github.com/roc-lang/rfcs/blob/main/0012-type-erasure.md">https://github.com/roc-lang/rfcs/blob/main/0012-type-erasure.md</a></p>
+
+
+
+<a name="450341971"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450341971" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450341971">(Jul 10 2024 at 04:28)</a>:</h4>
+<p>here's the only PR i made for it: <a href="https://github.com/roc-lang/roc/pull/5576">https://github.com/roc-lang/roc/pull/5576</a></p>
+<p>it supports erased closure types for very simple programs</p>
+
+
+
+<a name="450342078"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450342078" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450342078">(Jul 10 2024 at 04:29)</a>:</h4>
+<p>here's an example of a program and the corresponding IR I sent to Folkert recently. It's worth understanding it I think<br>
+<a href="https://gist.github.com/ayazhafiz/dd16a5586b9621dce061c902e6d44bb0">https://gist.github.com/ayazhafiz/dd16a5586b9621dce061c902e6d44bb0</a></p>
+
+
+
+<a name="450342568"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450342568" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450342568">(Jul 10 2024 at 04:34)</a>:</h4>
+<p>The missing pieces are:</p>
+<ul>
+<li>Reference counting. The erased closure layout has a slot for a pointer to a function that performs refcounting on the closure data, but the pointer is never populated right now. some works needs to be done to store a reference to the refcounting function that should be generated, and insert the pointer appropriately. I'm sure this is not that hard to do, but I don't know the details off the top of my head.</li>
+<li>Abilities. This is actually very simple, the main thing is that all the machinery to support abilities with lambda sets (there's a lot of it, if you see anything about "ambient functions" that has to do with it) needs to be skipped. I'm happy to explain what needs to be done to support resolution of abilities in the erasure world when it comes time (I think it's very simple, it's like one new check I believe)</li>
+<li>Some fixes to the mono IR. There are a number of todos related to erased closures that will need to be resolved. One I am aware of is passing closures to higher-order functions by value does not work right now, just because that branch is a TODO.</li>
+</ul>
+
+
+
+<a name="450342807"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450342807" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sam Mohr <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450342807">(Jul 10 2024 at 04:37)</a>:</h4>
+<p>Okay, cool. Unless someone else starts on this before I get back from my trip, I'll be in Japan until July 23rd, after which point I'll try to David this Goliath.</p>
+
+
+
+<a name="450342929"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450342929" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450342929">(Jul 10 2024 at 04:38)</a>:</h4>
+<p>love the metaphor</p>
+
+
+
+<a name="450494154"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/450494154" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#450494154">(Jul 10 2024 at 15:55)</a>:</h4>
+<p>Thanks Ayaz!</p>
+<p>Looping back to the general encode/decode design. I realized one more inconsistency that I thought might be good to reconsider:</p>
+<p>For contains, we explicitly pass in an element encode function <code>elem -&gt; Encoder state</code>. Instead we could skip that by requiring <code>where elem implements Encoding</code>. This is a simpler api with one extra arg, but does have a minor but important difference. If we take <code>elem -&gt; Encoder state</code> it allows for opaque containers to modify or otherwise change what the element encoder function would be when calling <code>Encode.sequence</code>. I'm not sure if this matters in practice, but I am curious what other thinks:<br>
+A)</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="w">    </span><span class="nv">sequence</span><span class="w"> </span><span class="nf">:</span>
+<span class="w">        </span><span class="nv">seq</span><span class="p">,</span>
+<span class="w">        </span><span class="p">[</span><span class="kt">Size</span><span class="w"> </span><span class="kt">U64</span><span class="p">,</span><span class="w"> </span><span class="kt">UnknownSize</span><span class="p">],</span>
+<span class="w">        </span><span class="kt">SequenceWalker</span><span class="w"> </span><span class="nv">state</span><span class="w"> </span><span class="nv">seq</span><span class="w"> </span><span class="nv">elem</span><span class="p">,</span>
+<span class="w">        </span><span class="p">(</span><span class="nv">elem</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Encoder</span><span class="w"> </span><span class="nv">state</span><span class="p">)</span>
+<span class="w">        </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Encoder</span><span class="w"> </span><span class="nv">state</span><span class="w"> </span><span class="kr">where</span><span class="w"> </span><span class="nv">state</span><span class="w"> </span><span class="nv">implements</span><span class="w"> </span><span class="kt">EncoderFormatting</span>
+</code></pre></div>
+<p>vs<br>
+B)</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="w">    </span><span class="nv">sequence</span><span class="w"> </span><span class="nf">:</span>
+<span class="w">        </span><span class="nv">seq</span><span class="p">,</span>
+<span class="w">        </span><span class="p">[</span><span class="kt">Size</span><span class="w"> </span><span class="kt">U64</span><span class="p">,</span><span class="w"> </span><span class="kt">UnknownSize</span><span class="p">],</span>
+<span class="w">        </span><span class="kt">SequenceWalker</span><span class="w"> </span><span class="nv">state</span><span class="w"> </span><span class="nv">seq</span><span class="w"> </span><span class="nv">elem</span><span class="p">,</span>
+<span class="w">        </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Encoder</span><span class="w"> </span><span class="nv">state</span><span class="w"> </span><span class="kr">where</span><span class="w"> </span><span class="nv">elem</span><span class="w"> </span><span class="nv">implements</span><span class="w"> </span><span class="kt">Encoding</span><span class="p">,</span><span class="w"> </span><span class="nv">state</span><span class="w"> </span><span class="nv">implements</span><span class="w"> </span><span class="kt">EncoderFormatting</span>
+</code></pre></div>
+<p>With <code>A</code>, you would pass in an <code>elem -&gt; Encoder state</code> function that transforms the element type in some way or ignores fields before encoding. It enables a container of non-encodable things to be encoded if you write a custom mapper.</p>
+<p>With <code>B</code>, that power is still technically available, but it has to be obtained by modifying the <code>SequenceWalker</code> to transform the element type.  So probably less likely to be used.</p>
+<p>Note: with std lib containers and auto-derive, there is no difference between A and B. So only matters for user defined opaque types.</p>
+
+
+
+<a name="457510073"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/457510073" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#457510073">(Aug 08 2024 at 21:12)</a>:</h4>
+<p>Is <a href="https://github.com/roc-lang/roc/issues/3816">this the issue</a> for tracking tag decoding? </p>
+<p>Would future decode support tag unions?</p>
+
+
+
+<a name="457515355"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/457515355" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#457515355">(Aug 08 2024 at 21:21)</a>:</h4>
+<p>I think deciding supports tags. Maybe it just doesn't auto derive</p>
+
+
+
+<a name="458406995"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/458406995" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#458406995">(Aug 08 2024 at 21:32)</a>:</h4>
+<p>Oh, method is literally missing</p>
+
+
+
+<a name="458408005"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/458408005" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#458408005">(Aug 08 2024 at 21:40)</a>:</h4>
+<p>And we want to support tags both by name and by index for encode and decode. Index will just be alphabetical</p>
+
+
+
+<a name="458409295"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/458409295" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#458409295">(Aug 08 2024 at 21:51)</a>:</h4>
+<p>yeah we never implemented it</p>
+
+
+
+<a name="462043705"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/462043705" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#462043705">(Aug 13 2024 at 07:40)</a>:</h4>
+<p>I added an <a href="https://github.com/roc-lang/roc/issues/6985">issue to track Type Erasure</a> from abocve</p>
+
+
+
+<a name="462083231"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/462083231" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#462083231">(Aug 13 2024 at 11:07)</a>:</h4>
+<p>btw I'd definitely recommend anyone talk to <span class="user-mention" data-user-id="281543">@Folkert de Vries</span> about this before starting on implementation stuff, to get tips on how to proceed!</p>
+
+
+
+<a name="502061459"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/502061459" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Simon Taeter <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#502061459">(Feb 26 2025 at 14:33)</a>:</h4>
+<p>Hello there :) Complete beginner here <span aria-label="hello" class="emoji emoji-1f44b" role="img" title="hello">:hello:</span></p>
+<p>I didn't take the time to read the whole discussion here but I had a reflection about the <a href="https://github.com/roc-lang/roc/blob/main/design/language/Abilities.md#encode-and-hash">Encode and Hash</a> section of the design article and I believe this is the place to talk about it.</p>
+<p>I am writing a lot of Elm and I have to say <a href="https://github.com/MartinSStewart/elm-serialize/tree/1.3.1">codecs</a> saved my life. They combine Encoding and Decoding into a single type and guarantee that what you encode will be decoded in the exact same way. Through that lens, mashing the hashing consept into the encoding one makes a lot less sense. Encoding comes with the implicit idea that your data is conserved, only encoded in an other format.</p>
+<p>Other notes :</p>
+<p>And again on the following paragraph, the use of bot <code>isEq</code> and <code>isNotEq</code> could create strange results if their implementations do not perfectly match (eg. <code>expect isEq a b == True</code> and <code>expect isNotEq a b == True</code> at the same time). Though I guess that it was an example and probably not the actual implementation you would go for.</p>
+<p>Though I just got on board with Roc so I hope my remarks are relevant to you :)</p>
+
+
+
+<a name="502109756"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/502109756" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#502109756">(Feb 26 2025 at 17:58)</a>:</h4>
+<p>Welcome!</p>
+
+
+
+<a name="502111140"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/502111140" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#502111140">(Feb 26 2025 at 18:04)</a>:</h4>
+<p>Just took a skim over where our hash and encode abilities landed.</p>
+<p>They definitely could be forced to be merged together. That said, they have some pertinent differences. A very simple example is that when hashing a set, you have to hash without considering order. When serializing a set, you have to pick an order to serialize to (most serialization formats only have lists and don't have sets). So I dont think they should be merged in practice. On top of that, encoding does lots of extra work that would just slow down hashing</p>
+
+
+
+<a name="502111384"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/502111384" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#502111384">(Feb 26 2025 at 18:05)</a>:</h4>
+<p>As for codecs, that is a really interesting idea. I do think we will want a separate encode and decode either way though. It is valid to encode to a lossy format that has no equivalent decoder. A simple example is that you could use encode to pretty print a datastructure.</p>
+
+
+
+<a name="502111468"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/502111468" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#502111468">(Feb 26 2025 at 18:06)</a>:</h4>
+<p>That said, enabling codec libraries sounds like a good idea to keep track of</p>
+
+
+
+<a name="502111513"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/502111513" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#502111513">(Feb 26 2025 at 18:06)</a>:</h4>
+<p>Cause most formats will want encode and decode</p>
+
+
+
+<a name="502282902"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/502282902" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Simon Taeter <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#502282902">(Feb 27 2025 at 13:24)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="343810">Brendan Hansknecht</span> <a href="#narrow/channel/304641-ideas/topic/Revamped.20Encode.20and.20Decode/near/502111384">said</a>:</p>
+<blockquote>
+<p>A simple example is that you could use encode to pretty print a datastructure.</p>
+</blockquote>
+<p>To me pretty print is more of a <code>toStr</code> thing though.</p>
+<p>A codec ability might make sense here. Though I believe you want to remove abilities? Curious to know about the proposed alternative.</p>
+
+
+
+<a name="502287832"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/502287832" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#502287832">(Feb 27 2025 at 13:46)</a>:</h4>
+<p>Abilities as a separate concept is going way, but you can create a type alias that works in a similar fashion</p>
+
+
+
+<a name="502289144"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Revamped%20Encode%20and%20Decode/near/502289144" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anthony Bullard <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode.html#502289144">(Feb 27 2025 at 13:51)</a>:</h4>
+<p><span class="user-mention" data-user-id="881082">@Simon Taeter</span> Here is a link to the relevant section of the  proposal: <a href="https://docs.google.com/document/d/1OUd0f4PQjH8jb6i1vEJ5DOnfpVBJbGTjnCakpXAYeT8/edit?tab=t.0#heading=h.x6h2qzxs7o9o">https://docs.google.com/document/d/1OUd0f4PQjH8jb6i1vEJ5DOnfpVBJbGTjnCakpXAYeT8/edit?tab=t.0#heading=h.x6h2qzxs7o9o</a></p>
+
+
+
+<hr><p>Last updated: Jul 01 2026 at 14:01 UTC</p>
+</html>

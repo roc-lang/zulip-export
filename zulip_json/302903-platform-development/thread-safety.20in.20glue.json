@@ -1,0 +1,248 @@
+[
+    {
+        "content": "<p>Currently, glue exports things like <code>NonNull&lt;ManuallyDrop&lt;u8&gt;&gt;</code>, which can't be sent between threads (<code>NonNull</code> does not implement <code>Send</code>.) Is this intentional / a long-term design? I assume it'd make doing things like web servers pretty annoying. <span aria-label=\"dizzy\" class=\"emoji emoji-1f635\" role=\"img\" title=\"dizzy\">:dizzy:</span> </p>\n<p>(I'm running into it when parallelizing work in rbt. I can get around it for now by having all the glue-y jobs live in the main thread and then converting them to send-safe stuff before shoving 'em in queues.)</p>",
+        "id": 302524537,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1664996396
+    },
+    {
+        "content": "<p>in what sort of scenario does this come up?</p>",
+        "id": 302525815,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1664996794
+    },
+    {
+        "content": "<p>specifically, what types are involved?</p>",
+        "id": 302525854,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1664996815
+    },
+    {
+        "content": "<p>well in this particular case, it looks like it's in a <code>RocStr</code>! Here's the causal chain that rustc generated:</p>\n<div class=\"codehilite\"><pre><span></span><code>error[E0277]: `NonNull&lt;ManuallyDrop&lt;u8&gt;&gt;` cannot be shared between threads safely\n   --&gt; src/coordinator.rs:295:18\n    |\n295 |                 .spawn(move || self.run())\n    |                  ^^^^^ `NonNull&lt;ManuallyDrop&lt;u8&gt;&gt;` cannot be shared between threads safely\n    |\n    = help: within `glue::Command`, the trait `Sync` is not implemented for `NonNull&lt;ManuallyDrop&lt;u8&gt;&gt;`\n    = note: required because it appears within the type `std::option::Option&lt;NonNull&lt;ManuallyDrop&lt;u8&gt;&gt;&gt;`\n    = note: required because it appears within the type `RocList&lt;u8&gt;`\n    = note: required because it appears within the type `ManuallyDrop&lt;RocList&lt;u8&gt;&gt;`\n    = note: required because it appears within the type `roc_std::roc_str::RocStrInner`\n    = note: required because it appears within the type `RocStr`\n</code></pre></div>",
+        "id": 302535563,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665000336
+    },
+    {
+        "content": "<p>well for that specific case we can just implement <code>unsafe impl Send for RocStr</code></p>",
+        "id": 302535908,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1665000475
+    },
+    {
+        "content": "<p>So Roc types are not thread safe by default. So this is probably correct actually. You can always wrap the type and make it send if you want to override that.</p>",
+        "id": 302536026,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665000505
+    },
+    {
+        "content": "<p>If you we to take a <code>RocStr</code> and pass it into two different Roc functions on different threads that could lead to a double free.</p>",
+        "id": 302536160,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665000553
+    },
+    {
+        "content": "<p>We technically need glue to generate different types based on if roc is configured to run with atomic refcounts or not. When using atomic refcounts, they are now send.</p>",
+        "id": 302536323,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665000618
+    },
+    {
+        "content": "<p>This is all super long term stuff, but the platform should be able to request whether or not roc needs to be thread safe</p>",
+        "id": 302536536,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665000718
+    },
+    {
+        "content": "<p>In a web platform, Roc probably doesn't need to be thread safe. Each thread is calling roc functions in a single threaded way. No communication between the threads.</p>",
+        "id": 302536663,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665000765
+    },
+    {
+        "content": "<p>hmm then how does this work ? <a href=\"https://doc.rust-lang.org/std/vec/struct.Vec.html#impl-Send-for-Vec%3CT%2C%20A%3E\">https://doc.rust-lang.org/std/vec/struct.Vec.html#impl-Send-for-Vec%3CT%2C%20A%3E</a></p>",
+        "id": 302536714,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1665000797
+    },
+    {
+        "content": "<p>send should just work: we can transfer our types between threads</p>",
+        "id": 302536872,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1665000853
+    },
+    {
+        "content": "<p>and <code>Sync</code> seems to say that <code>&amp;RocStr</code> can be shared between threads, which also seems fine? dropping that type does nothing</p>",
+        "id": 302536991,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1665000902
+    },
+    {
+        "content": "<p>Technically, as they currently stand, they should be <code>Sync</code> and <code>Send</code>, but only if the refcount is 1.</p>",
+        "id": 302537358,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665001029
+    },
+    {
+        "content": "<p>Rust doesn't have conditional <code>Sync</code>/<code>Send</code>, so you have to label them as neither.</p>",
+        "id": 302537408,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665001048
+    },
+    {
+        "content": "<p>If you send one with multiple references, you can get race conditions between the two threads.</p>",
+        "id": 302537497,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665001077
+    },
+    {
+        "content": "<p>hmm… looks like I'm going to have to do something like this to get any of this to work (or I'll have to convert all my <code>RocStr</code> to <code>String</code>)</p>",
+        "id": 302537687,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665001137
+    },
+    {
+        "content": "<p>thought it'd be fine but it looks like channels are <code>Send</code> iff their items are <code>Send</code>. Makes sense.</p>",
+        "id": 302537754,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665001165
+    },
+    {
+        "content": "<p>If you know you will have the only reference, the best answer is to basically make a sendable wrapper type and use that. It isn't too much work.</p>",
+        "id": 302537912,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665001207
+    },
+    {
+        "content": "<p>yeah, <code>Job</code> already wraps a bunch of stuff whose memory is managed by Roc. <code>unsafe impl send for Job</code> oughta do me. Sigh. Would've liked to avoid it, but I'm at least gonna document it thoroughly.</p>",
+        "id": 302538093,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665001280
+    },
+    {
+        "content": "<p>If you really want to be thorough (which maybe isn't worth it), you would make <code>struct UniqueRocStr(RocStr)</code> That is sendable and ensures either the string is unique or that it gets copied. Maybe we could make glue generate that. Just a check in the constructor.</p>",
+        "id": 302538366,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665001366
+    },
+    {
+        "content": "<p>how would that work? Just look at the refcount in the internals and copy if it's greater than 1?</p>",
+        "id": 302538446,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665001397
+    },
+    {
+        "content": "<p>yep</p>",
+        "id": 302538479,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665001413
+    },
+    {
+        "content": "<p>nice.</p>",
+        "id": 302538493,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665001418
+    },
+    {
+        "content": "<p>not gonna do that right now, but I'll note that it should happen in the future. Currently <code>Job</code> just wraps over a couple glue-generated types wholesale. It's a TODO to eventually not do that, though.</p>",
+        "id": 302538644,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665001462
+    },
+    {
+        "content": "<p><span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 302538692,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665001483
+    },
+    {
+        "content": "<p>roc collections (including string) aren't thread-safe by default because they're non-atomically reference counted</p>",
+        "id": 302546854,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665004911
+    },
+    {
+        "content": "<p>so <code>RocList&lt;T&gt;</code> is not comparable to <code>Vec&lt;T&gt;</code>, but rather to <code>Rc&lt;Vec&lt;T&gt;&gt;</code></p>",
+        "id": 302546963,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665004941
+    },
+    {
+        "content": "<p>and <code>Rc</code> is neither <code>Send</code> nor <code>Sync</code></p>",
+        "id": 302546986,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665004953
+    },
+    {
+        "content": "<p>What do you think about glue generating a <code>UniqueRocList&lt;T&gt;</code> type that would have a constructor that took a <code>RocList&lt;T&gt;</code> and cloned it if it was not unique and took ownership if it is unique. Then <code>UniqueRocList&lt;T&gt;</code> should be <code>Send</code> but not <code>Sync</code>.</p>",
+        "id": 302548883,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665005676
+    },
+    {
+        "content": "<p>that seems reasonable <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 302548996,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665005729
+    },
+    {
+        "content": "<p>well, sigh, looks like I'm just gonna have to do this. How do I get the reference count?</p>",
+        "id": 302551935,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665007034
+    },
+    {
+        "content": "<p>or I guess I could just copy all the memory proactively. I don't love that but it'd get me unstuck here (been spinning my wheels all afternoon.) What would y'all think of that?</p>",
+        "id": 302552231,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665007178
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> do you think you could help with adding an implementation of <code>UniqueRocList</code> to <code>roc_std</code>? I'm still on parental leave, so my free time is spotty and unpredictable <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 302552681,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1665007344
+    },
+    {
+        "content": "<p>unblocked for now… I was already converting most of the <code>Job</code> into things like PathBufs and stuff, so I just needed to convert a list, a dict, and a str in addition.</p>",
+        "id": 302554905,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665008532
+    },
+    {
+        "content": "<p>maddeningly, the code is actually now better-factored and easier to work with <span aria-label=\"mad\" class=\"emoji emoji-1f621\" role=\"img\" title=\"mad\">:mad:</span></p>",
+        "id": 302554926,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665008548
+    },
+    {
+        "content": "<p>fortunately if we had like <code>RocList.unique</code> or something it'd be just a drop-in, I think?</p>",
+        "id": 302555001,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665008590
+    },
+    {
+        "content": "<p>ok, that's enough concurrency shenanigans for today. I am going to go lie down now.</p>",
+        "id": 302555379,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665008802
+    },
+    {
+        "content": "<blockquote>\n<p>do you think you could help with adding an implementation of UniqueRocList to roc_std? </p>\n</blockquote>\n<p>Yeah, I can take a look.</p>",
+        "id": 302555602,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665008955
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"419641\">@Brian Hicks</span> Feel free to let me know if you have any other questions/ need any specific information related to this.</p>",
+        "id": 302555772,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1665009034
+    },
+    {
+        "content": "<p>I might when my brain recovers from the day. <span aria-label=\"dizzy\" class=\"emoji emoji-1f635\" role=\"img\" title=\"dizzy\">:dizzy:</span> For now, lemme know if it ends up being easy and I'll drop it in and test it for you as soon as I can!</p>",
+        "id": 302556022,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1665009185
+    }
+]

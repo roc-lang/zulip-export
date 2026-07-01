@@ -1,0 +1,916 @@
+<html>
+<head><meta charset="utf-8"><title>Logging and error handling · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html">Logging and error handling</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="305811279"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305811279" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305811279">(Oct 24 2022 at 12:47)</a>:</h4>
+<p>This isn't so much an idea as it is an experience story in using Elm, which hopefully Roc can improve upon.</p>
+<p>It's a two pronged story, which touches both logging/analytics/reporting and error handling in the language. </p>
+<p>The first issue is how logging relates to managed effects. In my mind, when a function returns an effect of some kind, it tells me a lot about what kind of function this is. If a function wants to do something, like send a network request, then that's very different from a function that just does some local computation. They are obviously both pure, but just mentally, I handle them differently, making it valuable for me to only have functions return effects when that effect is part of the business logic of that function.<br>
+Unfortunately, logging information from functions is also an effect. So if I want to log something from a function which otherwise doesn't return an effect, then I need to "pollute" its signature with this new information, which doesn't help me understand what the purpose of the function is. In fact, since I work on Falcon LogScale (formerly Humio), our mantra at work is to "log everything". In terms of effects, that means returning logging effects from all over the code base. That's not something we do today, because it's painful to do unfortunately.</p>
+<p>Next up is error handling. My experience is that Elm encourages developers to use "default values" as an important strategy for dealing with errors that do not occur directly as a result of, say, a network request. For example, if you have two different custom types with different constraints that need to be used together, it's easy to unfold all branches and see what all the possible interactions between them are. But for some of those branches, it's by far the easiest strategy to leave a comment ala <code>-- THIS CANNOT HAPPEN</code> and then provide a default value that allows the program to continue running.</p>
+<p>It's good to allow the program to continue in a incomplete state when you reasonably can, but I would much rather be allowed to log an error in this case. So why can't I do that? If this case exists in a <code>view</code> function, I might just be completely unable to report something other than to render it to screen. But even if it happens in a place where I am able to propagate an effect up, if I have some <code>ImpossibleCase</code> error, then it also creates a lot of noise, because propagating errors can be very noisy in Elm.</p>
+<p>The sweet spot I would really like to have is to be able to provide a default value where the case happens, but also to report an error in some way, without polluting all my type signatures from the given function and up through to be returned by <code>update</code>. <code>Debug.log</code> already exists and is pretty much perfect for this, except it's not allowed in production builds of course. As it is now, I have had to fix issues where the author was wrong about <code>THIS CANNOT HAPPEN</code>, and it's both annoying to track down that this was where the error originated, but also a bit nerve wrecking to have no idea how many of those cases our users are hitting in practice.</p>
+<p>I don't need to be sold on the benefits of pure computation though, and I know <code>Debug.log</code> is impure. If this were to be done in Roc, then maybe a platform could define this kind of write-only escape hatch for logging. Maybe only writing to <code>stderr</code>/the browser console is allowed, and it's up to the program author to figure what they want to do with the information that is printed there. That would be safer than allowing writing to some file or sending network requests at least.</p>
+
+
+
+<a name="305823124"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305823124" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305823124">(Oct 24 2022 at 13:47)</a>:</h4>
+<p>regarding "this cannot happen," I'm assuming <a href="https://github.com/roc-lang/roc/issues/4384">https://github.com/roc-lang/roc/issues/4384</a> should address that</p>
+
+
+
+<a name="305825700"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305825700" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305825700">(Oct 24 2022 at 13:58)</a>:</h4>
+<p>as for logging, I've thought about this situation but there are some problems with any "pretend logging isn't a side effect" design:</p>
+<ol>
+<li>It's important that the Roc compiler is free to do optimizations under the assumption that Roc functions are pure. After inlining, this might mean that logging operations get optimized away and no longer log things. Preventing that from happening sounds complicated; we'd need to flag functions that log as "actually not a pure function" and then make sure that propagates virally to all other functions which call those functions.</li>
+<li>I'm not sure a restriction on logging output can possibly exist that couldn't be used as a general "perform any side effect" escape hatch. For example, if you restrict logging to just write to stderr, then the host can watch stderr and look for special messages about which side effects to perform. The side effects couldn't return any values, and the ergonomics wouldn't be good, but those would be the only restrictions.</li>
+</ol>
+
+
+
+<a name="305826133"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305826133" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305826133">(Oct 24 2022 at 14:00)</a>:</h4>
+<p>the only design I thought of that seemed plausible also seems very complicated from an implementation perspective: basically have some sort of <code>log</code> keyword, and what it does is append strings to a list, then when the entire Roc call chain finishes, that list comes back as part of the return value</p>
+
+
+
+<a name="305826524"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305826524" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305826524">(Oct 24 2022 at 14:01)</a>:</h4>
+<p>so the log messages don't get sent in realtime; rather, they get accumulated as the program runs and then the platform periodically receives a big list of them, which it can then persist somewhere</p>
+
+
+
+<a name="305826695"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305826695" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305826695">(Oct 24 2022 at 14:02)</a>:</h4>
+<p>so it's kinda like every function in the Roc program getting an extra list as an argument and an extra list as a return value</p>
+
+
+
+<a name="305826747"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305826747" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305826747">(Oct 24 2022 at 14:02)</a>:</h4>
+<p>What if logging called out to a host-provided <code>roc_log</code> or similar? It doesn't eliminate the optimization problem but it makes it easier to deal with, since <code>roc_log</code> must be foreign. I think it would address the escape hatch problem too, if you only allow it to send e.g. strings</p>
+
+
+
+<a name="305827166"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305827166" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305827166">(Oct 24 2022 at 14:04)</a>:</h4>
+<p>an escape hatch with strings is pretty straightforward - you can just serialize whatever you actually want to send as json <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="305827411"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305827411" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305827411">(Oct 24 2022 at 14:05)</a>:</h4>
+<p>I guess the same is true of <code>crash</code>, though, and possibly even <code>roc_alloc</code> via Boxing of strings - is that possible/worth trying to restrict?</p>
+
+
+
+<a name="305827780"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305827780" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305827780">(Oct 24 2022 at 14:07)</a>:</h4>
+<p><code>roc_alloc</code> only receives number of bytes to allocate; it isn't told what will go in there</p>
+
+
+
+<a name="305827990"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305827990" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305827990">(Oct 24 2022 at 14:08)</a>:</h4>
+<p>doing it with <code>crash</code> is interesting; I need to think about that more <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="305828196"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305828196" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305828196">(Oct 24 2022 at 14:08)</a>:</h4>
+<p>but anyway, when I thought through this more (awhile ago), I ended up wondering how valuable it actually was to do logging outside the context of effects anyway</p>
+
+
+
+<a name="305828729"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305828729" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305828729">(Oct 24 2022 at 14:11)</a>:</h4>
+<p>like usually if I'm digging through logs trying to figure out what happened, it's either because:</p>
+<ol>
+<li>I'm debugging locally, and the purpose of the logs is similar to print debugging; they just tell me interesting highlights about what's going on in the program right now</li>
+<li>They're production logs containing transitory information that wouldn't be recoverable any other way</li>
+</ol>
+
+
+
+<a name="305829025"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305829025" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305829025">(Oct 24 2022 at 14:12)</a>:</h4>
+<p>1 can be addressed with something that is intended for debugging and doesn't have to be robust to optimizations (like how <code>expect</code> works today)</p>
+
+
+
+<a name="305829243"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305829243" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305829243">(Oct 24 2022 at 14:13)</a>:</h4>
+<p>2 can be addressed using normal effects, because if you have logged all the relevant info from your tasks, you can reproduce everything else by calling the pure functions that glue those tasks together</p>
+
+
+
+<a name="305829403"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305829403" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305829403">(Oct 24 2022 at 14:14)</a>:</h4>
+<p>but I'd love to hear your perspective on that, as someone who presumably makes heavier use of logging than I do <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="305829474"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305829474" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305829474">(Oct 24 2022 at 14:14)</a>:</h4>
+<p><code>crash</code> is a nice improvement for sure, but I don't think it's the complete picture. In our application, I'm quite sure we don't want to crash on many of these cases.</p>
+<p>The places where we want to crash are things like defining a regex from a literal that we control. If that ends up crashing, it will definitely happen during development, so it's very obvious.</p>
+<p>But our application is quite complicated, and our users use it for business critical things. It's also not like we're swimming in these impossible cases, but most of the time we can still allow people to continue sensibly with a default value. In the ideal world, we would allow this degraded experience, but still be told about the behavior.</p>
+
+
+
+<a name="305832135"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305832135" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305832135">(Oct 24 2022 at 14:26)</a>:</h4>
+<p>Question:</p>
+<p>In roc we could technically have a platform with two different effect types, or a platform that annotated what types of effects are possible by a function. Does that alleviate this isssue at all?</p>
+<p>Sure it is still an effect, but you can see that it is only an logging effect for example.</p>
+
+
+
+<a name="305833383"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305833383" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305833383">(Oct 24 2022 at 14:31)</a>:</h4>
+<blockquote>
+<p>2 can be addressed using normal effects, because if you have logged all the relevant info from your tasks, you can reproduce everything else by calling the pure functions that glue those tasks together</p>
+</blockquote>
+<p>Not in all cases I think. You might have different servers writing data to the same S3 bucket, where the end result depends on the timing of the servers, network congestion, and more.</p>
+<p>I'd also love to know more about the general Roc story on debugging in production. Presumably you can't record every effect when that includes e.g. reading big files.</p>
+
+
+
+<a name="305835685"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305835685" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305835685">(Oct 24 2022 at 14:43)</a>:</h4>
+<blockquote>
+<p>I'm not sure a restriction on logging output can possibly exist that couldn't be used as a general "perform any side effect" escape hatch.</p>
+</blockquote>
+<p>I'm curious how much Roc should protect against this sort of thing. Reading from stderr to perform side effects outside of the program feels a bit contrived. Surely you could also perform side effects outside the program based on e.g. which syscalls, network calls, etc., the program makes. If someone were to do this on purpose, I assume it's for an application they are themselves writing. I have a hard time seeing it as e.g. a security issue.</p>
+
+
+
+<a name="305840670"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305840670" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305840670">(Oct 24 2022 at 15:05)</a>:</h4>
+<p>it's not so much a security issue as an ecosystem concern; in the future, we want to make an increasing amount of tooling that relies on functions being referentially transparent in order to do things like skipping work (e.g. not rerunning tests because their inputs didn't change, so we assume their outputs couldn't have), time travel debugging, etc.</p>
+
+
+
+<a name="305841641"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305841641" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305841641">(Oct 24 2022 at 15:09)</a>:</h4>
+<p>so I think it's really important to take into account not just "what's encouraged" but also "what's possible" - because if someone makes a platform with a lot of "conveniences" that break current (or future planned) tooling, they probably won't pitch it as "tooling-unfriendly" when marketing is to beginners who won't know enough about the language to realize that downside until it's too late</p>
+
+
+
+<a name="305877113"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305877113" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305877113">(Oct 24 2022 at 17:20)</a>:</h4>
+<p>another concern about synchronous logging: defs get reordered (just like in Elm and Haskell), which means the log statements might get run in a different order than they appear in the source code, which could lead to confusing logs</p>
+
+
+
+<a name="305877376"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305877376" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305877376">(Oct 24 2022 at 17:21)</a>:</h4>
+<p>so if we were to introduce a <code>log</code> keyword, we might need to consider making it an error for defs to be out of order - like you'd have to order them in a way where log statements would execute in source order</p>
+
+
+
+<a name="305878251"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305878251" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305878251">(Oct 24 2022 at 17:26)</a>:</h4>
+<p>there are some other interesting points made on this Reddit thread, in particular: <a href="https://www.reddit.com/r/scala/comments/537imy/comment/d7qqbb7/">https://www.reddit.com/r/scala/comments/537imy/comment/d7qqbb7/</a></p>
+
+
+
+<a name="305883563"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305883563" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305883563">(Oct 24 2022 at 17:57)</a>:</h4>
+<p>incidentally, this is definitely one of those scenarios where I want to take a step back and ask "what are the problems that logging solves, and are there other - potentially better - ways they could be solved using other approaches?"</p>
+
+
+
+<a name="305898624"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305898624" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305898624">(Oct 24 2022 at 19:24)</a>:</h4>
+<p>To be clear, my suggestion of allowing logging to console is just the thing I've wished for in Elm, since that's been the shortest path to achieving my desired outcome. I'm not suggesting that as a be-all, end-all approach, but just a starting point <span aria-label="blush" class="emoji emoji-1f60a" role="img" title="blush">:blush:</span></p>
+<p>Looking at my experience with our backend in Scala, and writing our frontend in Elm, I still think logs makes sense both based on on events and not. Let's break them down:</p>
+<p>Logs based on events make a lot of sense on both the backend and frontend. On the backend, we care a lot about the time that something takes. How long does it take us to respond to an incoming request? How long to open and parse some file? How long to start up the server? This is in addition to the actual time that the event takes place. This allows us to look at how our response times are doing over time for example, and also to correlate it with the number of requests at any time. Additionally, the timestamps of each log event allow us to correlate with other log sources, like system logs that describe the RAM and CPU usage of our program. This gives us a good idea of how our program is running and what our capacity is. We can further instrument our code with tracing, to help get even more accurate data for how each service runs, if we are so inclined.</p>
+<p>Aside from what we care about as developers, audit logging is also an important aspect of logging events. That is, it should be clear who took what action when.</p>
+<p>When implementing logging like this, it's important to think about if you want structured logs or not. Your average log line is most often "unstructured", and structured logs can gather things up more easily. For example, a "structured log" may just be a dictionary of json data. When your server gets a request, it adds a request ID to the dictionary, and passes the dictionary to the next function that is called. This function can then add information to the dict, and when the response is finally served, the log line can be printed with all the data it has gathered up around this one request.</p>
+<p>Logging things which are not based on events also depends on how you define "events". For example, if you're building a video streaming service, maybe you want to log what kind of video quality clients are getting as they stream. If they're streaming an hour long movie, you may want to sample their bitrate every minute for example. That's still a timer-based event, but it's an event that only exists to do logging. This is also generally what "metrics" are: just looking at how the application is doing, without being tied to any specific event.</p>
+<p>Similarly, on the frontend, it's natural to do logging based on events. But I've also wanted to just poke at the model in my Elm application more than once, to see what users had in there. For example, we've wanted to see how many of our users have set up their applications to render their logs with feature X. But feature X depends on multiple things, like which settings the user has saved on their account, the changes they've made just for their current session, and crucially also the shape of the data they are looking at. This means there is no single event we can look at to determine if feature X is in use. We would have to determine if X is in use at a number of different events, which increases odds that we miss something. And since the feature is about how users render their logs, we already calculate exactly the answer we need in the <code>view</code> function, and trying to extract that logic to somewhere without the rendering can be messy.</p>
+
+
+
+<a name="305900209"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305900209" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305900209">(Oct 24 2022 at 19:34)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="557981">Kasper Møller Andersen</span> <a href="#narrow/stream/304641-ideas/topic/Logging.20and.20error.20handling/near/305898624">said</a>:</p>
+<blockquote>
+<p>On the backend, we care a lot about the time that something takes. How long does it take us to respond to an incoming request? How long to open and parse some file? How long to start up the server? This is in addition to the actual time that the event takes place. This allows us to look at how our response times are doing over time for example, and also to correlate it with the number of requests at any time. Additionally, the timestamps of each log event allow us to correlate with other log sources, like system logs that describe the RAM and CPU usage of our program. This gives us a good idea of how our program is running and what our capacity is. We can further instrument our code with tracing, to help get even more accurate data for how each service runs, if we are so inclined.</p>
+<p>Aside from what we care about as developers, audit logging is also an important aspect of logging events. That is, it should be clear who took what action when.</p>
+<p>When implementing logging like this, it's important to think about if you want structured logs or not. Your average log line is most often "unstructured", and structured logs can gather things up more easily. For example, a "structured log" may just be a dictionary of json data. When your server gets a request, it adds a request ID to the dictionary, and passes the dictionary to the next function that is called. This function can then add information to the dict, and when the response is finally served, the log line can be printed with all the data it has gathered up around this one request.</p>
+</blockquote>
+<p>yeah, these are both things that platforms can make really nice I think, because they have complete programmatic access to every single I/O action that gets taken! <span aria-label="grinning face with smiling eyes" class="emoji emoji-1f601" role="img" title="grinning face with smiling eyes">:grinning_face_with_smiling_eyes:</span></p>
+
+
+
+<a name="305998179"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/305998179" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#305998179">(Oct 25 2022 at 10:24)</a>:</h4>
+<blockquote>
+<p>yeah, these are both things that platforms can make really nice I think, because they have complete programmatic access to every single I/O action that gets taken!</p>
+</blockquote>
+<p>Nice, that sounds promising! To be clear, there are many more things than timing and IO that we care about though. We also want to see that e.g. some job ran and what its results were. We want to know that users are enabling our new feature. We want to know what framerate our client is rendering at, and so on.</p>
+<p>The entire reason Humio was created back in the day was to allow people to simply ask any question they could think of. If you can log the data, then you can answer the question, so Humio enables people to log as much as they can. I'm a staunch believer in having accessible logging for this reason: it empowers people to be creative and poke at not only their code, but also how the program behaves at runtime, and how users interact with the program. A "traditional" question for developers when logging might be "How did this thing come to be null?!", but when you can log everything, you can easily answer questions like "What are the most used search terms for these kinds of requests?" and "When do people use our product, and if we have a rush of users at certain points, how does that affect the service?".</p>
+<p>So I want to circle back on this you said earlier:</p>
+<blockquote>
+<p>like usually if I'm digging through logs trying to figure out what happened</p>
+</blockquote>
+<p>I really want to emphasize that using logs to retrace application steps is just one problem that logs help solve, and which I agree can be better solved by having effects that you can replay, at least in some scenarios (I can also imagine scenarios where I would prefer logs).<br>
+But it's important that logging makes an application observable while it's running. This means that you also use logs to predict problems before they become actual problems. For example, if you can see the response time on requests for a service is trending upwards, then you have some time to stop it from growing too high. And if you can see users are making a lot of bad requests, then maybe it's a sign that they are misunderstanding your API, and you need to improve documentation.</p>
+
+
+
+<a name="306000065"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306000065" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306000065">(Oct 25 2022 at 10:39)</a>:</h4>
+<p>Thinking about logging as managed effects more, this is really the key for me. If I all of a sudden want to log something deep inside some function that has no managed effects, I have to convert it and every parent above it that doesn't have effects to now have it. This is a nice barrier to have when you don't want e.g. file reads, network requests, etc. all over the place, but for logging, the purpose is not to bring side effects into the program, but to expose the program in a way that hopefully makes us smarter.</p>
+
+
+
+<a name="306000220"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306000220" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306000220">(Oct 25 2022 at 10:40)</a>:</h4>
+<p>Also, I realize I sound like I'm giving a sales pitch, and I work with logging, so keep that bias in mind <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="306003836"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306003836" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306003836">(Oct 25 2022 at 11:08)</a>:</h4>
+<blockquote>
+<p>If I all of a sudden want to log something deep inside some function that has no managed effects, I have to convert it and every parent above it that doesn't have effects to now have it.</p>
+</blockquote>
+<p>This is a good point</p>
+
+
+
+<a name="306004580"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306004580" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306004580">(Oct 25 2022 at 11:13)</a>:</h4>
+<p>We also wanted to be able to trace all values from program execution for easy debugging. Could we use the same design that was planned for that for logging as well?</p>
+
+
+
+<a name="306024807"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306024807" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306024807">(Oct 25 2022 at 13:10)</a>:</h4>
+<blockquote>
+<p>If I all of a sudden want to log something deep inside some function that has no managed effects, I have to convert it and every parent above it that doesn't have effects to now have it.</p>
+</blockquote>
+<p>Eventually the editor could make this process easy and perhaps auto-collapse all logging code and types. That seems like a nice compromise to me.</p>
+
+
+
+<a name="306027227"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306027227" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Stewart <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306027227">(Oct 25 2022 at 13:22)</a>:</h4>
+<p><del>Imo, I wouldn't mind losing logs if there are better alternatives for debugging. In the context of a server, requests could be saved and then you could replay that code locally and step through the execution to see what happened.</del></p>
+<p><del>It feels like logging is popular because most debugging tools are so primitive. I used to work with C# and the debugger built into Visual Studio was fantastic. As a result I rarely ever used Console.log to debug my code (until the code was deployed anyway, then Visual Studio's debugger couldn't help much and it was back to using Console.log)</del></p>
+<p>Edit: Looks like my points got addressed earlier.</p>
+
+
+
+<a name="306070819"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306070819" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306070819">(Oct 25 2022 at 16:37)</a>:</h4>
+<blockquote>
+<p>all of a sudden want to log something deep inside some function that has no managed effects</p>
+</blockquote>
+<p><span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span> I'd be curious what specific examples of this you've run into, to understand the use cases better</p>
+
+
+
+<a name="306073873"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306073873" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Georges Boris <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306073873">(Oct 25 2022 at 16:52)</a>:</h4>
+<p>imo this sounds more like something suited to a perf profiler unless talking about a language with unmanaged effects...</p>
+<p>I understand the reasoning of "I want to log if this impossible state is reached" but it seems not ideal for a state to both be unreachable and at the same time you want your process to continue with resilience...</p>
+<p>using the "let it crash" philosophy (common on BEAM systems) - this would be the case for you to crash the process, log the crash reason for future debugging, and restart the process from a previous known-valid-state where the impossible state is hopefully not easy to reach again.</p>
+
+
+
+<a name="306073946"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306073946" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Georges Boris <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306073946">(Oct 25 2022 at 16:52)</a>:</h4>
+<p>this should be rarer for type-safe languages.</p>
+
+
+
+<a name="306086892"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306086892" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306086892">(Oct 25 2022 at 17:42)</a>:</h4>
+<blockquote>
+<p>imo this sounds more like something suited to a perf profiler </p>
+</blockquote>
+<p>In my experience a perf profiler is typically not used on live systems but more for local stress testing.<br>
+As a sidenote; I do think a lot of the mentioned performance monitoring cases can be handled from inside the platform.</p>
+
+
+
+<a name="306088366"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306088366" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306088366">(Oct 25 2022 at 17:51)</a>:</h4>
+<p>Quick aside on perf monitoring that i hope won't derail too much:</p>
+<p>Perf monitoring on live systems is amazing. Obviously it is too costly to run all the time, but having a system that can take one server out of the fleet, turn on perf monitoring for a few seconds and then turn it back off is awesome. You basically get a ton of miniperf traces without having noticable effects on the end user. In aggregate, you get a very complete picture of the full system perf.</p>
+
+
+
+<a name="306972237"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306972237" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306972237">(Oct 30 2022 at 15:18)</a>:</h4>
+<blockquote>
+<p>I'd be curious what specific examples of this you've run into, to understand the use cases better</p>
+</blockquote>
+<p>I haven't kept accurate track of course, but in the domain of writing web applications using Elm, the most common thing is definitely matching two sets of disparate modeling up, and now there's an "impossible" branch. This can happen in a number of different ways of course. Maybe the modeling is just sloppy and can be fixed up pretty easily, in which case that is preferable. But remodeling is not always an option or even the right solution.</p>
+<p>I feel like I often get these conflicts in the <code>view</code> function, as that is where you are often "unfolding" all the modeling you've done, but there you are prohibited from returning managed effects. And there can be many different messages that are part of getting to an "impossible" branch, so it's very onerous to detect reliably in the <code>update</code>.</p>
+<p>I've also had this experience in JSON decoders, where I need to account for some potential shape of the data that I know should not occur (e.g. field X is only present when field Y has value Z, etc.). </p>
+<p>Trying to extrapolate from my (more limited) Scala experience writing backend services, things like service initialization are often about reading e.g. configurations into memory without sending anything out of the application. Or if you're just writing data to some buffer in memory on a network request, you might still send a 200 OK response back, but the function that crafts that response probably isn't the function that writes into the buffer. So if I want to log something when I write to the buffer, I'll need to return a managed effect even though the function wouldn't have one without the logging.</p>
+<blockquote>
+<p>using the "let it crash" philosophy (common on BEAM systems) - this would be the case for you to crash the process, log the crash reason for future debugging, and restart the process from a previous known-valid-state where the impossible state is hopefully not easy to reach again.</p>
+</blockquote>
+<p>I'm not sure how this applies here. I agree with the "let it crash" approach, in-so-far as you have the tools to do so in a useful way. Crashing when doing internal testing is great for example (so I'm all for adding e.g. <code>debug_crash</code> to Roc), but unless the language is built around setting up small processes and restarting them in case of crashes, then I don't think it's desirable in production. Business needs vary of course, but for us, we cannot accept that our Elm application crashes, and at the same time, we know the application needs to deal with unknown error states. This is a feature though, since it means we can continue servicing users while e.g. upgrading our backend with new behavior that the existing client might not be prepared for.</p>
+
+
+
+<a name="306973316"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306973316" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kasper Møller Andersen <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306973316">(Oct 30 2022 at 15:26)</a>:</h4>
+<p>And since everyone is talking a lot about performance in here, I just want to re-emphasize that performance is just one of multiple concerns that logging is useful in addressing. Since logging provides a completely live view of everything that goes on in your application, performance and error tracking is obvious things to do, but you can also log e.g. sales, and use that to estimate daily revenue for example.</p>
+
+
+
+<a name="306976071"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306976071" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306976071">(Oct 30 2022 at 15:49)</a>:</h4>
+<p>a thought about how logging from views could work in that example: the platform could offer (the equivalent of(</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="kt">Html</span><span class="nf">.</span><span class="nv">log</span><span class="w"> </span><span class="nf">:</span><span class="w"> </span><span class="kt">Str</span><span class="p">,</span><span class="w"> </span><span class="kt">Html</span><span class="w"> </span><span class="nv">msg</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="kt">Html</span><span class="w"> </span><span class="nv">msg</span><span class="w"></span>
+</code></pre></div>
+<p>so it's a wrapper around an element, and when the platform encounters it, it runs a logging effect that you specified in <code>Program</code> passing the given string</p>
+
+
+
+<a name="306976236"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306976236" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306976236">(Oct 30 2022 at 15:50)</a>:</h4>
+<p>there are ways that could be fancier, but the basic idea is that it's a way to log from <code>view</code> without crashing</p>
+
+
+
+<a name="306986208"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/306986208" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Georges Boris <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#306986208">(Oct 30 2022 at 17:17)</a>:</h4>
+<p>also - the let it crash approach can work in production in Roc if the platform is suited for it. The platform is the one responsible for dealing with exceptions if I'm not mistaken - so if you want to create some resiliency to errors you (or the platform maintainer) may create tools to catch an exception and continue the process from a previous state or something like that.</p>
+
+
+
+<a name="366644629"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366644629" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366644629">(Jun 15 2023 at 22:57)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/stream/304641-ideas/topic/Logging.20and.20error.20handling/near/305877113">said</a>:</p>
+<blockquote>
+<p>another concern about synchronous logging: defs get reordered (just like in Elm and Haskell), which means the log statements might get run in a different order than they appear in the source code, which could lead to confusing logs</p>
+</blockquote>
+<p>worth noting: this is no longer a concern, since now unordered defs are planned to be a warning</p>
+
+
+
+<a name="366645281"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366645281" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366645281">(Jun 15 2023 at 23:02)</a>:</h4>
+<p>I want to revisit the idea of a synchronous logging keyword of some sort, given the realization that it seems like one of the following has to be true: either...</p>
+<ul>
+<li><code>dbg</code> can never work in WebAssembly, or when embedding Roc into an existing code base (like we're doing at Vendr, embedding it into a NodeJS TypeScript backend), or:</li>
+<li><code>dbg</code> is implemented in a way where platform authors can choose to make it become arbitrary synchronous logging (or other effects) anyway</li>
+</ul>
+
+
+
+<a name="366645312"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366645312" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366645312">(Jun 15 2023 at 23:02)</a>:</h4>
+<p>the first option doesn't really seem reasonable to me long-term</p>
+
+
+
+<a name="366645343"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366645343" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366645343">(Jun 15 2023 at 23:02)</a>:</h4>
+<p>so if we're ending up with the second one by process of elimination, should we consider leaning into it and making it a language feature, since people will be able to access it one way or another if they want it anyway?</p>
+
+
+
+<a name="366645537"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366645537" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366645537">(Jun 15 2023 at 23:04)</a>:</h4>
+<p>like concretely, we could give host authors a <code>roc_log</code> function (similar to <code>roc_alloc</code>) today which gets called every time a roc function hits a <code>log</code> keyword</p>
+
+
+
+<a name="366645563"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366645563" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366645563">(Jun 15 2023 at 23:04)</a>:</h4>
+<p>here's a concern about that from earlier in the thread:<br>
+<span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/stream/304641-ideas/topic/Logging.20and.20error.20handling/near/305825700">said</a>:</p>
+<blockquote>
+<p>as for logging, I've thought about this situation but there are some problems with any "pretend logging isn't a side effect" design:</p>
+<ol>
+<li>It's important that the Roc compiler is free to do optimizations under the assumption that Roc functions are pure. After inlining, this might mean that logging operations get optimized away and no longer log things. Preventing that from happening sounds complicated; we'd need to flag functions that log as "actually not a pure function" and then make sure that propagates virally to all other functions which call those functions.</li>
+<li>I'm not sure a restriction on logging output can possibly exist that couldn't be used as a general "perform any side effect" escape hatch. For example, if you restrict logging to just write to stderr, then the host can watch stderr and look for special messages about which side effects to perform. The side effects couldn't return any values, and the ergonomics wouldn't be good, but those would be the only restrictions.</li>
+</ol>
+</blockquote>
+
+
+
+<a name="366645642"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366645642" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366645642">(Jun 15 2023 at 23:05)</a>:</h4>
+<p>here are some points in favor of having it:</p>
+<p><span class="user-mention silent" data-user-id="557981">Kasper Møller Andersen</span> <a href="#narrow/stream/304641-ideas/topic/Logging.20and.20error.20handling/near/305898624">said</a>:</p>
+<blockquote>
+<p>To be clear, my suggestion of allowing logging to console is just the thing I've wished for in Elm, since that's been the shortest path to achieving my desired outcome. I'm not suggesting that as a be-all, end-all approach, but just a starting point <span aria-label="blush" class="emoji emoji-1f60a" role="img" title="blush">:blush:</span></p>
+<p>Looking at my experience with our backend in Scala, and writing our frontend in Elm, I still think logs makes sense both based on on events and not. Let's break them down:</p>
+<p>Logs based on events make a lot of sense on both the backend and frontend. On the backend, we care a lot about the time that something takes. How long does it take us to respond to an incoming request? How long to open and parse some file? How long to start up the server? This is in addition to the actual time that the event takes place. This allows us to look at how our response times are doing over time for example, and also to correlate it with the number of requests at any time. Additionally, the timestamps of each log event allow us to correlate with other log sources, like system logs that describe the RAM and CPU usage of our program. This gives us a good idea of how our program is running and what our capacity is. We can further instrument our code with tracing, to help get even more accurate data for how each service runs, if we are so inclined.</p>
+<p>Aside from what we care about as developers, audit logging is also an important aspect of logging events. That is, it should be clear who took what action when.</p>
+<p>When implementing logging like this, it's important to think about if you want structured logs or not. Your average log line is most often "unstructured", and structured logs can gather things up more easily. For example, a "structured log" may just be a dictionary of json data. When your server gets a request, it adds a request ID to the dictionary, and passes the dictionary to the next function that is called. This function can then add information to the dict, and when the response is finally served, the log line can be printed with all the data it has gathered up around this one request.</p>
+<p>Logging things which are not based on events also depends on how you define "events". For example, if you're building a video streaming service, maybe you want to log what kind of video quality clients are getting as they stream. If they're streaming an hour long movie, you may want to sample their bitrate every minute for example. That's still a timer-based event, but it's an event that only exists to do logging. This is also generally what "metrics" are: just looking at how the application is doing, without being tied to any specific event.</p>
+<p>Similarly, on the frontend, it's natural to do logging based on events. But I've also wanted to just poke at the model in my Elm application more than once, to see what users had in there. For example, we've wanted to see how many of our users have set up their applications to render their logs with feature X. But feature X depends on multiple things, like which settings the user has saved on their account, the changes they've made just for their current session, and crucially also the shape of the data they are looking at. This means there is no single event we can look at to determine if feature X is in use. We would have to determine if X is in use at a number of different events, which increases odds that we miss something. And since the feature is about how users render their logs, we already calculate exactly the answer we need in the <code>view</code> function, and trying to extract that logic to somewhere without the rendering can be messy.</p>
+</blockquote>
+
+
+
+<a name="366645993"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366645993" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366645993">(Jun 15 2023 at 23:09)</a>:</h4>
+<p>a general thing that concerns me about this idea is unforeseen consequences</p>
+
+
+
+<a name="366646047"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366646047" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366646047">(Jun 15 2023 at 23:09)</a>:</h4>
+<p>like right now if you run a roc build with <code>--optimize</code> (which eliminates <code>dbg</code> and <code>expect</code>), as long as <code>roc_alloc</code> and friends actually do nothing but manage memory, then Roc functions are actually pure and can be treated as such</p>
+
+
+
+<a name="366646135"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366646135" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366646135">(Jun 15 2023 at 23:10)</a>:</h4>
+<p>however, this would change that...there would definitely be observable consequences to a Roc function running or not running (say, because we realized we could optimize it away into a constant at compile time in an optimization pass someday)</p>
+
+
+
+<a name="366646171"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366646171" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366646171">(Jun 15 2023 at 23:10)</a>:</h4>
+<p>which might just mean those Roc programs run slower, but I wonder if there are other consequences (e.g. for tooling) that I'm not thinking about</p>
+
+
+
+<a name="366650391"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366650391" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366650391">(Jun 15 2023 at 23:49)</a>:</h4>
+<p><a href="https://www.reddit.com/r/scala/comments/537imy/comment/d7qszv4/?utm_source=share&amp;utm_medium=web2x&amp;context=3">this</a> is an example of the type of thing I hadn't thought about:</p>
+<blockquote>
+<p>What if another part of your program happens to open up the log file?</p>
+</blockquote>
+
+
+
+<a name="366753535"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366753535" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366753535">(Jun 16 2023 at 09:29)</a>:</h4>
+<blockquote>
+<p>I'm not sure a restriction on logging output can possibly exist that couldn't be used as a general "perform any side effect" escape hatch.</p>
+</blockquote>
+<p>Arbitrary side effects could be executed as well <a href="https://www.tomshardware.com/news/hot-pixel-attack-steals-data-from-apple-and-nvidia-chips-using-frequency-power-and-temperature-info">by monitoring CPU frequency, power, and temperature</a>. That seems really convoluted until someone makes a library for it. In Roc there is always the need to trust the platform.</p>
+
+
+
+<a name="366830921"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366830921" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366830921">(Jun 16 2023 at 13:26)</a>:</h4>
+<p>It also can be done more directly through<code>roc_alloc</code>.</p>
+
+
+
+<a name="366831197"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366831197" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366831197">(Jun 16 2023 at 13:27)</a>:</h4>
+<p>I do think this makes it easy easier to do and it's something that people 100% clearly see as a side effect</p>
+
+
+
+<a name="366832222"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366832222" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366832222">(Jun 16 2023 at 13:30)</a>:</h4>
+<p>So i think <code>log</code>should be thought about differently/more seriously. Is it just something pragmatic and realistic to make the language more useful? Is directly exposing an effect a bad idea? Is it too easy to use for arbitrary side effects? Is<code>dbg</code> a better name just for the mental perception?</p>
+
+
+
+<a name="366844543"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366844543" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366844543">(Jun 16 2023 at 14:07)</a>:</h4>
+<p>yeah, one concrete scenario that comes to mind that <code>log</code> would make possible: suppose I have a calculation whose speed I want to monitor in a server in production, including with <code>--optimize</code> enabled, and for various reasons it doesn't make sense to have that calculation be a <code>Task</code></p>
+
+
+
+<a name="366845324"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366845324" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366845324">(Jun 16 2023 at 14:09)</a>:</h4>
+<p>but then again, with things like that I always wonder "should it <em>really</em> not be a <code>Task</code>?"</p>
+
+
+
+<a name="366845355"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366845355" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366845355">(Jun 16 2023 at 14:10)</a>:</h4>
+<p>if it takes that long to run</p>
+
+
+
+<a name="366853497"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366853497" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366853497">(Jun 16 2023 at 14:35)</a>:</h4>
+<p>Related tangent; I've been thinking that it could be valuable to have a "normal" and "no-task" view for roc code in the editor. In the no-task view everything looks like pure code (no <code>Task</code> in type signatures, no backpassing) but impure code is indicated with something like a dashed underline. The no-task view could remove a lot of the cognitive load of working with <code>Task</code>, thereby also making it nicer to use a Task for logging.</p>
+
+
+
+<a name="366858035"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366858035" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366858035">(Jun 16 2023 at 14:49)</a>:</h4>
+<p>interesting!</p>
+
+
+
+<a name="366858108"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366858108" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366858108">(Jun 16 2023 at 14:49)</a>:</h4>
+<p>sort of like "view this code as if it were algebraic effects" <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="366868137"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/366868137" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#366868137">(Jun 16 2023 at 15:21)</a>:</h4>
+<p>It is quite similar indeed, but with the important distinction that the no-task view simplifies type signatures.</p>
+
+
+
+<a name="367281014"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367281014" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367281014">(Jun 18 2023 at 02:10)</a>:</h4>
+<p>some other things to think about with this idea:</p>
+<ul>
+<li>for use cases like logging performance metrics, it's desirable to be able to log "I am starting a <a href="https://opentelemetry.io/docs/concepts/observability-primer/#spans">span</a> with this ID" and "I am ending the span with this ID"</li>
+<li>the concept of logging "levels" (e.g. trace/debug/info/warn/error/critical/etc) which might want to be enabled, or not, possibly on a per-module basis (<span class="user-mention" data-user-id="343810">@Brendan Hansknecht</span> mentioned this at one point)</li>
+<li>using different services (possibly third-party, via a Roc library, possibly my own services) to record these things, sometimes possibly with filtering involved - e.g. maybe I use Service A only for recording performance metrics and Service B only for recording errors, and Service C for everything else - how would I wire all that up?</li>
+<li>ecosystem considerations around all of the above; e.g. if platforms are in charge of defining what <code>log</code> does, how does a platform specify "you can use these different services for these different types of logs" (like how does it know what the different types even are? Does it ask the application author to provide a function to specify?) Also, if libraries in the ecosystem are doing logging, how do they agree on a common format for what the different levels mean? (Hardcoding levels into the language is one option, but that's pretty limiting for a feature that's designed to help you understand what your program is doing.)</li>
+</ul>
+
+
+
+<a name="367289124"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367289124" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367289124">(Jun 18 2023 at 03:38)</a>:</h4>
+<p>the more I think about this overall idea the more reasonable it seems to me.</p>
+<p>when I think about <a href="https://www.youtube.com/watch?v=3n17wHe5wEw&amp;t=2235s">the practical things I like about pure FP</a>, this particular side effect doesn't remove any of them. I've been trying to think of some implication I'm missing, and so far I haven't been able to come up with one. It seems like the upsides outweigh the downsides...but if others feel differently, I'd love to hear that perspective!</p>
+<div class="youtube-video message_inline_image"><a data-id="3n17wHe5wEw" href="https://www.youtube.com/watch?v=3n17wHe5wEw&amp;t=2235s"><img src="https://uploads.zulipusercontent.net/40e1a070a634cb12444b5ab65e64404d1c3b3a3d/68747470733a2f2f692e7974696d672e636f6d2f76692f336e3137774865357745772f64656661756c742e6a7067"></a></div>
+
+
+
+<a name="367722394"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367722394" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Sky Rose <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367722394">(Jun 19 2023 at 18:24)</a>:</h4>
+<p>I think there's a distinction between "logging about the code" and "logging about the world".</p>
+<p>Some examples of "logging about the world":</p>
+<ul>
+<li>Audit/analytics logs of who's doing what in the app.</li>
+<li>Logging every HTTP request your app makes and its result.</li>
+</ul>
+<p>These are important side effects, you wouldn't want them to be duplicated or hidden by optimizations, but they're all happening near other side effects anyway, so it's not a problem to have them in real effect-based logging.</p>
+<p>Some examples of "logging about the code":</p>
+<ul>
+<li>You reached an unreachable case because there's a bad assumption or bug in the code.</li>
+<li>Performance and timing.</li>
+</ul>
+<p>These could happen anywhere, and you specifically don't want to have to refactor to use real effects to add them, but also it's okay if they get duplicated / removed by the compiler. You want to see what the code is doing, so if the compiler runs a function twice, you want to know that. These are what we want to do synchronously. </p>
+<p>But idk if there's a logging API that Roc could have to enforce this split so that synchronous logging is only used for logging about the code, and that all logging about the world is still done in effects.</p>
+
+
+
+<a name="367729980"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367729980" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367729980">(Jun 19 2023 at 19:03)</a>:</h4>
+<p>I think "hidden by optimizations" would need to be impossible for this feature to be viable</p>
+
+
+
+<a name="367730030"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367730030" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367730030">(Jun 19 2023 at 19:03)</a>:</h4>
+<p>rather, they would just unavoidably prevent certain optimizations from happening, so that would be a tradeoff of using them</p>
+
+
+
+<a name="367911556"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367911556" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367911556">(Jun 20 2023 at 12:38)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/stream/304641-ideas/topic/Logging.20and.20error.20handling/near/366645281">said</a>:</p>
+<blockquote>
+<ul>
+<li><code>dbg</code> can never work in WebAssembly, or when embedding Roc into an existing code base (like we're doing at Vendr, embedding it into a NodeJS TypeScript backend), or:</li>
+<li><code>dbg</code> is implemented in a way where platform authors can choose to make it become arbitrary synchronous logging (or other effects) anyway</li>
+</ul>
+</blockquote>
+<p>Could you expand on this? I’m not sure I follow completely.</p>
+
+
+
+<a name="367917660"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367917660" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367917660">(Jun 20 2023 at 12:58)</a>:</h4>
+<p>sure! The first design is where we hardcode <code>dbg</code> to print to <code>stderr</code>. This works on every target except wasm, which has no <code>stderr</code> or any equivalent. (<code>console.log</code> is a JS thing; wasm alone doesn't even know what the "console" is.)</p>
+
+
+
+<a name="367918084"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367918084" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367918084">(Jun 20 2023 at 12:59)</a>:</h4>
+<p>the second option is to have a <code>roc_dbg</code> function implemented in the host, which would work like <code>roc_alloc</code> in that it gets called every time you do a <code>dbg</code> in your Roc code. This means we're running arbitrary C code (or equivalent) written by the platform author every time <code>dbg</code> runs, which means they can put whatever side effects they want in there. (Although with the relevant restriction that they can't return anything.)</p>
+
+
+
+<a name="367921969"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367921969" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367921969">(Jun 20 2023 at 13:12)</a>:</h4>
+<p>Ok, got it. So currently, is there any way for platforms to provide synchronous effects such as logging? If a platform defined an <code>Html.log</code> function, could the platform author make that function perform synchronous effects?</p>
+
+
+
+<a name="367922230"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367922230" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367922230">(Jun 20 2023 at 13:12)</a>:</h4>
+<p>currently there is no way to do this, and that's by design</p>
+
+
+
+<a name="367922351"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367922351" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367922351">(Jun 20 2023 at 13:13)</a>:</h4>
+<p>Ah ok. And that makes logging, particularly perf monitoring, difficult</p>
+
+
+
+<a name="367922399"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367922399" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367922399">(Jun 20 2023 at 13:13)</a>:</h4>
+<p>indeed! <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="367923980"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367923980" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367923980">(Jun 20 2023 at 13:18)</a>:</h4>
+<p>So we aren’t thrilled about the idea of a <code>dbg</code> keyword that is meant for logging but could really perform any effect. We also aren’t thrilled about the optimizations we’d have to give up with that design. </p>
+<p>What if we designed a way for platforms to define synchronous effectful functions? They would always have the signature <code>a -&gt; a</code>. And somehow they would be differentiated from the other functions exposed by the platform. </p>
+<p>This way, the platform author would be able to name the function according to what it does, and would have less incentive to shoehorn effects into a <code>dbg</code> keyword</p>
+
+
+
+<a name="367924091"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367924091" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367924091">(Jun 20 2023 at 13:18)</a>:</h4>
+<p>And it would be very easy to find all the code that’s forgoing the optimizations</p>
+
+
+
+<a name="367924179"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367924179" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367924179">(Jun 20 2023 at 13:18)</a>:</h4>
+<p>But maybe that’s already easy enough with the keyword approach</p>
+
+
+
+<a name="367926735"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367926735" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367926735">(Jun 20 2023 at 13:25)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522634">Bryce Miller</span> <a href="#narrow/stream/304641-ideas/topic/Logging.20and.20error.20handling/near/367923980">said</a>:</p>
+<blockquote>
+<p>What if we designed a way for platforms to define synchronous effectful functions? They would always have the signature <code>a -&gt; a</code>. And somehow they would be differentiated from the other functions exposed by the platform. </p>
+</blockquote>
+<p>this would essentially make Roc an imperative language, which is a change I'd rather not make <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="367926986"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367926986" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367926986">(Jun 20 2023 at 13:26)</a>:</h4>
+<p>logging/tracing has some unique characteristics that set it apart from other side-effecting functions</p>
+
+
+
+<a name="367927177"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367927177" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367927177">(Jun 20 2023 at 13:27)</a>:</h4>
+<p>so I think it's possible we can special-case it without changing the overall character of the language</p>
+
+
+
+<a name="367972473"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367972473" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367972473">(Jun 20 2023 at 15:37)</a>:</h4>
+<p>Yeah two minutes after I wrote that I realized that using the keyword approach gives platform authors only one “thing that behaves like an imperative effectful function”, which way better than allowing an arbitrary number of them</p>
+
+
+
+<a name="367973431"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367973431" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367973431">(Jun 20 2023 at 15:40)</a>:</h4>
+<p>If not for the use cases requiring synchronous logging I would dislike the idea of adding a <code>dbg</code> keyword that impacts optimized builds. But not supporting those use cases is a tough sell.</p>
+
+
+
+<a name="367974459"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367974459" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367974459">(Jun 20 2023 at 15:43)</a>:</h4>
+<p>Or is it?</p>
+
+
+
+<a name="367975735"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367975735" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367975735">(Jun 20 2023 at 15:48)</a>:</h4>
+<p>Personally, I don't think synchronous logging really matters. I would guess that most platforms will be set up in a way that logging will be mostly synchronous anyway. Tasks don't need to swap threads or control in general. They can keep running on the same thread.</p>
+<p>My bigger concern is logging in code that is currently no where near a <code>Task</code>. It is in what would be 100% pure code paths. It may even be extra debug logging in libraries. In all of those case, you want to be able to easily enable logging. For the library cases, hopefully you can just pass a flag to the compiler to enable logging in that library. For your own code, maybe in some cases it makes sense to deal with threading through a task, but at a minimum, you would want to be able to sprinkle in logging for debugging without re-orchestrating your code.</p>
+
+
+
+<a name="367976591"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367976591" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367976591">(Jun 20 2023 at 15:50)</a>:</h4>
+<p>I like the idea of enabling debugging with a compiler flag way more than just arbitrarily allowing it any time.</p>
+
+
+
+<a name="367977256"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367977256" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367977256">(Jun 20 2023 at 15:53)</a>:</h4>
+<p>I think it will have to be toggle-able. Otherwise, a library wouldn't be able to leave in their logging. Which defeats are large chunk of the point of logging (the ability to inspect what a library is doing to figure out why you are getting bad results).</p>
+
+
+
+<a name="367977332"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367977332" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367977332">(Jun 20 2023 at 15:53)</a>:</h4>
+<p>Because having a <code>dbg</code> keyword is basically like having one effectful imperative function that can be called anywhere at any time</p>
+
+
+
+<a name="367977550"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367977550" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367977550">(Jun 20 2023 at 15:54)</a>:</h4>
+<p>And I’m not sure how you call Roc a pure functional language with a feature like that. But maybe I just don’t understand the idea.</p>
+
+
+
+<a name="367977736"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367977736" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367977736">(Jun 20 2023 at 15:55)</a>:</h4>
+<p>I mean haskell can wrap arbitrary <code>c</code> code that can do anything and is consider a pure functional language.</p>
+
+
+
+<a name="367978020"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367978020" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367978020">(Jun 20 2023 at 15:56)</a>:</h4>
+<p>I think there is a line where practicality is more important.</p>
+
+
+
+<a name="367978057"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367978057" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367978057">(Jun 20 2023 at 15:56)</a>:</h4>
+<p>Hmm true.</p>
+
+
+
+<a name="367978198"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367978198" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367978198">(Jun 20 2023 at 15:56)</a>:</h4>
+<p>But yeah, it is 100% a side effect.</p>
+
+
+
+<a name="367978313"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367978313" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367978313">(Jun 20 2023 at 15:57)</a>:</h4>
+<p>If a Haskell function wraps C code is that reflected in the type somehow?</p>
+
+
+
+<a name="367978370"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367978370" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367978370">(Jun 20 2023 at 15:57)</a>:</h4>
+<p>Like can you tell which functions can do that?</p>
+
+
+
+<a name="367978872"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367978872" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367978872">(Jun 20 2023 at 15:59)</a>:</h4>
+<p>I don't think so. I mean they use <code>C</code> types, but you can just convert those to normal types, but I am not super familiar with haskell.</p>
+
+
+
+<a name="367979829"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367979829" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367979829">(Jun 20 2023 at 16:01)</a>:</h4>
+<p>I guess what I’m getting at is this: How would I know whether a function <code>Str -&gt; Str</code> does side effects? I’m having trouble understanding how you could special case this enough to avoid diluting the usefulness of “pure” functions.</p>
+
+
+
+<a name="367979984"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367979984" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367979984">(Jun 20 2023 at 16:02)</a>:</h4>
+<p>Maybe a concrete proposal would help me grasp it.</p>
+
+
+
+<a name="367983779"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367983779" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367983779">(Jun 20 2023 at 16:13)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522634">Bryce Miller</span> <a href="#narrow/stream/304641-ideas/topic/Logging.20and.20error.20handling/near/367978313">said</a>:</p>
+<blockquote>
+<p>If a Haskell function wraps C code is that reflected in the type somehow?</p>
+</blockquote>
+<p>it is not, no</p>
+
+
+
+<a name="367983912"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367983912" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367983912">(Jun 20 2023 at 16:13)</a>:</h4>
+<p>any Haskell function with any type can potentially be calling arbitrary C code</p>
+
+
+
+<a name="367984611"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367984611" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367984611">(Jun 20 2023 at 16:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="522634">Bryce Miller</span> <a href="#narrow/stream/304641-ideas/topic/Logging.20and.20error.20handling/near/367979984">said</a>:</p>
+<blockquote>
+<p>Maybe a concrete proposal would help me grasp it.</p>
+</blockquote>
+<p>the relevant part of this proposal is that the side effects from <code>dbg</code> (or maybe the keyword would end up being called <code>log</code> or <code>trace</code>) are sort of "fire-and-forget" in that they don't return. So like for example there's no <code>foo = dbg ...</code> where you're getting an answer back from the arbitrary C function</p>
+
+
+
+<a name="367984828"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/367984828" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#367984828">(Jun 20 2023 at 16:16)</a>:</h4>
+<p>meaning you couldn't use this keyword to violate "if you call a Roc function with the same arguments, it should return the same answer every time"</p>
+
+
+
+<a name="368008807"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/368008807" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#368008807">(Jun 20 2023 at 17:44)</a>:</h4>
+<p>This is just my personal proposal, which does not match exactly what started this discussion,<br>
+but hopefully gives a concrete example that is close enough to help understanding.</p>
+<p>Note: always remember that exact names or cli arg formats can be changed</p>
+<h3>Goals</h3>
+<ol>
+<li>Enable logging for tracing/debugging without Tasks.</li>
+<li>Allow this logging in production for helping understand complex bugs (this means it can be enabled in optimized builds).</li>
+<li>Enabling fine grain control of which messages print.</li>
+</ol>
+<h3>Context</h3>
+<p>Roc already has a <code>dbg</code> keyword.<br>
+Currently, <code>dbg</code> is limited to native platforms, prints to <code>stderr</code>, and does not run in optimized builds.<br>
+<code>dbg</code> can not automatically work with web assembly because web assembly is sandboxed.<br>
+It would require the platform expose some JS to the web assembly to function.</p>
+<h3>Proposal</h3>
+<p>Fundamentally, this is proposal is an expansions of <code>dbg</code>.<br>
+Personally, I want to keep it called <code>dbg</code> to focus on the use case.<br>
+I am also fine with something like <code>trace</code> as a name.<br>
+I believe this should only be used for debug/trace logging, it should not be used for general purpose logging.<br>
+This is definitely my personal opinion, and the opinion that contratradicts ideas higher up in this thread the most.</p>
+<p><code>dbg</code> will be defined as approximately <code>dbg: U8, Inspectable -&gt; {}</code>.<br>
+Currently I am just going to handwave <code>Inspectable</code>. That is other stuff that is already being worked on.<br>
+For now, you can just assume that it magically know how to convert anything to a <code>Str</code> to be logged.<br>
+The <code>U8</code> parameter is the verbosity level required to print this message.<br>
+This enables a library to have many levels of verbosity.<br>
+Maybe level 0 will print only very high level tasks, 1 will print important function calls, 2 will print lots of debug info inside of a function, etc.<br>
+Each library can choose what the values mean to them, I would even advise individual libraries define constants to give names to the levels.<br>
+The reason for avoid names like <code>Debug</code>, <code>Inspect</code>, <code>Trace</code>, etc is that it is too restrictive.<br>
+Logging in some libraries can get very verbose and need exceptionally fine grain control.<br>
+As a direct example, Google libraries tend to use ~0-12. Most libraries just use 3, 5, and 9, but other libaries use many more values.</p>
+<p>Note, I think it would be nice to also expose a version of the function without an explicit log level.<br>
+It would just default to a log level of 0. That way, new user can skip learning about that at the beginning.</p>
+<p>This is a simple example of use:</p>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="c1"># Fib.roc</span>
+
+<span class="nv">myFib</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">\</span><span class="nx">x</span><span class="w"> </span><span class="nf">-&gt;</span>
+<span class="w">    </span><span class="nx">dbg</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="s">"myFib: \(x)"</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">x</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">then</span>
+<span class="w">        </span><span class="nx">dbg</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="s">"Exit case: \(x)"</span>
+<span class="w">        </span><span class="nx">x</span>
+<span class="w">    </span><span class="k">else</span>
+<span class="w">        </span><span class="nx">dbg</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="s">"Recursive case: \(x)"</span>
+<span class="w">        </span><span class="nx">myFib</span><span class="w"> </span><span class="p">(</span><span class="nx">x</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w">  </span><span class="nx">myFib</span><span class="w"> </span><span class="p">(</span><span class="nx">x</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span>
+</code></pre></div>
+<p>On the platform side, they would be required to define <code>roc_dbg(log: u8, msg: RocStr) -&gt; void</code>.<br>
+Since platforms define this, it can be used for web assembly platforms.</p>
+<h3>CLI</h3>
+<p>By default, dbg is disabled in optimized builds.<br>
+In non-optimized builds, it is by default enable to level 0 for the app package only.<br>
+This ensures some logging in debug, but avoids pulling in logs from all packages an app depends on.</p>
+<p>From the cli, exact log level can be set for both individual modules, entire packages, and the whole progrm.<br>
+The arg is <code>--log-level</code> or in short form <code>-l</code></p>
+<p>Enable level 1 for whole program:<br>
+<code>roc run/build/dev/etc Main.roc --log-level=1</code></p>
+<p>Enable level 5 for the <code>Main</code> module only:<br>
+<code>roc run/build/dev/etc Main.roc --log-level=Main:5</code></p>
+<p>Enable level 3 for the <code>Main</code> module and level 0 for everything else:<br>
+<code>roc run/build/dev/etc Main.roc --log-level=0,Main:3</code></p>
+<p>Also, I think this should work at the package/library level.<br>
+So if you had an <code>Http</code> package with many modules, it would be:<br>
+<code>roc run/build/dev/etc Main.roc --log-level=Http.*:3</code></p>
+<h3>Concerns</h3>
+<ol>
+<li>
+<p>It can be used for arbitrary side effects that can't return any data to the app.<br>
+Any proposal that adds logging to the host has this issue.<br>
+I could send json over <code>dbg</code> and have the host use that as a command.<br>
+That said, this can already be done through hacking <code>roc_alloc</code>.</p>
+</li>
+<li>
+<p>It could easily be used for all logging instead of just tracing.</p>
+</li>
+<li>Maybe having log numbers is considered confusing to people or too verbose</li>
+</ol>
+
+
+
+<a name="368017584"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/368017584" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#368017584">(Jun 20 2023 at 18:19)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/stream/304641-ideas/topic/Logging.20and.20error.20handling/near/367984828">said</a>:</p>
+<blockquote>
+<p>meaning you couldn't use this keyword to violate "if you call a Roc function with the same arguments, it should return the same answer every time"</p>
+</blockquote>
+<p>Ah, so the only way to observe these effects would be with a <code>Task</code>, in which case all bets are off anyway.</p>
+
+
+
+<a name="368058833"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/368058833" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#368058833">(Jun 20 2023 at 21:35)</a>:</h4>
+<p>Yeah that was the missing piece for me. It makes a lot more sense now.</p>
+
+
+
+<a name="368059281"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/368059281" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#368059281">(Jun 20 2023 at 21:38)</a>:</h4>
+<p>Thanks for humoring me!</p>
+
+
+
+<a name="368059434"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Logging%20and%20error%20handling/near/368059434" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Bryce Miller <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Logging.20and.20error.20handling.html#368059434">(Jun 20 2023 at 21:38)</a>:</h4>
+<p>I really like the idea of making it opt-in for production builds.</p>
+
+
+
+<hr><p>Last updated: Jul 01 2026 at 14:01 UTC</p>
+</html>

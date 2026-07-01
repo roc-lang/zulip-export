@@ -1,0 +1,542 @@
+[
+    {
+        "content": "<p>splitting this off from:</p>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/Purity.20inference.20proposal.20v3/near/471123971\">said</a>:</p>\n<blockquote>\n<p>so in this design, I think we have a type variable behind the scenes which tracks which of these 4 function types a given function has (only 2 of the types are visible, namely pure vs effectful - but we need to track all 4 as distinct from one another behind the scenes, in order to compile the way we want):</p>\n<ul>\n<li><em>effectful and synchronous</em> - compiles to what we have today, where at some point the application just straight-up calls a function in the host and then continues. Examples of where we'd want this: <code>Time.now!</code> and just about everything in the wasm4 platform <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span> </li>\n<li><em>effectful and async</em> - compiles to state machine. This is the really involved one because we need to convert everything that's happened up to that point into a <code>Task</code> equivalent so that the function actually <em>returns</em> at that point, and one of the things it returns is \"everything that happens next\" inside a closure. (Today we call that <code>Task.await</code>.) Examples: <code>Http.get!</code>, <code>Result.parallel!</code>, etc.</li>\n<li><em>pure and sequential</em> - the normal thing we do today, no special compilation necessary</li>\n<li><em>pure and concurrent</em> - for <code>List.mapParallel</code> and such - from a type-checking perspective, this counts as pure, but from a compilation perspective, it's exactly the same as \"effectful and async\" in that it compiles down to a state machine entry. (The host doesn't care about the distinction between pure and effectful, it just cares about the distinction between sync and async.)</li>\n</ul>\n</blockquote>",
+        "id": 471132712,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726620623
+    },
+    {
+        "content": "<p>so today, when a <code>crash</code> happens, we immediately call the host and say \"whatever is going on in the call stack right now, you need to stop what you're doing and deal with this crash\"</p>",
+        "id": 471132774,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726620656
+    },
+    {
+        "content": "<p>another design we could go with is to treat <code>crash</code> as an async state machine entry as described above <span aria-label=\"point up\" class=\"emoji emoji-1f446\" role=\"img\" title=\"point up\">:point_up:</span></p>",
+        "id": 471132863,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726620697
+    },
+    {
+        "content": "<p>essentially putting it in the \"pure and concurrent\" bucket</p>",
+        "id": 471132867,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726620703
+    },
+    {
+        "content": "<p>such that when a <code>crash</code> occurs, the host just sees a normal-looking return with a state machine entry that has no continuation in it</p>",
+        "id": 471132970,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726620735
+    },
+    {
+        "content": "<p>off the top of my head, some of the tradeoffs involved here:</p>\n<ul>\n<li>makes it easier for hosts to recover from <code>crash</code> if that's a thing they want to do, e.g. no <code>setjmp</code>/<code>longjmp</code></li>\n<li>there's some performance cost compared to status quo, although I really have no idea how to estimate how much it would be</li>\n</ul>",
+        "id": 471133155,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726620840
+    },
+    {
+        "content": "<p>(this is essentially the \"<code>RocResult</code>\" design from awhile back, except rolling it into the state machine instead of wrapping the state machine, since the state machine already has a discriminant, so why introduce a second one?)</p>",
+        "id": 471133436,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726620915
+    },
+    {
+        "content": "<p>Oh, and then roc would clean everything up before the return. That would actually be really awesome (though wasteful in some platforms with arenas)</p>",
+        "id": 471133484,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726620941
+    },
+    {
+        "content": "<p>yeah, there are also implications for stack traces</p>",
+        "id": 471133582,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726620969
+    },
+    {
+        "content": "<p>Though crash should be sparing enough that we don't really care about said waste</p>",
+        "id": 471133601,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1726620985
+    },
+    {
+        "content": "<p>e.g. right now hosts can grab a backtrace right inside the crash handler, and the stack still exists</p>",
+        "id": 471133609,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726620988
+    },
+    {
+        "content": "<p>whereas if we wanted to get a trace to them, we'd need to capture it before returning the state machine entry etc.</p>",
+        "id": 471133639,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621003
+    },
+    {
+        "content": "<p>but I think that's something we'll want to figure out anyway for async stack traces, so I'm not considering it a tradeoff really</p>",
+        "id": 471133683,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621027
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"461444\">Sam Mohr</span> <a href=\"#narrow/stream/304641-ideas/topic/.60crash.60.20as.20state.20machine.20entry/near/471133601\">said</a>:</p>\n<blockquote>\n<p>Though crash should be sparing enough that we don't really care about said waste</p>\n</blockquote>\n<p>I haven't thought it through all the way, but I think there could be a perf impact even if the <code>crash</code> doesn't occur</p>",
+        "id": 471133741,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621064
+    },
+    {
+        "content": "<p>although actually that might not be true anymore if it's just one more discriminant in the state machine <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 471133817,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621085
+    },
+    {
+        "content": "<p>certainly it was true in the <code>RocResult</code> design</p>",
+        "id": 471133829,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621091
+    },
+    {
+        "content": "<p>but maybe doesn't apply anymore</p>",
+        "id": 471133839,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621097
+    },
+    {
+        "content": "<p>I feel like in my mind, the perfect implementation would:</p>\n<ol>\n<li>let the host pick if clean is run or not</li>\n<li>be implemented using exception handling mechanism that have basically zero runtime cost in the good case</li>\n<li>also let the host choose if roc will generate a nice stack trace for the crash (would just be an optional part of the crash tag)</li>\n</ol>",
+        "id": 471133846,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621103
+    },
+    {
+        "content": "<blockquote>\n<p>although actually that might not be true anymore if it's just one more discriminant in the state machine</p>\n</blockquote>\n<p>In an already effectful function, it is essentially no extra cost.<br>\nIn a pure function, it is extra cost.</p>",
+        "id": 471133910,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621142
+    },
+    {
+        "content": "<p>yeah <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> and I had the exception handling thing implemented a long time ago...it didn't go great <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 471133921,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621151
+    },
+    {
+        "content": "<p>Yeah, for proper exception we need full debug info with exception frames that track everything that must be refcounted if an exception is thown. It also has to walk the stack a frame at a time as it unwinds</p>",
+        "id": 471134158,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621279
+    },
+    {
+        "content": "<p>or, I guess we just need exception frames and not full debug info</p>",
+        "id": 471134194,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621295
+    },
+    {
+        "content": "<p>Some of this stuff is built at least partially into llvm, but I don't think it is simple to implement</p>",
+        "id": 471134298,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621342
+    },
+    {
+        "content": "<p>yeah based on our experience last time I don't think we want to go down that road again <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 471134374,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621400
+    },
+    {
+        "content": "<p>Honestly I think that is a mistake. Essentially all programming langauges have exceptions. Most llvm supported languages have them. So they can't be that hard to implement even if it is opaque and a general pain to do so.</p>",
+        "id": 471134547,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621499
+    },
+    {
+        "content": "<p>what about dev backend?</p>",
+        "id": 471134623,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621539
+    },
+    {
+        "content": "<p>In the worst case, dev backend could go the result under the hood route. But I assume once we figure things out in llvm, it will be easier to figure things out in the dev backend.</p>",
+        "id": 471134809,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621637
+    },
+    {
+        "content": "<p>that's interesting, I hadn't thought about that!</p>",
+        "id": 471134965,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621727
+    },
+    {
+        "content": "<p>one of the problems as I recall was that LLVM basically requires you to link libcpp for the exceptions to work</p>",
+        "id": 471135042,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621775
+    },
+    {
+        "content": "<p>and trying to remove that dependency was...not straightforward haha</p>",
+        "id": 471135050,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621785
+    },
+    {
+        "content": "<p>I'm imagining a hot loop that is using a dictionary. It has a <code>crash</code> for the impossible case of loading an out of bounds element. If that function and everything call it has to be turned into a result under the hood to deal with <code>crash</code>, it will lead to major perf regressions. Any hot loop with a <code>crash</code> in it would hit this.</p>",
+        "id": 471135144,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621829
+    },
+    {
+        "content": "<blockquote>\n<p>one of the problems as I recall was that LLVM basically requires you to link libcpp for the exceptions to work</p>\n</blockquote>\n<p>... That would really suck</p>",
+        "id": 471135166,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621846
+    },
+    {
+        "content": "<p>I wonder what rust does</p>",
+        "id": 471135178,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621854
+    },
+    {
+        "content": "<p>do they use llvm exceptions? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 471135209,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726621880
+    },
+    {
+        "content": "<p>I'm not sure, but they definitely have catchable unwinds, an llvm backend, and I didn't think they always linked libc++.</p>",
+        "id": 471135379,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726621951
+    },
+    {
+        "content": "<p>As a note, we technically could add <code>crash</code> to the task state machine, but still use setjmp and longjmp for pure functions. Just jump back to where we generate the <code>crash</code> for the state machine. Of course, that wouldn't deal with cleanup, but if we don't have a good way to deal with cleanup, that still could be a nicer interface for platforms without harming perf.</p>",
+        "id": 471135620,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726622092
+    },
+    {
+        "content": "<p>true!</p>",
+        "id": 471135711,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622151
+    },
+    {
+        "content": "<p>as I recall, the basic way that they deal with cleanup is that each function gets a little header in the machine code that runs to perform cleanup if it's unwinding</p>",
+        "id": 471135877,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622236
+    },
+    {
+        "content": "<p>so you specify that in llvm and it puts it in the machine code</p>",
+        "id": 471135890,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622247
+    },
+    {
+        "content": "<p>also, there's a \"personality function\" that is also a little header, and it's for <code>catch</code> - basically a way to say \"here's what my class is\" or something like that, so your code can detect whether it's time to stop unwinding and run the <code>catch</code> code</p>",
+        "id": 471135990,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622296
+    },
+    {
+        "content": "<p>but we wouldn't need that aspect</p>",
+        "id": 471136002,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622303
+    },
+    {
+        "content": "<p>or rather we'd only need it at the entrypoint from the host</p>",
+        "id": 471136023,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622318
+    },
+    {
+        "content": "<p>anyway, I agree that this would be the best for both perf and host ergonomics if we could make it work</p>",
+        "id": 471136061,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622342
+    },
+    {
+        "content": "<p>one important prerequisite would be figuring out how to do it without libcpp <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 471136106,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622368
+    },
+    {
+        "content": "<p>I think that was where we got stuck last time</p>",
+        "id": 471136112,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622373
+    },
+    {
+        "content": "<p>because I think we had the other stuff working</p>",
+        "id": 471136121,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622382
+    },
+    {
+        "content": "<p>Good to know</p>",
+        "id": 471136221,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726622422
+    },
+    {
+        "content": "<p>I wonder if we'll have to do something like statically link libunwind or something.</p>",
+        "id": 471136639,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726622647
+    },
+    {
+        "content": "<p>I think libunwind is only part of it</p>",
+        "id": 471136878,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622762
+    },
+    {
+        "content": "<p>but we could prob just get the sources from that and import them into our zig builtin code, because zig is awesome like that <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 471136948,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622785
+    },
+    {
+        "content": "<p>we didn't have zig back when we tried this last time haha</p>",
+        "id": 471136961,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622797
+    },
+    {
+        "content": "<p>we may want libunwind regardless for async backtraces</p>",
+        "id": 471136992,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726622814
+    },
+    {
+        "content": "<p>does zig have exceptions? Can they just tell us how to do everything?</p>",
+        "id": 471138207,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726623415
+    },
+    {
+        "content": "<p><span aria-label=\"tears\" class=\"emoji emoji-1f602\" role=\"img\" title=\"tears\">:tears:</span> They tend to be super helpful and have low dependency ways of doing things.</p>",
+        "id": 471138252,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726623443
+    },
+    {
+        "content": "<p>Oh, it looks like they just have printing an error, dumping a stack trace, and then hanging.</p>",
+        "id": 471139169,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726623941
+    },
+    {
+        "content": "<p>So no unwind and what not</p>",
+        "id": 471139192,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726623951
+    },
+    {
+        "content": "<p>Not that I understand the pieces yet, but rust's implementation seems to exist in these locations and only depends on libunwind (or libgcc), not libc++ or libstdc++ (at least from what I can tell).</p>\n<p><a href=\"https://github.com/rust-lang/rust/blob/master/library/std/src/panicking.rs\">https://github.com/rust-lang/rust/blob/master/library/std/src/panicking.rs</a><br>\n<a href=\"https://github.com/rust-lang/rust/tree/master/library/panic_unwind/src\">https://github.com/rust-lang/rust/tree/master/library/panic_unwind/src</a><br>\n<a href=\"https://github.com/rust-lang/rust/tree/master/library/unwind/src\">https://github.com/rust-lang/rust/tree/master/library/unwind/src</a></p>",
+        "id": 471143189,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726625774
+    },
+    {
+        "content": "<p>Then this just walks the landing pads and what not create by the llvm ir</p>",
+        "id": 471144030,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726626175
+    },
+    {
+        "content": "<p>And an example using only c and llvm. No linking to anything c++:<br>\n<a href=\"https://youtu.be/gH5-lITYrMg?si=nf7DFINdmhxDBQRl&amp;t=1110\">https://youtu.be/gH5-lITYrMg?si=nf7DFINdmhxDBQRl&amp;t=1110</a></p>\n<div class=\"youtube-video message_inline_image\"><a data-id=\"gH5-lITYrMg\" href=\"https://youtu.be/gH5-lITYrMg?si=nf7DFINdmhxDBQRl&amp;t=1110\"><img src=\"https://uploads.zulipusercontent.net/ed37b3feb4a6f0c19b2796290bba56670cbc7ea8/68747470733a2f2f692e7974696d672e636f6d2f76692f6748352d6c495459724d672f64656661756c742e6a7067\"></a></div>",
+        "id": 471148243,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726627632
+    },
+    {
+        "content": "<p>Source before they switch to using c++ (so just c and llvm): <a href=\"https://github.com/AlexDenisov/llvm-social-exception-handling/tree/main/05\">https://github.com/AlexDenisov/llvm-social-exception-handling/tree/main/05</a></p>",
+        "id": 471148529,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726627691
+    },
+    {
+        "content": "<p>whoa! </p>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/.60crash.60.20as.20state.20machine.20entry/near/471148243\">said</a>:</p>\n<blockquote>\n<p>And an example using only c and llvm. No linking to anything c++:<br>\n<a href=\"https://youtu.be/gH5-lITYrMg?si=nf7DFINdmhxDBQRl&amp;t=1110\">https://youtu.be/gH5-lITYrMg?si=nf7DFINdmhxDBQRl&amp;t=1110</a></p>\n</blockquote>\n<p>whoa! <span aria-label=\"open mouth\" class=\"emoji emoji-1f62e\" role=\"img\" title=\"open mouth\">:open_mouth:</span></p>",
+        "id": 471148791,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726627750
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> so if desired, we could theoretically switch to that already, if we wanted to switch from <code>roc_panic</code> to <code>RocResult</code>?</p>",
+        "id": 471149196,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726627830
+    },
+    {
+        "content": "<p>yes</p>",
+        "id": 471149250,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726627843
+    },
+    {
+        "content": "<p>oh I guess dev backend wouldn't love that though</p>",
+        "id": 471149260,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726627846
+    },
+    {
+        "content": "<p>also yes. Need to figure out generating these landing pads and eh headers from the dev backend as well.</p>",
+        "id": 471149377,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726627872
+    },
+    {
+        "content": "<p>Also, I'm guessing the issue was needing to implement your own personality functions and what not instead of depending on the c++ ones.</p>",
+        "id": 471149766,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726627950
+    },
+    {
+        "content": "<p>Also, no idea how this all works in wasm</p>",
+        "id": 471149832,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726627967
+    },
+    {
+        "content": "<p>how do we do crashes in wasm today?</p>",
+        "id": 471149928,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726627992
+    },
+    {
+        "content": "<p>we call roc_panic and then let the host language figure it out. So we let zig deal with generating it.</p>",
+        "id": 471150174,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726628110
+    },
+    {
+        "content": "<p>And I think it calls some sort of wasm halt instruction</p>",
+        "id": 471150362,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726628181
+    },
+    {
+        "content": "<p>I realized something about the whole \"automatic unwinding such that host calls to Roc functions return a <code>Result</code>\" idea: there's basically no way to have Roc handle stack overflows automatically in this way</p>",
+        "id": 518930303,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747581102
+    },
+    {
+        "content": "<p>that is, the way stack overflow handling works (and has to work) is:</p>\n<ul>\n<li>the host does a one-time <code>mprotect</code> on a stack guard page and a signal handler for <code>SIGSEGV</code> which occurs when something writes to the readonly guard page</li>\n<li>Roc cannot reasonably set this up automatically, partly because it needs to happen exactly once (and not just once per Roc call), but also because the host might want to have host-specific logic in there which Roc doesn't know about</li>\n<li>That <code>SIGSEGV</code> handler runs in the middle of a Roc program's execution, and needs to handle cleanup <em>right away</em> - so there's no opportunity for Roc to convert things into <code>Result</code></li>\n</ul>",
+        "id": 518930456,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747581240
+    },
+    {
+        "content": "<p>in other words, if hosts want to gracefully handle stack overflows in Roc programs (which they should!) then they already need to deal with the circumstances of today's <code>roc_panic</code></p>",
+        "id": 518930528,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747581272
+    },
+    {
+        "content": "<p>so it's actually better to <em>not</em> do the whole \"Roc functions return a <code>Result</code> to the host\" because the host needs to deal with the \"gracefully clean up a Roc program, including unwinding the stack and dealing with heap resources/file handles/etc. in the middle of the Roc program's execution\" thing no matter what because of stack overflows</p>",
+        "id": 518930607,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747581334
+    },
+    {
+        "content": "<p>so the <code>roc_panic</code> design lets the host reuse code between the stack overflow handling logic and the \"Roc executed a <code>crash</code>\" handling logic</p>",
+        "id": 518930677,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747581374
+    },
+    {
+        "content": "<p>I kinda agree, kinda don't. I think in practice, most programs accept that crash on stack overflow is fine behaviour.</p>",
+        "id": 518933379,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747583470
+    },
+    {
+        "content": "<p>But I do agree that is important to be able to handle it.</p>",
+        "id": 518933394,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747583486
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/304641-ideas/topic/.60crash.60.20as.20state.20machine.20entry/near/518933379\">said</a>:</p>\n<blockquote>\n<p>I think in practice, most programs accept that crash on stack overflow is fine behaviour.</p>\n</blockquote>\n<p>sure, but for those programs it's presumably fine to crash on <code>crash</code> too <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 518943018,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747591273
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/.60crash.60.20as.20state.20machine.20entry/near/518930456\">said</a>:</p>\n<blockquote>\n<ul>\n<li>Roc cannot reasonably set this up automatically, partly because it needs to happen exactly once (and not just once per Roc call), but also because the host might want to have host-specific logic in there which Roc doesn't know about</li>\n</ul>\n</blockquote>\n<p>These don't seem unsolvable.</p>\n<p>To the first point: Can Roc provide the host an init function it has to call before it can call any other roc entry points? Or alternatively, can Roc maintain some state (at the top of the stack?) about whether init has been called?</p>\n<p>To the second: can the host provide a function to Roc for a custom stack overflow handler? Roc gets the stack overflow first, wraps it in a result, and then passes the result to the host's callback.</p>\n<p>These would make the interface between host and Roc more complex, so there's a tradeoff. But if that can provide a better abstraction boundary over Roc crashes, it could be worth considering.</p>",
+        "id": 518943114,
+        "sender_full_name": "Sky Rose",
+        "timestamp": 1747591323
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"607308\">Sky Rose</span> <a href=\"#narrow/channel/304641-ideas/topic/.60crash.60.20as.20state.20machine.20entry/near/518943114\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/.60crash.60.20as.20state.20machine.20entry/near/518930456\">said</a>:</p>\n<blockquote>\n<ul>\n<li>Roc cannot reasonably set this up automatically, partly because it needs to happen exactly once (and not just once per Roc call), but also because the host might want to have host-specific logic in there which Roc doesn't know about</li>\n</ul>\n</blockquote>\n<p>These don't seem unsolvable.</p>\n</blockquote>\n<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> can you give an example of how that could be done?</p>",
+        "id": 518943171,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747591351
+    },
+    {
+        "content": "<p>like for example, let's say the host wants to do its own custom stack overflow handling via a segfault handler (for stack overflows in the host itself), and wants to incorporate into that handler the logic for handling a stack overflow in a call to a roc function</p>",
+        "id": 518943375,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747591506
+    },
+    {
+        "content": "<p>also, in wasm there is no way to do this in wasm itself; the best you can (apparently) do is to have a <code>try</code>/<code>catch</code> in the JavaScript code that invokes the wasm, and then it can inspect the error message string to try to guess whether it was a stack overflow</p>",
+        "id": 518943610,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747591695
+    },
+    {
+        "content": "<p>anyway, the reason I ask is because I started from the premise that these seemed solvable and then (after a lot of investigation) concluded that this was the best way to go...it's very possible that I missed something, but if so, I need to know the specific design that I missed! <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 518943687,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747591773
+    },
+    {
+        "content": "<p>Okay, I don't have a solution in mind. I was just unconvinced by your short summary. If there's a bigger proof or a previous attempt backing up that argument, then I certainly don't have anything better.</p>",
+        "id": 518943801,
+        "sender_full_name": "Sky Rose",
+        "timestamp": 1747591852
+    },
+    {
+        "content": "<p>\"The host needs its own stack overflow handler for the host stack, and so roc can't have a stack overflow handler for the Roc stack\" is a more convincing reason than the bullet point I quoted.</p>",
+        "id": 518943903,
+        "sender_full_name": "Sky Rose",
+        "timestamp": 1747591927
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/.60crash.60.20as.20state.20machine.20entry/near/518943018\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/304641-ideas/topic/.60crash.60.20as.20state.20machine.20entry/near/518933379\">said</a>:</p>\n<blockquote>\n<p>I think in practice, most programs accept that crash on stack overflow is fine behaviour.</p>\n</blockquote>\n<p>sure, but for those programs it's presumably fine to crash on <code>crash</code> too <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>\n</blockquote>\n<p>I think there is overlap, but I wouldn't call this necessarily correct. Different classes of errors with different expectations. Like taking down a server due to an int overflow is very different than taking it down from a stack overflow in my opinion....but I see your point.</p>",
+        "id": 518945604,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747593322
+    },
+    {
+        "content": "<p>All this to say, I think it would be reasonable to turn crashes into results, but still have stack overflows.</p>",
+        "id": 518945751,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747593455
+    },
+    {
+        "content": "<p>That being said, I don't feel strong either way at this point....but the concept of a simple recovery from a crash is important....currently in roc, that is not easy. And forcing arenas is not necessarily the solution....so we may want to think deeper about that.</p>",
+        "id": 518945946,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747593588
+    },
+    {
+        "content": "<p>i think a platform that supports concurrency through co-routines want a way to have a stack over flow in one coroutine not crash the entire system</p>",
+        "id": 518952250,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747598063
+    },
+    {
+        "content": "<p>Oh sure, but a platform can always do that no matter how we design Roc. Really the question is if after a stack overflow they can cleanup the garbage left behind.</p>",
+        "id": 518952350,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747598153
+    }
+]

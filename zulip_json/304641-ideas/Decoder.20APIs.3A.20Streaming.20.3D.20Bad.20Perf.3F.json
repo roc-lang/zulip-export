@@ -1,0 +1,92 @@
+[
+    {
+        "content": "<p>I pull this to a second thread so it doesn't derail the first one.</p>\n<p>Apparently according to <code>serde_json</code>, using <code>from_reader</code> is generally a lot slower than just loading the entire list/str before hand:</p>\n<blockquote>\n<p>Note that counter to intuition, this function is usually slower than reading a file completely into memory and then applying <a href=\"https://docs.rs/serde_json/1.0.116/serde_json/de/fn.from_str.html\"><code>from_str</code></a> or <a href=\"https://docs.rs/serde_json/1.0.116/serde_json/de/fn.from_slice.html\"><code>from_slice</code></a> on it. See <a href=\"https://github.com/serde-rs/json/issues/160\">issue #160</a>.</p>\n</blockquote>\n<p>So this may actually be a pattern that isn't actually worrying a ton about. The perf hit of using the streaming decoder can apparently be huge (like 3 to 5x slower). For files, you essentially always just want to mmap the entire file into memory (this is super great for roc where you can have a seamless slice that points into the mmap).</p>\n<p>For webservers, to avoid ddos attacks, it is generally recommended to limit the size of the body. Given the size of the body is limited, it may actually be better to just load the entire body into memory and then decode. Obviously, there will exist some network speed where it is faster to do the streaming decode.</p>\n<p>Probably the biggest concern with not a having a streaming decode is if you have some sort of trusted generated input of unknown length. It may not be reasonable to load everything in one go. You might run out of memory. In that specific case, loading in chunks may be required.</p>\n<hr>\n<p>Another example is simd-json. From what I can tell, it does not work with a continuation style api. It requires that the entire data be loaded into a single allocation up front. It then does lazy parsing of the json.</p>\n<hr>\n<p>So, just more food for thought, maybe we don't actually want a streaming api?</p>",
+        "id": 434461404,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713579953
+    },
+    {
+        "content": "<p>huh, wow!</p>",
+        "id": 434461511,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1713580064
+    },
+    {
+        "content": "<p>I never knew about that</p>",
+        "id": 434461516,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1713580076
+    },
+    {
+        "content": "<p>if it's a footgun, then at a minimum we probably shouldn't add it eagerly <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 434461564,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1713580109
+    },
+    {
+        "content": "<p>and instead wait to really confirm there's a use case where it's actually the right choice, even with the knowledge of this <span aria-label=\"point up\" class=\"emoji emoji-1f446\" role=\"img\" title=\"point up\">:point_up:</span></p>",
+        "id": 434461576,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1713580133
+    },
+    {
+        "content": "<p>Oh wow, reading through that issue more, some cases even with buffered readers on serde_json can be more than 10x slower.</p>\n<p><a href=\"https://github.com/paritytech/substrate/pull/10137\">Oh wow, this one is crazy (EDIT: huge, but not that crazy)</a>:</p>\n<ul>\n<li>15 GB json file</li>\n<li><del>Buffered</del> unbuffered file loading: 15 minutes</li>\n<li>Buffered file loading: ~20 seconds</li>\n<li>MMap slice: 2 seconds</li>\n</ul>",
+        "id": 434461941,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713580466
+    },
+    {
+        "content": "<p>Benchmarks in dotnet don't agree with that at all sadly:</p>\n<div class=\"codehilite\"><pre><span></span><code>| Method           | Mean     | Error    | StdDev   |\n|----------------- |---------:|---------:|---------:|\n| IdOnlyJsonStream | 38.68 ms | 0.548 ms | 0.512 ms |\n| IdOnlyReadFIle   | 42.02 ms | 0.840 ms | 1.843 ms |\n</code></pre></div>\n<p>I'm using 21MB of json. I'll try to make a rust benchmark too, but I'm not as familiar with streaming there.<br>\nIf you'd like to audit the highly complex code that got us here <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> :</p>\n<div class=\"codehilite\" data-code-language=\"F#\"><pre><span></span><code><span class=\"w\">    </span><span class=\"o\">[&lt;</span><span class=\"n\">Benchmark</span><span class=\"o\">&gt;]</span>\n<span class=\"w\">    </span><span class=\"k\">member</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"p\">.</span><span class=\"nf\">IdOnlyJsonStream</span><span class=\"bp\">()</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">        </span><span class=\"k\">let</span><span class=\"w\"> </span><span class=\"nv\">jsonStream</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nn\">File</span><span class=\"p\">.</span><span class=\"n\">OpenRead</span><span class=\"o\">(</span><span class=\"s\">\"/home/eli/Code/roc/lsp/small-json.json\"</span><span class=\"o\">)</span>\n<span class=\"w\">        </span><span class=\"k\">let</span><span class=\"w\"> </span><span class=\"nv\">objects</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nn\">JsonSerializer</span><span class=\"p\">.</span><span class=\"n\">Deserialize</span><span class=\"o\">&lt;</span><span class=\"n\">MyObject</span><span class=\"w\"> </span><span class=\"n\">ResizeArray</span><span class=\"o\">&gt;(</span><span class=\"n\">jsonStream</span><span class=\"o\">)</span>\n<span class=\"w\">        </span><span class=\"k\">let</span><span class=\"w\"> </span><span class=\"nv\">item</span><span class=\"o\">=(</span><span class=\"n\">objects</span><span class=\"o\">.</span><span class=\"n\">Item</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"n\">objects</span><span class=\"o\">.</span><span class=\"n\">Count</span><span class=\"o\">-</span><span class=\"mi\">1</span><span class=\"o\">)).</span><span class=\"n\">id</span>\n<span class=\"w\">        </span><span class=\"n\">item</span>\n<span class=\"w\">    </span><span class=\"o\">[&lt;</span><span class=\"n\">Benchmark</span><span class=\"o\">&gt;]</span>\n<span class=\"w\">    </span><span class=\"k\">member</span><span class=\"w\"> </span><span class=\"n\">_</span><span class=\"p\">.</span><span class=\"nf\">IdOnlyReadFIle</span><span class=\"bp\">()</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">        </span><span class=\"k\">let</span><span class=\"w\"> </span><span class=\"nv\">json</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nn\">File</span><span class=\"p\">.</span><span class=\"n\">ReadAllBytes</span><span class=\"o\">(</span><span class=\"s\">\"/home/eli/Code/roc/lsp/small-json.json\"</span><span class=\"o\">)</span>\n<span class=\"w\">        </span><span class=\"k\">let</span><span class=\"w\"> </span><span class=\"nv\">objects</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nn\">JsonSerializer</span><span class=\"p\">.</span><span class=\"n\">Deserialize</span><span class=\"o\">&lt;</span><span class=\"n\">MyObject</span><span class=\"w\"> </span><span class=\"n\">ResizeArray</span><span class=\"o\">&gt;(</span><span class=\"n\">json</span><span class=\"o\">)</span>\n<span class=\"w\">        </span><span class=\"k\">let</span><span class=\"w\"> </span><span class=\"nv\">item</span><span class=\"o\">=(</span><span class=\"n\">objects</span><span class=\"o\">.</span><span class=\"n\">Item</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"n\">objects</span><span class=\"o\">.</span><span class=\"n\">Count</span><span class=\"o\">-</span><span class=\"mi\">1</span><span class=\"o\">)).</span><span class=\"n\">id</span>\n<span class=\"w\">        </span><span class=\"n\">item</span>\n</code></pre></div>\n<p>Edit: Using ReadAllBytes instead</p>",
+        "id": 434465194,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1713583759
+    },
+    {
+        "content": "<p>In this case it's what I'd expect, a tiny bit faster because the data is decoded as it's being read and reading data takes time</p>",
+        "id": 434465420,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1713584022
+    },
+    {
+        "content": "<p>Does donet let you mmap a file? If so, how does that compare?</p>",
+        "id": 434466304,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713585001
+    },
+    {
+        "content": "<p>Ok, so <span class=\"user-mention\" data-user-id=\"651372\">@Eli Dowling</span> and I did some more digging. The original perf numbers of 5x to 10x are definitely wrong. The reader api is still not as fast in rust, but later commits have sped it up tremendously (mostly by adding and reusing buffers).</p>\n<p>These are the rough findings. Would have to do more testing to fully confirm all of them:</p>\n<ol>\n<li>5x to 10x perf difference was definitely a bug</li>\n<li>Streaming vs non-streaming can be very close in perf</li>\n<li>DotNet doesn't have this, but in rust (and roc), we have can use string slices to avoid copying string bytes. This is where a 1x to 2x perf difference can come from. Note, you can only uses slices if you are in a non-streaming setup.</li>\n<li>If a string has an escape sequence, we have to copy it, so no gain from the string slices.</li>\n<li>For absolute max performance, you have to do something like <code>simd-json</code>. Many of the techniques can be applied to a streaming setup. That said, lazy decoding and avoiding all data copying is only possible in a non-streaming setup (still has single copy to load a string with escaped characters if the string is used).</li>\n<li>For lowest memory use, streaming can make a crazy difference especially when only loading some of the fields.</li>\n</ol>\n<p>So this definitely makes the tradeoff feel much more nuanced.</p>",
+        "id": 434471631,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713590539
+    },
+    {
+        "content": "<p>I think my suggestion in <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/stream/304641-ideas/topic/Decoder.20APIs.20likely.20require.20streaming\">#ideas &gt; Decoder APIs likely require streaming</a> still stays the same, but I now think that a streaming api could definitely be useful. It seems in many cases the perf may be negligible but the memory usage difference significant.</p>",
+        "id": 434471885,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713590808
+    },
+    {
+        "content": "<p>I do think it is worth remembering there are some applications that would be simply impossible without some kind of stream api..<br>\neg: Summing all the values in a 1gb json file on a little cloud instance with only 500mb of memory, or streaming a video file over the network or any number of other things.</p>\n<p>I think a streams design in roc is worth keeping in mind.</p>",
+        "id": 434472260,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1713591236
+    },
+    {
+        "content": "<p>Yeah, theoretically <code>mmap</code> partially helps for the \"1gb json file on a little cloud instance with only 500mb of memory\", but the streaming decode/encode is definitely needed for video/audio streams.</p>",
+        "id": 434472702,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713591709
+    },
+    {
+        "content": "<p>would streaming video/audio streams use <code>Decoding</code> though? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 434495051,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1713614232
+    },
+    {
+        "content": "<p>No likely not, but this conversation had kind of wondered into \"should we support streams\" area as well. So I just wanted to reiterate their importance <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 434495167,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1713614339
+    }
+]
