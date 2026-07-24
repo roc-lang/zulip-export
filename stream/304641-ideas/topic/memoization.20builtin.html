@@ -1,0 +1,193 @@
+<html>
+<head><meta charset="utf-8"><title>memoization builtin · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html">memoization builtin</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="271220550"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271220550" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271220550">(Feb 09 2022 at 01:54)</a>:</h4>
+<p>what if we had a memoization primitive that works like a generalized version of Elm's <a href="https://package.elm-lang.org/packages/elm/html/latest/Html-Lazy#lazy"><code>Html.lazy</code></a>?</p>
+<p>basically it's a way to <a href="https://en.wikipedia.org/wiki/Memoization">memoize</a> function calls faster than is currently possible in Roc. The API would be:</p>
+<ul>
+<li><code>Memo.run : Memo a b, a, (a -&gt; b) -&gt; { answer : b, memo : Memo a b }</code></li>
+<li><code>Memo.empty : Memo * *</code></li>
+</ul>
+<p>the way it works is:</p>
+<ul>
+<li>you give <code>Memo.run</code> three arguments: a <code>Memo</code>, a 1-argument function, and an argument</li>
+<li>if you gave it <code>Memo.empty</code>, then it calls the 1-arg function passing the given arg, and returns both the return value as well as a (non-empty) <code>Memo</code> which stores the function, the arg, and the return value</li>
+<li>if you give it a non-empty <code>Memo</code>, it compares the given function and the given arg to the ones stored inside the <code>Memo</code>; if they're the same, then it doesn't bother calling the function and instead returns the stored answer directly</li>
+<li>if the given arg is different from the one stored inside <code>Memo</code>, or if the function is different, then it works the same way as if you'd given it <code>Memo.empty</code> (call the given function with the given arg, return the result and a <code>Memo</code> which stores them)</li>
+<li>importantly, it does a shallow <em>reference</em> equality check on the function and the arg to determine if they changed. (Basically comparing their exact bytes in memory, and not following any pointers.) This is much faster than a full structural equality check, but it can have false negatives (e.g. if we followed pointers, we would see that they actually are structurally equal, but we didn't follow pointers because that takes longer, so we assume they're unequal even though they aren't).</li>
+</ul>
+<p>This would have to be a new builtin because, by design, neither shallow reference equality nor comparing functions for equality are operations Roc supports. However, in this particular use case, it seems harmless to do both because it's only a performance optimization; you can't actually use this API to change the behavior of your program - aside from making it run faster or slower.</p>
+<p>This builtin would be useful in some of the GUI stuff I'm working on right now - for example, directly using it to implement an equivalent of <code>Html.lazy</code>, which as far as I can tell is not currently possible, even with platform tricks (meaning in the absence of this builtin, something else would have to change for <code>lazy</code> to be implementable - e.g. how code generation works).</p>
+
+
+
+<a name="271220725"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271220725" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271220725">(Feb 09 2022 at 01:57)</a>:</h4>
+<p>anyone have thoughts on this idea?</p>
+
+
+
+<a name="271221056"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271221056" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271221056">(Feb 09 2022 at 02:01)</a>:</h4>
+<p>(incidentally, <code>Memo.empty</code> would have no performance overhead or require any special conditional treatment; it would just have the equivalent of a null function pointer, so the comparison always fails no matter what real function you give to <code>Memo.run</code>)</p>
+
+
+
+<a name="271221534"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271221534" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271221534">(Feb 09 2022 at 02:07)</a>:</h4>
+<p>What if equality is instead optimized to catch the case where you’re comparing two of the same pointers?<br>
+My worry with this is the proposed behavior is that it will be difficult for application authors to reason about when their values are referentially equal and when they aren’t, because memory allocation isn’t something we expose to the end user or guarantee a consistent behavior for (at least today).<br>
+Additionally, I see an interest for user space software to use some derivatives of this idea - for example suppose I want a variable maximum size for my memoization cache, or I want to use a different caching policy (LRU/FIFO/etc). If users are likely to do this anyway, or at least not discouraged from, it may be better to see if we can optimize for the general case.</p>
+<p>More seriously, comparing by reference could always break referential transparency - that may not be something Roc wants!</p>
+
+
+
+<a name="271222357"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271222357" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271222357">(Feb 09 2022 at 02:22)</a>:</h4>
+<blockquote>
+<p>What if equality is instead optimized to catch the case where you’re comparing two of the same pointers?</p>
+</blockquote>
+<p>I think that would already be the case (e.g. if the pointers are the same, we don't have to bother following them to know that whatever they point to is also equal) - but in the case of reference equality, we actively want different behavior: if the pointers are different, we don't even bother traversing to see if their contents happen to be the same, just proceed as though they're different</p>
+
+
+
+<a name="271222515"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271222515" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271222515">(Feb 09 2022 at 02:24)</a>:</h4>
+<blockquote>
+<p>More seriously, comparing by reference could always break referential transparency - that may not be something Roc wants!</p>
+</blockquote>
+<p>yeah, that's a major reason I don't want to have a reference equality primitive in the language (like <a href="https://www2.lib.uchicago.edu/keith/ocaml-class/operators.html">OCaml does</a>) <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span> </p>
+<p>however, this API can't break referential equality. If you call <code>Memo.run</code> passing the same arguments, it will return the same (in the structural equality sense, as usual) answer every time, guaranteed. Elm's <code>lazy</code> does reference equality, and it indeed has some edge cases that don't appear anywhere else in the language, but that's also necessary to unlock performance that isn't achievable any other way!</p>
+
+
+
+<a name="271222651"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271222651" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271222651">(Feb 09 2022 at 02:27)</a>:</h4>
+<blockquote>
+<p>My worry with this is the proposed behavior is that it will be difficult for application authors to reason about when their values are referentially equal and when they aren’t, because memory allocation isn’t something we expose to the end user or guarantee a consistent behavior for (at least today).</p>
+</blockquote>
+<p>this is true, although it's also true that performance optimization in every language inevitably requires looking under the hood into internal implementation details that weren't necessary to think about before, so I don't think that concern disqualifies a performance optimization tool in the same way it would most APIs</p>
+
+
+
+<a name="271222973"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271222973" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271222973">(Feb 09 2022 at 02:32)</a>:</h4>
+<blockquote>
+<p>but in the case of reference equality, we actively want different behavior: if the pointers are different, we don't even bother traversing to see if their contents happen to be the same, just proceed as though they're different</p>
+</blockquote>
+<p>But why not both? That way a user gets the benefits of really fast equality checking when two objects are the reference, without losing out on returning a cached result when objects are structurally equal - in my mind, many things that are worth caching are much more expensive to compute than structural equality</p>
+
+
+
+<a name="271223252"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271223252" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271223252">(Feb 09 2022 at 02:37)</a>:</h4>
+<p>hm, I was going to point out a benefit, but then I realized it doesn't actually work <span aria-label="laughing" class="emoji emoji-1f606" role="img" title="laughing">:laughing:</span></p>
+
+
+
+<a name="271223283"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271223283" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271223283">(Feb 09 2022 at 02:38)</a>:</h4>
+<blockquote>
+<p>I don't think that concern disqualifies a performance optimization tool in the same way it would most APIs</p>
+</blockquote>
+<p>I definitely agree it shouldn't disqualify it - I just wonder if there is a better way to expose this kind of optimization in the language besides a single builtin API</p>
+
+
+
+<a name="271223347"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271223347" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271223347">(Feb 09 2022 at 02:38)</a>:</h4>
+<p>the idea was that if we can just do a reference equality check, then we don't need to traverse pointers, which in turn means we don't need to hold onto a reference - meaning the thing we're storing doesn't need to have its reference count incremented because even if it gets freed, we can still do the reference equality check</p>
+<p>...but then I realized this could cause its refcount to be 1, meaning it would be eligible for in-place mutation, and therefore a reference equality check could return false positives, which would be very bad <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="271223439"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271223439" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271223439">(Feb 09 2022 at 02:40)</a>:</h4>
+<p>so actually, realizing that I think sells me on it being a structural equality check for the arg</p>
+
+
+
+<a name="271223445"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271223445" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271223445">(Feb 09 2022 at 02:40)</a>:</h4>
+<p>(if nothing else)</p>
+
+
+
+<a name="271223453"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271223453" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271223453">(Feb 09 2022 at 02:40)</a>:</h4>
+<p>so then the new primitive would be needed only for checking function equality</p>
+
+
+
+<a name="271223475"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271223475" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271223475">(Feb 09 2022 at 02:41)</a>:</h4>
+<p>which in the general case seems like a risky proposition, but in this particular case seems harmless</p>
+
+
+
+<a name="271223552"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271223552" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271223552">(Feb 09 2022 at 02:42)</a>:</h4>
+<p>well function equality can only be checked referentially.. at least unless we can prove certain functions halt, which is probably out of the question :)</p>
+
+
+
+<a name="271223663"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271223663" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271223663">(Feb 09 2022 at 02:44)</a>:</h4>
+<p>as far as alternative designs go, I'm open to suggestions!</p>
+
+
+
+<a name="271224115"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271224115" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271224115">(Feb 09 2022 at 02:53)</a>:</h4>
+<p>I think the need for referential function equality convinces me that this as a builtin is a good idea</p>
+<p>What if <code>Memo</code> captures the function that it's memoizing over?  That is the API would look something like</p>
+<div class="codehilite"><pre><span></span><code>Memo.empty : (a -&gt; b) -&gt; Memo a b # Maybe Memo.new?
+Memo.run : Memo a b, a -&gt; { answer: b, memo: Memo a b }
+</code></pre></div>
+<p>My thought here is that usually one would want to memoize different arguments to the same function - and if I want to cache the computations of different arguments/functions, I can do so with this API by having the function (a -&gt; b) be something like <code>{ apply, val } -&gt; apply val</code>, which to me in some ways makes it more explicit that I might be memoizing both over different functions and different arguments to those functions.</p>
+
+
+
+<a name="271224736"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271224736" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271224736">(Feb 09 2022 at 03:02)</a>:</h4>
+<p>interesting!</p>
+
+
+
+<a name="271224915"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271224915" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271224915">(Feb 09 2022 at 03:06)</a>:</h4>
+<p>so one use case I can think of which might benefit from this design is:</p>
+<p>let's say I have a huge list (like 10K elements) of items I want to render. One of the things a user can do is to delete an item from the middle of the list. (We don't necessarily have to actually remove it and shift everything over; we can just mark it as "deleted" and then not render it.)</p>
+<p>how can we performance-optimize that scenario? Ideally we want to be able to cache the renderings of the other 9999 elements, such that we don't have to re-render every single one of them just because the list as  a whole changed</p>
+
+
+
+<a name="271224931"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271224931" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271224931">(Feb 09 2022 at 03:07)</a>:</h4>
+<p>actually nm I don't think we need to memoize to make that fast</p>
+
+
+
+<a name="271224961"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271224961" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271224961">(Feb 09 2022 at 03:08)</a>:</h4>
+<p>as long as we have the concept of leaf nodes updating in-place without requiring that the parent re-render, which is already a separate thing I'm looking into, so nm that's not a good example</p>
+
+
+
+<a name="271225366"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/memoization%20builtin/near/271225366" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/memoization.20builtin.html#271225366">(Feb 09 2022 at 03:13)</a>:</h4>
+<p>one example I can think of is if you have something that needs a network fetch to render, but you want to reuse the last fetched data until some TTL expiry - that use case might be a little bit different though since it requires a bit more work for caching</p>
+
+
+
+<hr><p>Last updated: Jul 24 2026 at 13:09 UTC</p>
+</html>

@@ -1,0 +1,182 @@
+[
+    {
+        "content": "<p>Hello, I've been looking into Tail Recursion Modulo Cons (TRMC).<br>\nHere are my thoughts so far:</p>\n<p>The approaches I've read about so far implements TRMC using destination patching.<br>\nWhile the mono-IR doesn't have a direct way of representing the mutation that would need to be preformed, maybe <code>reuse</code> could do the job.</p>\n<p>Something like, transforming:</p>\n<div class=\"codehilite\"><pre><span></span><code>map = \\f, l -&gt;\n    when l is\n        Nil -&gt; Nil\n        Cons x xs -&gt; Cons (f x) (map f xs)\n</code></pre></div>\n<p>Into this (pseudocode):</p>\n<div class=\"codehilite\"><pre><span></span><code>map = \\f, l -&gt;\n  dst0 = Nil\n  let joinpoint j f l dst =\n    when l is\n      # Redundant in this case\n      Nil -&gt; reuse dst Nil\n      Cons x xs -&gt;\n        x&#39; = f x\n        dst&#39; = Nil\n        # Effectively write to dst\n        _ = reuse dst (Cons x&#39; dst&#39;)\n        jump j f xs dst&#39;\n  in\n    jump j f l dst0\n</code></pre></div>\n<p>I'm not sure if this is an elegant solution to not introducing the required mutating constructs into the mono-IR or a gross misuse of <code>reuse</code>:)</p>\n<p>Also, I must admit that I haven't fully dug in to how layouts work and how <code>reuse</code> interacts with them (started looking at the code yesterday).<br>\nSo maybe for some layouts the termninal tags of a union are not valid \"patchable\" destinations?<br>\nIn that case perhaps passing the outer union and a patch-index and <code>reuse</code>'ing the slot via an <code>UnionAtIndex</code> access would work?</p>\n<p>If this approach is valid, then this transform should probably either be a part of <code>make_tail_recursive</code> or run just before it.<br>\nSince it would use <code>reuse</code> et al, the pass(es) should probably be moved to after <code>insert_reset_reuse_operations</code> instead of at the start of <code>get_specializd_procs_without_rc</code>.<br>\nWould moving the tail-recursion pass to after the ref-counting passes affect anything else?</p>",
+        "id": 354684624,
+        "sender_full_name": "Nulldata",
+        "timestamp": 1682860876
+    },
+    {
+        "content": "<p>this reminds me, we chatted with Anton Lorenzen a while ago and he mentioned that Daan Leijen had some trick for how TRMC is actually implemented in Koka</p>",
+        "id": 354688394,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682862182
+    },
+    {
+        "content": "<p>I've had thoughts similar to ^. I think what you run into though is that <code>Nil</code> is represented as a null pointer. hence re-using it won't work.</p>",
+        "id": 354688717,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682862271
+    },
+    {
+        "content": "<p>and generally a problem is that the papers assume you have one element of \"scratch space\" available at the start of the recursion, which is suboptimal. I would like it to actually be in-place</p>",
+        "id": 354688812,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682862307
+    },
+    {
+        "content": "<p>but that means unrolling the recursive function, which would be tricky</p>",
+        "id": 354688832,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682862318
+    },
+    {
+        "content": "<p>also, in general, cool that you're looking into this! we'd benefit from actually implementing TRMC a lot!</p>",
+        "id": 354689180,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682862430
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>        dst&#39; = Nil\n        # Effectively write to dst\n        _ = reuse dst (Cons x&#39; Nil)\n        jump j f xs dst&#39;\n</code></pre></div>\n<p>To clarify, I think you'd really want something like</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"w\"> </span>       dst' = Nil\n<span class=\"w\"> </span>       # Effectively write to dst\n<span class=\"gd\">-       _ = reuse dst (Cons x' Nil)</span>\n<span class=\"gi\">+       _ = reuse dst (Cons x' dst')</span>\n<span class=\"w\"> </span>       jump j f xs dst' # index into the new `Nil` cell above\n</code></pre></div>\n<p>here, right?</p>",
+        "id": 354689694,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1682862601
+    },
+    {
+        "content": "<p>Yes! Fixed the original post</p>",
+        "id": 354689928,
+        "sender_full_name": "Nulldata",
+        "timestamp": 1682862661
+    },
+    {
+        "content": "<p>Folkert, does <code>reuse</code> have to be 1-to-1 with <code>reset</code>?</p>",
+        "id": 354690005,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1682862681
+    },
+    {
+        "content": "<blockquote>\n<p>this reminds me, we chatted with Anton Lorenzen a while ago and he mentioned that Daan Leijen had some trick for how TRMC is actually implemented in Koka</p>\n</blockquote>\n<p>aside: yeah, they said they would send us a note on how they do it sometime later this spring or summer</p>",
+        "id": 354690127,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1682862721
+    },
+    {
+        "content": "<p>no they'll publish a paper on FBIP. I think I should follow up about that TRMC thing</p>",
+        "id": 354690355,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682862791
+    },
+    {
+        "content": "<blockquote>\n<p>this reminds me, we chatted with Anton Lorenzen a while ago and he mentioned that Daan Leijen had some trick for how TRMC is actually implemented in Koka</p>\n</blockquote>\n<p>Ooh, nice, I'll have a look at that (maybe we should steal some of their benchmarks too)</p>\n<blockquote>\n<p>I've had thoughts similar to ^. I think what you run into though is that Nil is represented as a null pointer. hence re-using it won't work.</p>\n</blockquote>\n<p>Yeah I feared that, but would the \"passing outer value + patch index\" index then work?</p>\n<blockquote>\n<p>and generally a problem is that the papers assume you have one element of \"scratch space\" available at the start of the recursion, which is suboptimal. I would like it to actually be in-place<br>\nbut that means unrolling the recursive function, which would be tricky</p>\n</blockquote>\n<p>Maybe instead of unrolling, we could replace the inductive case(s) with a call to a generated helper which then basically has the body of my proposed transform, modulo that it would take the outer structure and a patch index instead, so that it's guarranteed to do an in-place update?</p>",
+        "id": 354690393,
+        "sender_full_name": "Nulldata",
+        "timestamp": 1682862805
+    },
+    {
+        "content": "<p>eh, let's see. strictly speaking <code>reuse</code> is not tied to <code>reset</code></p>",
+        "id": 354690408,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682862809
+    },
+    {
+        "content": "<p>something like this?</p>\n<div class=\"codehilite\"><pre><span></span><code>map = \\f, l -&gt;\n    when l is\n        Nil -&gt; Nil\n        Cons x xx -&gt; helper f x xx l\n\nhelper = \\f, x, xx, dst -&gt;\n    when xx is\n        Nil -&gt; Cons@dst (f x) xx\n        Cons y yy -&gt;\n            _ = Cons@dst (f x) xx\n\n            helper f y yy xx\n</code></pre></div>",
+        "id": 354691332,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682863093
+    },
+    {
+        "content": "<p>the challenge is of course to recognize the inductive cases</p>",
+        "id": 354691492,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682863149
+    },
+    {
+        "content": "<p>e.g. we also want this to work for (binary) trees</p>",
+        "id": 354691555,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682863166
+    },
+    {
+        "content": "<blockquote>\n<p>something like this? ...</p>\n</blockquote>\n<p>Yes something like that. Though wouldn't yours replace the input list <code>l</code> in-place?</p>",
+        "id": 354696491,
+        "sender_full_name": "Nulldata",
+        "timestamp": 1682864826
+    },
+    {
+        "content": "<p>yes. that only works if the input and output types are roughly similar</p>",
+        "id": 354696776,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682864926
+    },
+    {
+        "content": "<p>for us anyway</p>",
+        "id": 354696813,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682864938
+    },
+    {
+        "content": "<p>ah I understand better now what you originally intended. If we cannot re-use the input list, then using <code>Nil</code> as the <code>dst</code> is exactly what you want</p>",
+        "id": 354696994,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682864988
+    },
+    {
+        "content": "<p>because the reuse will allocate the required space</p>",
+        "id": 354697035,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682864999
+    },
+    {
+        "content": "<p>but, if the update can happen in-place, we'd like that too of course</p>",
+        "id": 354697134,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682865011
+    },
+    {
+        "content": "<p>Yeah, I mean we're not necessarily trying to avoid fresh allocs all together. After all the input list might still live after the call, so constructing a whole new output list is fine in those cases. We mainly want to use the <code>reuse</code> in order to enable tail-recursion</p>",
+        "id": 354697628,
+        "sender_full_name": "Nulldata",
+        "timestamp": 1682865138
+    },
+    {
+        "content": "<p>yes, limiting scope a bit here is probably a good idea</p>",
+        "id": 354697961,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682865217
+    },
+    {
+        "content": "<p>also, hi and welcome <span class=\"user-mention\" data-user-id=\"613571\">@Nulldata</span>! <span aria-label=\"wave\" class=\"emoji emoji-1f44b\" role=\"img\" title=\"wave\">:wave:</span></p>",
+        "id": 354698755,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1682865461
+    },
+    {
+        "content": "<p>As for detection, a naïve approach would maybe be:<br>\nLook for tail position constructor calls, check if one of the arguments is a recursive call, and then mark that slot as the \"hole\"<br>\nSince, we're working with a pure functional language, I guess the argument position/order of the recursive call doesn't actually matter?</p>\n<p>This doesn't handle mutually recursive functions nor more advanced cases, but might be a good starting point</p>",
+        "id": 354699361,
+        "sender_full_name": "Nulldata",
+        "timestamp": 1682865613
+    },
+    {
+        "content": "<p>sure, you're right that order of arguments does not matter</p>",
+        "id": 354699484,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1682865653
+    },
+    {
+        "content": "<p>Great</p>",
+        "id": 354701991,
+        "sender_full_name": "Nulldata",
+        "timestamp": 1682866319
+    },
+    {
+        "content": "<p>this is the detection heuristic koka uses (<a href=\"https://github.com/koka-lang/koka/blob/b1670308f88dd1fc6c22cad28385fcb185d5b27d/src/Core/CTail.hs#L179-L217\">1</a>, <a href=\"https://github.com/koka-lang/koka/blob/b1670308f88dd1fc6c22cad28385fcb185d5b27d/src/Core/CTail.hs#L304-L371\">2</a>)</p>",
+        "id": 354703901,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1682866924
+    },
+    {
+        "content": "<p>So I haven't been able to work much on this so far. I mainly have the weekends for this and this weekend is kinda busy for me.<br>\nBut I have started the first step, which is moving the <code>tail_recursion</code> transform past the RC/Reuse transforms to avoid introducing <code>Reuse</code> instructions before them. </p>\n<p>I've made a draft PR for tracking: <a href=\"https://github.com/roc-lang/roc/pull/5382\">https://github.com/roc-lang/roc/pull/5382</a></p>\n<p>Most of the mono changes caused by the moving of the <code>tail_recursion</code> transform seem to be just renamings, except this one: <a href=\"https://github.com/roc-lang/roc/pull/5382/files#diff-41b4132f97c437f17a0b8a438ad86d2c5311451161e13f58357e6bdb3781f065\">https://github.com/roc-lang/roc/pull/5382/files#diff-41b4132f97c437f17a0b8a438ad86d2c5311451161e13f58357e6bdb3781f065</a><br>\nWhich looks kinda odd. I'll look more into it later.</p>",
+        "id": 356268539,
+        "sender_full_name": "Nulldata",
+        "timestamp": 1683369683
+    }
+]

@@ -1,0 +1,116 @@
+[
+    {
+        "content": "<p>Hi All,</p>\n<p>I was playing around with using Roc for a Zulip client of all things (for <a href=\"https://github.com/ESRogs/zulr\">this project</a>), when I stumbled upon a bug parsing JSON strings with escapes in them. I saw that there was already an <a href=\"https://github.com/roc-lang/roc/issues/10035\">issue</a> for the bug, and that <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> had tagged it <code>good first issue</code>, so I decided to take a crack at it myself (with the help of Claude).</p>\n<p>Here's a PR that I believe correctly implements JSON escape parsing, and addresses all the desiderata in the issue Luke filed: <a href=\"https://github.com/roc-lang/roc/pull/10045\">https://github.com/roc-lang/roc/pull/10045</a>.</p>\n<p>But this is my first time attempting to contribute to <code>roc-lang</code>, so any feedback / pointers / tips are very much appreciated!</p>\n<p>Cheers,<br>\nEric</p>",
+        "id": 609590241,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1783756492
+    },
+    {
+        "content": "<p>A few notes worth calling out (also mentioned in the PR):</p>\n<ol>\n<li>It appears that the prior implementation of <code>Json.split_json_string_tail</code> caused document parsing to be accidentally quadratic, due to a call to <code>Str.find_first(tail, \"\\\\\")</code> that would scan to the end of the document for every string field (in the case where no backslashes were found). Our implementation avoids ever scanning past the next (unescaped) quote character, and so stays linear (validated empirically).</li>\n<li>Any unpaired surrogates are rejected as invalid JSON, as opposed to e.g. using U+FFFD as a replacement.</li>\n<li>On the other hand, we accept raw control characters (U+0000–U+001F) in documents unchanged (matching the prior implementation). Should we reject them instead?</li>\n</ol>",
+        "id": 609590889,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1783756953
+    },
+    {
+        "content": "<p>Hey <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span>, thanks for the review (and adding that extra check and merging the PR)!</p>\n<p>I've got a follow-up to make a similar fix for parsing scalars: <a href=\"https://github.com/roc-lang/roc/pull/10145\">https://github.com/roc-lang/roc/pull/10145</a></p>\n<p>This one's a little simpler, but let me know if you see any issues!</p>",
+        "id": 609990976,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1783988409
+    },
+    {
+        "content": "<blockquote>\n<p>Unicode whitespace set is wider than RFC 8259</p>\n</blockquote>\n<p>What options do we have here? I vaguely remember going deep on this topic when I was building roc-json but I've since evicted all of that from memory... I would assume we want to align with the JSON standard here.</p>",
+        "id": 610001011,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1783995704
+    },
+    {
+        "content": "<p>Also I really appreciate the care you are taking with this, particularly with tracking the allocations and performance.</p>",
+        "id": 610001074,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1783995782
+    },
+    {
+        "content": "<p>Yeah, I think aligning with the standard makes sense. In which case we can't let <code>Str.trim_start</code> silently drop some characters that should have caused us to reject the document.</p>\n<p>One approach would be to replace calls to <code>Str.trim_start</code> with a <code>json_trim_start</code> function that only drops allowed whitespace, and then count on the calling code to fail when it tries to match disallowed whitespace against whatever it was expecting.</p>\n<p>I've got a (Claude-generated) draft PR in my Roc fork that takes that approach: <a href=\"https://github.com/ESRogs/roc/pull/4\">https://github.com/ESRogs/roc/pull/4</a>.</p>\n<p>(And I'm currently in the process of auditing that the calling code does in fact fail the disallowed whitespace.)</p>\n<p>Does that approach sound reasonable? If so, I can promote it to a PR against the main repo.</p>",
+        "id": 610021321,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1784008437
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> does that approach of trimming only allowed whitespace and then counting on the rest of the parsing logic to fail to match on any remaining disallowed whitespace makes sense?</p>\n<p>I had Claude audit all of the trim calls and it looks like it should work in every case.</p>\n<p>If that makes sense to you, then I can just fold my <a href=\"https://github.com/ESRogs/roc/pull/4\">https://github.com/ESRogs/roc/pull/4</a> PR into <a href=\"https://github.com/roc-lang/roc/pull/10145\">https://github.com/roc-lang/roc/pull/10145</a>, and then that'll resolve the one open issue I'd flagged.</p>",
+        "id": 610923463,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1784145372
+    },
+    {
+        "content": "<p>Looks good to me... thank you for including the explanation</p>",
+        "id": 610954753,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1784160233
+    },
+    {
+        "content": "<p>Did you need me to merge that into your other branch so we keep that PR description or explanation around for reference later</p>",
+        "id": 610954982,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1784160269
+    },
+    {
+        "content": "<p>oh nvm, this is in your fork <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 610955119,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1784160291
+    },
+    {
+        "content": "<p>Okay, I've folded that commit that was just into my fork into <a href=\"https://github.com/roc-lang/roc/pull/10145\">https://github.com/roc-lang/roc/pull/10145</a> and updated the PR description. I think it's ready for review / merge now.</p>",
+        "id": 610963729,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1784164321
+    },
+    {
+        "content": "<p>We can eliminate a List allocation for small strings if we implement a few of the planned builtins on Str. </p>\n<p>I'm going to piggy back on top of your work here and add those as this will be a good test to demonstrate zero allocations for small and large strings.</p>",
+        "id": 610964986,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1784165287
+    },
+    {
+        "content": "<p>Do you mind if I push the commits to your branch, or would you prefer I make a PR back into your fork?</p>",
+        "id": 610965037,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1784165331
+    },
+    {
+        "content": "<p>Or even better... I might just merge your work if it's passing in CI and make a follow up PR</p>",
+        "id": 610966006,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1784166045
+    },
+    {
+        "content": "<p>Here's the stacked PR <a href=\"https://github.com/roc-lang/roc/pull/10173\">https://github.com/roc-lang/roc/pull/10173</a></p>",
+        "id": 610969598,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1784168818
+    },
+    {
+        "content": "<p>Oh nice, I also had this stacked PR on my fork trying to achieve a similar goal. Haven't looked through yours to tell if mine is redundant yet though.</p>\n<p><a href=\"https://github.com/ESRogs/roc/pull/1\">https://github.com/ESRogs/roc/pull/1</a></p>",
+        "id": 610970258,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1784169344
+    },
+    {
+        "content": "<p>Okay, yeah, looks like that work is partly redundant now.</p>\n<p>Here's a new draft PR that builds on yours and rewrites the string parsing (complementing your rewrite of the scalar parsing):<br>\n<a href=\"https://github.com/ESRogs/roc/pull/5\">https://github.com/ESRogs/roc/pull/5</a></p>",
+        "id": 611001001,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1784186723
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> this one finally passed all its CI checks (Windows minici had kept timing out): <a href=\"https://github.com/roc-lang/roc/pull/10145\">https://github.com/roc-lang/roc/pull/10145</a></p>\n<p>Okay to go ahead and merge it?</p>",
+        "id": 611367886,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1784320092
+    },
+    {
+        "content": "<p>Then we can rebase our various other stacked PRs on top.</p>\n<p>I'd suggest:</p>\n<ol>\n<li>your <a href=\"https://github.com/roc-lang/roc/pull/10173\">https://github.com/roc-lang/roc/pull/10173</a> next,</li>\n<li>and then I can update <a href=\"https://github.com/ESRogs/roc/pull/5\">https://github.com/ESRogs/roc/pull/5</a> and make it a real PR against the main repo after that</li>\n</ol>",
+        "id": 611368313,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1784320248
+    }
+]

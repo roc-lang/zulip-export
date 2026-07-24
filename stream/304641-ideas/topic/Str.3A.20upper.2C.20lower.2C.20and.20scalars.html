@@ -1,0 +1,415 @@
+<html>
+<head><meta charset="utf-8"><title>Str: upper, lower, and scalars · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html">Str: upper, lower, and scalars</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="317752823"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317752823" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317752823">(Dec 24 2022 at 17:58)</a>:</h4>
+<p>I just implemented functions to convert between <code>lower_case_names</code> and <code>UpperCaseNames</code>, and ran into a few obstacles that I thought might be worth talking about.</p>
+<p>My first attempt for the <code>upperName</code> conversion (the forward direction, in the order I've written them), I tried to split on '_' and then convert each element to title case, then join again. Turns out there's no converting to title case. Nor is there a way to split off the first scalar, convert it to uppercase, and concat it back.</p>
+<p>For the <code>lowerName</code> direction, I was originally going to find anything matching <code>/[A-Z]/</code>, insert underscores at each location, then lowercase the whole thing. However, there doesn't seem to be any functions to locate a pattern in a string (regex or not).</p>
+<p>Eventually I found <code>Str.walkScalars</code>, which worked, and landed on this:</p>
+<div class="codehilite"><pre><span></span><code>underscoreScalar = 95 # Yes, I now know I could have just used &#39;_&#39; literals
+aLowerScalar = 97
+zLowerScalar = 122
+aUpperScalar = 65
+zUpperScalar = 90
+
+# map from a lower_case_name to a UpperCaseName
+upperName : Str -&gt; Str
+upperName = \name -&gt;
+    result = Str.walkScalars name {text: &quot;&quot;, needUpper: Bool.true} \{text, needUpper}, c -&gt;
+        if c == underscoreScalar then
+            {text, needUpper: Bool.true}
+        else
+            newText =
+                if needUpper then
+                    Str.appendScalar text (c - aLowerScalar + aUpperScalar) |&gt; orCrash
+                else
+                    Str.appendScalar text c |&gt; orCrash
+            {text: newText, needUpper: Bool.false}
+    result.text
+
+expect (upperName &quot;hello_world&quot;) == &quot;HelloWorld&quot;
+
+orCrash : Result a e -&gt; a
+orCrash = \result -&gt;
+    when result is
+        Ok a -&gt; a
+        Err e -&gt; crash &quot;orCrash&quot;
+
+lowerName : Str -&gt; Str
+lowerName = \name -&gt;
+    result = Str.walkScalars name {text: &quot;&quot;, needUnder: Bool.false} \{text, needUnder}, c -&gt;
+        newText =
+            if c &gt;= aUpperScalar &amp;&amp; c &lt;= zUpperScalar then
+                if needUnder then
+                    text
+                        |&gt; Str.appendScalar underscoreScalar
+                        |&gt; orCrash
+                        |&gt; Str.appendScalar (c - aUpperScalar + aLowerScalar)
+                        |&gt; orCrash
+                else
+                    text
+                        |&gt; Str.appendScalar (c - aUpperScalar + aLowerScalar)
+                        |&gt; orCrash
+            else
+                Str.appendScalar text c |&gt; orCrash
+
+        {text: newText, needUnder: Bool.true}
+
+    result.text
+
+expect
+    theResult = (lowerName &quot;HelloWorld&quot;)
+    theResult == &quot;hello_world&quot;
+</code></pre></div>
+<p>There are of course a few things that are non-ideal about that:</p>
+<ul>
+<li>I didn't realize that '_' would evaluate to a U32 (95) at first - totally my fault; whoops!</li>
+<li>I needed to do the upper/lower conversion myself - there should probably be <code>Scalar.toAsciiUpper</code> and <code>Scalar.toAsciiLower</code> functions that do this for me</li>
+<li>I was looking for a <code>Result.orCrash</code> function, since I 100% know these errors will never happen, but it doesn't appear to exist.</li>
+<li>And, going even further, if Roc had a dedicated <code>Scalar</code> type that's guaranteed to be a valid unicode code point, then many uses of <code>appendScalar</code> and <code>walkScalar</code> could operate without needing <code>Result.orCrash</code> in the first place. The Scalar module would have functions for converting to/from U32, and _that's_ where we'd return the Err result.</li>
+</ul>
+<p>Here's what I would have liked to have written:</p>
+<div class="codehilite"><pre><span></span><code>upperName : Str -&gt; Str
+upperName = \name -&gt;
+    result = Str.walkScalars name {text: &quot;&quot;, needUpper: Bool.true} \{text, needUpper}, c -&gt;
+        if c == &#39;_&#39; then
+            {text, needUpper: Bool.true}
+        else
+            newText =
+                if needUpper then
+                    Str.appendScalar text (Scalar.toAsciiUpper c)
+                else
+                    Str.appendScalar text c
+            {text: newText, needUpper: Bool.false}
+    result.text
+
+lowerName : Str -&gt; Str
+lowerName = \name -&gt;
+    result = Str.walkScalars name {text: &quot;&quot;, needUnder: Bool.false} \{text, needUnder}, c -&gt;
+        newText =
+            if needUnder then
+                text
+                    |&gt; Str.appendScalar underscoreScalar
+                    |&gt; Str.appendScalar (Scalar.toAsciiLower c)
+            else
+                text |&gt; Str.appendScalar (Scalar.toAsciiLower c)
+
+        {text: newText, needUnder: Bool.true}
+
+    result.text
+</code></pre></div>
+
+
+
+<a name="317753076"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317753076" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317753076">(Dec 24 2022 at 18:02)</a>:</h4>
+<p>can we split this into 2 ideas? <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="317753110"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317753110" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317753110">(Dec 24 2022 at 18:02)</a>:</h4>
+<p>uppercase/lowercase and scalars both have nontrivial design considerations, so I think it'll be helpful to have different threads about them!</p>
+
+
+
+<a name="317753463"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317753463" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317753463">(Dec 24 2022 at 18:08)</a>:</h4>
+<p>I guess this current proposal is really _all_ about scalars</p>
+
+
+
+<a name="317753472"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317753472" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317753472">(Dec 24 2022 at 18:08)</a>:</h4>
+<p>I don't really need <code>Str.toUpper</code> - I need <code>Scalar.toUpper</code></p>
+
+
+
+<a name="317753520"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317753520" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317753520">(Dec 24 2022 at 18:09)</a>:</h4>
+<p>I suppose we could have a <code>Scalar</code> module without a <code>Scalar</code> type, or just throw these in the <code>Str</code> module as <code>Str.scalarToAsciiUpper</code> or something</p>
+
+
+
+<a name="317754246"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317754246" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317754246">(Dec 24 2022 at 18:21)</a>:</h4>
+<p>so, here are some considerations I've thought about with regard to uppercase:</p>
+<ul>
+<li>there isn't a 1-to-1 mapping from lowercase letter to uppercase letters; for example, consider the letter <code>i</code> - in English, the uppercase version of that letter is <code>I</code>, whereas in Turkish the uppercase version is <code>İ</code> (with a dot on top). So any language that has some equivalent of <code>Str.toUpperCase</code> (read: most of them) either has a built-in locale concept, such that it automatically works differently if the current OS's locale is set to Turkish, or else it has bugs for Turkish users. There are other examples of this category of bug; Turkish is just an easy one to explain.</li>
+<li>for several reasons (e.g. more reliable tests, user awareness of edge cases, locale coming from env vars which take time to read and which can change in between invocations of a Roc pure function, having the Roc stdlib continue to be 100% OS-agnostic so that platform authors have maximum flexibility), I don't think we should have any builtins ever check for locale-specific info automatically on the fly</li>
+<li>therefore, in order to offer a correct uppercasing function, we'd presumably need some concept of a <code>Locale</code> that the function can accept - should that be part of builtins? Probably not, because locale-specific information can change (like, in the real world) often enough that we probably don't want to have to do a language release to update it</li>
+<li>if getting the locale-aware uppercase requires getting a different package (e.g. you need to install a <code>locale</code> package and then call <code>Locale.toUpperCase</code> or whatever), and there is a <code>Str.toAsciiUppercase</code> available, then people will overwhelmingly choose the path of least resistance and use the <code>Str</code> one so they don't have to use the package or obtain a <code>Locale</code> to provide, meaning that while trying to help people write better software, we've ended up creating an incentive structure that means in practice Turkish users end up with incorrect uppercasing in programs written in Roc</li>
+</ul>
+
+
+
+<a name="317754379"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317754379" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317754379">(Dec 24 2022 at 18:23)</a>:</h4>
+<p>of course, one more consideration there is the use case you mentioned here: if you're just trying to convert some programmatic text from snake_case to camelCase or PascalCase, it's proabably all ASCII anyway and so getting locales involved wouldn't matter</p>
+
+
+
+<a name="317754481"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317754481" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317754481">(Dec 24 2022 at 18:25)</a>:</h4>
+<p>scalars are another rabbit hole; basically the more I've learned about Unicode, the more strongly I've become convinced that they should not get special treatment in stdlibs (which is why they don't in Roc), because I think the vast majority of the time they look like the right thing to reach for, they're actually the wrong thing to reach for</p>
+
+
+
+<a name="317754493"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317754493" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317754493">(Dec 24 2022 at 18:25)</a>:</h4>
+<p>(grapheme clusters are)</p>
+
+
+
+<a name="317754584"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317754584" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317754584">(Dec 24 2022 at 18:26)</a>:</h4>
+<p>some examples of why: <a href="https://github.com/roc-lang/roc/issues/4780">https://github.com/roc-lang/roc/issues/4780</a></p>
+
+
+
+<a name="317754616"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317754616" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317754616">(Dec 24 2022 at 18:27)</a>:</h4>
+<p>there is basically no hope that anyone doing string processing in terms of Unicode scalars will implement the correct Unicode semantics for the cases mentioned in that issue</p>
+
+
+
+<a name="317754628"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317754628" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317754628">(Dec 24 2022 at 18:27)</a>:</h4>
+<p>so their best hope is that those cases don't come up (e.g. certain modifiers, emojis, etc.)</p>
+
+
+
+<a name="317754694"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317754694" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317754694">(Dec 24 2022 at 18:28)</a>:</h4>
+<p>whereas if you're doing string processing in terms of graphemes (with each grapheme represented as a <code>Str</code>) we can actually offer corect semantics by default in the stlib! (such as in that issue)</p>
+
+
+
+<a name="317754953"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317754953" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317754953">(Dec 24 2022 at 18:32)</a>:</h4>
+<p>Unicode is hard <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="317754976"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317754976" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317754976">(Dec 24 2022 at 18:33)</a>:</h4>
+<p>but I want to create a Pit of Success around it if possible, instead of the footguns most stdlibs have!</p>
+
+
+
+<a name="317755209"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755209" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755209">(Dec 24 2022 at 18:36)</a>:</h4>
+<p>FWIW this is exactly why I was calling it <code>toAsciiUpper</code>, not <code>toUpper</code> - with the intention that it very clearly only handles ascii.</p>
+
+
+
+<a name="317755281"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755281" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755281">(Dec 24 2022 at 18:37)</a>:</h4>
+<p>At work a few years ago we had a meeting room named "turkish i", because of exactly the problem you describe.</p>
+
+
+
+<a name="317755408"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755408" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755408">(Dec 24 2022 at 18:39)</a>:</h4>
+<p>yeah, my concern with offering <code>Str.toAsciiUpper</code> as the only one in the stdlib is that a ton of people will reach for it when they shouldn't, because it's convenient, and then Turkish users (among others) will be sad</p>
+
+
+
+<a name="317755537"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755537" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kevin Gillette <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755537">(Dec 24 2022 at 18:41)</a>:</h4>
+<p>Under what circumstances would an env var observably change during the running of a process? Windows perhaps? That cannot happen on unixy systems.</p>
+<p>Certainly if there are other mechanisms for locale specification, then those could change at runtime, but perhaps the need to react to such changes is niche, such as for long running processes or interactive (gui/tui) apps, but it's likely quite an anti-feature for non-interactive cli apps and batch processing, in which determinism and speed are much more important</p>
+
+
+
+<a name="317755538"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755538" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755538">(Dec 24 2022 at 18:41)</a>:</h4>
+<p>like for example suppose if we had a <code>Locale.toUpper</code> and if you know your text doesn't need to handle anything but ASCII, you just always pass it the same hardcoded locale</p>
+
+
+
+<a name="317755664"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755664" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kevin Gillette <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755664">(Dec 24 2022 at 18:42)</a>:</h4>
+<p>I would favor at least Unicode case changing as the basic option, since it does the right thing for ascii (from an ascii interpretation)</p>
+
+
+
+<a name="317755752"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755752" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755752">(Dec 24 2022 at 18:44)</a>:</h4>
+<p>That makes code that only wants to deal with ascii needlessly more complicated, since (for example), upper/lower case can no longer operate over scalars - e.g. because of the german uppercase ß ("Double S").</p>
+
+
+
+<a name="317755765"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755765" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755765">(Dec 24 2022 at 18:44)</a>:</h4>
+<p><span class="user-mention" data-user-id="483789">@Kevin Gillette</span> here's an easier way to see why that path won't work: if we're compiling to wasm which might run on any of:</p>
+<ul>
+<li>the browser</li>
+<li>Wasmer on the command line</li>
+<li>Cloudflare Edge Workers</li>
+</ul>
+<p>...which wasm bytecode instructions should we emait to determine the locale in the builtins?</p>
+
+
+
+<a name="317755782"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755782" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kevin Gillette <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755782">(Dec 24 2022 at 18:44)</a>:</h4>
+<p>locale handling is exceptionally hard, has been done poorly many, many times, and so when we tackle that, it should be considered a major initiative involving many perspectives, probably closer to a Roc 1.0 release, not something we just have one person roll up their sleeves to "solve"</p>
+
+
+
+<a name="317755821"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755821" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755821">(Dec 24 2022 at 18:45)</a>:</h4>
+<p>I totally buy that locale is a big project <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span></p>
+
+
+
+<a name="317755826"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755826" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755826">(Dec 24 2022 at 18:45)</a>:</h4>
+<p>but I'm also pretty sure it's a big project that shouldn't be in the stdlib</p>
+
+
+
+<a name="317755897"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755897" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755897">(Dec 24 2022 at 18:46)</a>:</h4>
+<p><span class="user-mention" data-user-id="453336">@Joshua Warner</span> there might actually be a simple solution here: what if we just intentionally didn't put a <code>toAsciiUppercase</code> in the stdlib, and instead left it for a third party package to provide?</p>
+
+
+
+<a name="317755921"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755921" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755921">(Dec 24 2022 at 18:47)</a>:</h4>
+<p>that way the path of least resistance is not to reach for it inappropriately because it's in the stdlib</p>
+
+
+
+<a name="317755927"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755927" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755927">(Dec 24 2022 at 18:47)</a>:</h4>
+<p>Sure, that works fine, as long as it's easy to pull in a third party package</p>
+
+
+
+<a name="317755931"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755931" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755931">(Dec 24 2022 at 18:47)</a>:</h4>
+<p>(currently it's not!!!!)</p>
+
+
+
+<a name="317755940"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755940" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755940">(Dec 24 2022 at 18:47)</a>:</h4>
+<p>it should be now! I just landed that last week</p>
+
+
+
+<a name="317755952"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755952" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755952">(Dec 24 2022 at 18:47)</a>:</h4>
+<p>should be able to publish them and import them via URLs just like platforms now</p>
+
+
+
+<a name="317755953"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317755953" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Joshua Warner <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317755953">(Dec 24 2022 at 18:48)</a>:</h4>
+<p>Oh <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span> I guess I'm behind the times!</p>
+
+
+
+<a name="317756066"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317756066" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317756066">(Dec 24 2022 at 18:49)</a>:</h4>
+<p>I haven't announced it yet bc it's not totally complete yet - there's no documentation for it, and also transitive dependencies don't work yet (e.g. packages that depend on other packages)</p>
+
+
+
+<a name="317756120"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317756120" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317756120">(Dec 24 2022 at 18:50)</a>:</h4>
+<p>but we have a test in the test suite that makes use of the basic functionality now!</p>
+
+
+
+<a name="317756172"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317756172" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317756172">(Dec 24 2022 at 18:51)</a>:</h4>
+<p>I think for this use case it should already work, since it should only need to depend on builtins</p>
+
+
+
+<a name="317936606"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317936606" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317936606">(Dec 26 2022 at 10:50)</a>:</h4>
+<blockquote>
+<p>yeah, my concern with offering Str.toAsciiUpper as the only one in the stdlib is that a ton of people will reach for it when they shouldn't, because it's convenient, and then Turkish users (among others) will be sad</p>
+</blockquote>
+<p>On the other hand, if we include it in the stdlib we can include warnings in the docs and perhaps on autocompletion in the editor. I think if it wasn't in the stdlib, users would often write their own toAsciiUpper without being educated about the potential shortcomings.</p>
+
+
+
+<a name="317937862"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317937862" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317937862">(Dec 26 2022 at 11:01)</a>:</h4>
+<p>We could also call it something like <code>toUpperDangerous</code></p>
+
+
+
+<a name="317978729"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317978729" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kevin Gillette <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317978729">(Dec 26 2022 at 16:13)</a>:</h4>
+<p>We could solve that in documentation by explaining that toUpper does the right thing for ascii as well</p>
+
+
+
+<a name="317979250"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317979250" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Kevin Gillette <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317979250">(Dec 26 2022 at 16:17)</a>:</h4>
+<p>We could also have a search function in documentation that supports synonyms or related functionality: you can search for plausible functions which don't actually exist, and it'll show you the closest function to what you want (or an explanation about why it doesn't exist in the stdlib)... A bit like the style used for compiler messages, but you get the assistance even when the compiler isn't involved.</p>
+
+
+
+<a name="317981882"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317981882" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317981882">(Dec 26 2022 at 16:44)</a>:</h4>
+<blockquote>
+<p>I think if it wasn't in the stdlib, users would often write their own toAsciiUpper without being educated about the potential shortcomings.</p>
+</blockquote>
+<p>Personally, I think this is totally fine. If the use case does not matter to the user, it doesn't matter. They can write/import whatever library that solves the problem. It may be naive, but most users really only need the naive solution.</p>
+<p>Sure a user may not currently know the shortcomings, but they would learn when they run into it or if they work on internationalization for their company. I think a locale library and a lot of userland experimentation make way more sense then adding something like this to the standard library.</p>
+
+
+
+<a name="317984958"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317984958" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317984958">(Dec 26 2022 at 17:16)</a>:</h4>
+<p>yeah also I think a vanishingly small percentage of people would actually read the documentation for a function like <code>Str.toUpperCase</code> - they'd probably just see the name and reach for it right away.</p>
+<p>As evidence for this, there's an easter egg in the docs for Elm's function like this, and I've met very few Elm programmers who know about it:</p>
+<p><a href="https://package.elm-lang.org/packages/elm/core/latest/String#toUpper">https://package.elm-lang.org/packages/elm/core/latest/String#toUpper</a></p>
+
+
+
+<a name="317987675"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317987675" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317987675">(Dec 26 2022 at 17:42)</a>:</h4>
+<blockquote>
+<p>They can write/import whatever library that solves the problem.</p>
+</blockquote>
+<p>Asking the user to write something manually or search for a library for such a common case does not feel delightful.</p>
+
+
+
+<a name="317987694"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317987694" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317987694">(Dec 26 2022 at 17:42)</a>:</h4>
+<blockquote>
+<p>yeah also I think a vanishingly small percentage of people would actually read the documentation for a function like Str.toUpperCase - they'd probably just see the name and reach for it right away</p>
+</blockquote>
+<p>I'd bet the percentage would be a lot better for <code>toUpperDangerous</code> :)</p>
+
+
+
+<a name="317989742"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Str%3A%20upper%2C%20lower%2C%20and%20scalars/near/317989742" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brendan Hansknecht <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Str.3A.20upper.2C.20lower.2C.20and.20scalars.html#317989742">(Dec 26 2022 at 18:05)</a>:</h4>
+<blockquote>
+<p>Asking the user to write something manually or search for a library for such a common case does not feel delightful.</p>
+</blockquote>
+<p>Fair, i guess. Though it is a super simple function to write in the common case. Even in the single language Turkish case, which is more complex, it should just be a small when expression. So i really don't think it hurts until the complex i18n cases. I don't think we should add the foot guns of ignoring i18n to the language and instead let libraries decide that individually. If we add anything i think it should be much later when we have a full design around locales.</p>
+
+
+
+<hr><p>Last updated: Jul 24 2026 at 13:09 UTC</p>
+</html>

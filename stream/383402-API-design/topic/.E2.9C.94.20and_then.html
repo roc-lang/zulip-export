@@ -1,0 +1,81 @@
+<html>
+<head><meta charset="utf-8"><title>✔ and_then · API design · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/index.html">API design</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/.E2.9C.94.20and_then.html">✔ and_then</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="609617773"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/%E2%9C%94%20and_then/near/609617773" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/.E2.9C.94.20and_then.html#609617773">(Jul 11 2026 at 16:01)</a>:</h4>
+<p>I'd like to see some motivating examples from real code <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="609617864"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/%E2%9C%94%20and_then/near/609617864" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/.E2.9C.94.20and_then.html#609617864">(Jul 11 2026 at 16:02)</a>:</h4>
+<p>I'm in general hesitant to add new language syntax or operators for the sake of consistency in the abstract - as opposed to being motivated by pain points in real application or library code</p>
+
+
+
+<a name="609618895"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/%E2%9C%94%20and_then/near/609618895" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Johannes Rubenz <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/.E2.9C.94.20and_then.html#609618895">(Jul 11 2026 at 16:20)</a>:</h4>
+<p>Sure! <span aria-label="grinning face with smiling eyes" class="emoji emoji-1f601" role="img" title="grinning face with smiling eyes">:grinning_face_with_smiling_eyes:</span> <br>
+So I wrote a little web app with some HTTP handlers like AddProject or ToggleProjectStatus.</p>
+<p>What we had was a lot of hand-threading the error through each step – notice the repeated <code>Err(e) =&gt; Err(e)</code>:</p>
+<div class="codehilite"><pre><span></span><code>run! = |body| {
+    projects = Store.load_projects!()
+    target_project_id = Params.parse_post_body(Str.from_utf8_lossy(body), &quot;id&quot;)
+
+    validated_id = match target_project_id {
+        Ok(id) =&gt; U64.from_str(id).map_err(|_| MalformedBody)
+        Err(e) =&gt; Err(e)
+    }
+
+    attempted_target_project = match validated_id {
+        Ok(id) =&gt; Project.find_by_id(projects, id)
+        Err(e) =&gt; Err(e)
+    }
+
+    match attempted_target_project {
+        Ok(p)    =&gt; ... # toggle status, save, redirect
+        Err(err) =&gt; Respond.respond_with(422, view(projects, ShowMessage(Project.validation_error_to_str(err))))
+    }
+}
+</code></pre></div>
+<p>What I would have liked is to collapse that threading into a small pipeline (<code>and_then</code> is the little helper from my first message):</p>
+<div class="codehilite"><pre><span></span><code>attempted_target_project =
+    Params.parse_post_body(Str.from_utf8_lossy(body), &quot;id&quot;)
+    -&gt; and_then(|id_str| U64.from_str(id_str).map_err(|_| MalformedBody))
+    -&gt; and_then(|id| Project.find_by_id(projects, id))
+
+match attempted_target_project {
+    Ok(p)    =&gt; ... # toggle status, save, redirect
+    Err(err) =&gt; Respond.respond_with(422, view(projects, ShowMessage(Project.validation_error_to_str(err))))
+}
+</code></pre></div>
+<p>Why not <code>?</code>...? Hmm, the handler returns an HTTP <code>Response</code>, not a <code>Try</code>, so I can't use <code>?</code> at the top of run! (wrong return type). I can lift the three steps into a separate <code>Try</code>-returning helper and use <code>?</code> in there, then match on the result,  and that works fine. So I'd argue the inline pipeline just read a bit nicer to me than adding a helper whose only job is to host the <code>?</code>s. But maybe that's not enough to justify anything, though...<span aria-label="laughing" class="emoji emoji-1f606" role="img" title="laughing">:laughing:</span></p>
+
+
+
+<a name="609629903"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/%E2%9C%94%20and_then/near/609629903" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/.E2.9C.94.20and_then.html#609629903">(Jul 11 2026 at 18:49)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="581711">Johannes Rubenz</span> <a href="#narrow/channel/383402-API-design/topic/and_then/near/609618895">said</a>:</p>
+<blockquote>
+<p>I can lift the three steps into a separate <code>Try</code>-returning helper and use <code>?</code> in there, then match on the result,  and that works fine. So I'd argue the inline pipeline just read a bit nicer to me than adding a helper whose only job is to host the <code>?</code>s. But maybe that's not enough to justify anything, though...<span aria-label="laughing" class="emoji emoji-1f606" role="img" title="laughing">:laughing:</span></p>
+</blockquote>
+<p>yeah I think the helper that returns <code>Try</code> is the way to go! <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<a name="609683999"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/383402-API%20design/topic/%E2%9C%94%20and_then/near/609683999" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="https://roc-lang.github.io/zulip-export/stream/383402-API-design/topic/.E2.9C.94.20and_then.html#609683999">(Jul 12 2026 at 11:19)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="581711">Johannes Rubenz</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Jul 24 2026 at 13:09 UTC</p>
+</html>

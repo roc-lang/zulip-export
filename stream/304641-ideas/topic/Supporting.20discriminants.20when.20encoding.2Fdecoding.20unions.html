@@ -1,0 +1,439 @@
+<html>
+<head><meta charset="utf-8"><title>Supporting discriminants when encoding/decoding unions · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html">Supporting discriminants when encoding/decoding unions</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="345734582"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345734582" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345734582">(Mar 30 2023 at 16:47)</a>:</h4>
+<p>Im evaluating using Roc in a specific system, where one of the needs is to encode/decode structures as unions discriminated on a particular key that I may or may not want reflected in the type being encoded or decoded. As a simple example, suppose our system already defines a "Status" message with the rough JSON schema of</p>
+<div class="codehilite"><pre><span></span><code>status : { &quot;kind&quot;: &quot;success&quot;, &quot;message&quot;: string } | { &quot;kind&quot;: &quot;failure&quot;, &quot;code&quot;: number, &quot;message&quot;: string }
+</code></pre></div>
+<p>perhaps we'd like to encode this message as the Roc type</p>
+<div class="codehilite"><pre><span></span><code>Status := [Success { message: Str } , Failure { code : U64, message : Str }] has [Encoding, Decoding]
+</code></pre></div>
+<p>Unfortunately, the standard derived encoding and decoding for this opaque type, with the current JSON formatting implementation, would expect JSON messages that look like</p>
+<div class="codehilite"><pre><span></span><code>{ &quot;Success&quot;: [{ &quot;message&quot;: string }] } | { &quot;Failure&quot;: [{ &quot;message&quot;: string, code : number }] }
+</code></pre></div>
+<p>One way to deal with this is to define a JSON formatting implementation that has some kind of configuration option to specify how certain discriminants should be encoded. For example, maybe the JSON implementation defines</p>
+<div class="codehilite"><pre><span></span><code>interface Json exposes [JsonFormatting, TagEncoding, format]
+
+JsonFormatting := { encodingsForTags: Dict Str TagEncoding, &lt;other fields...&gt; }
+
+TagEncoding: [
+  Default, # wrap the tag payloads as an array keyed by the tag name, like `{ &quot;Success&quot;: [{ &quot;message&quot;: string }] }`
+  InlineAsSingleton { key: Str, value: Str }, # inline the discriminant in the payload, if it&#39;s unary, like `{ &quot;type&quot;: &quot;success&quot;, &quot;message&quot;: string }`
+]
+
+format : Dict Str TagEncoding -&gt; JsonFormatting
+</code></pre></div>
+<p>this is okay, but it has a few drawbacks. A few on the top of my head:</p>
+<ul>
+<li>The encodings passed to the Json formatter configuration are weakly typed - for example, there is no validation that the tag name actually exists. Moreover, if <code>InlineAsSingleton</code> is used for a tag that does not have a singleton payload, then the failure to inline the tag would have to be a runtime error, it can't be made into a compile-time error.</li>
+<li>Suppose you have data structure with nested unions, two of which have the same tag name that you'd like to configure in the encoding list. With this API, there is no way to set those configurations as different, unless you add something to the configuration API that keeps track of the hierarchy types appear under.<ul>
+<li>However, adding such an extension means that you would need a different Json formatting when you go encode e.g. <code>Status</code> on its own vs a larger structure that contains <code>Status</code> somewhere nested inside of it.</li>
+</ul>
+</li>
+<li>The encoding definition is separate from the type definition and not enforced to be in-sync by the compiler, which makes error-prone drift between the two more likely.</li>
+</ul>
+<p>Another option is to write a custom JSON encoder/decoder for this type, but that loses the advantages of the Encoding/Decoding abilities and usage of JSON encoding/decoding packages in the ecosystem.</p>
+<p>Another option is to define the Roc type as something like</p>
+<div class="codehilite"><pre><span></span><code>Status := { type : String, code : Result U64 {}, message : Str }
+</code></pre></div>
+<p>but this loses the desired type safety.</p>
+<p>I wonder if there is something we can do at the language level to better support this kind of pattern, as I believe it occurs quite often.</p>
+<p>For context, here's how I might define this in typescript, using literal types</p>
+<div class="codehilite" data-code-language="TypeScript"><pre><span></span><code><span class="kr">type</span><span class="w"> </span><span class="nx">Status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">'success'</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="kr">type</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="s1">'failure'</span><span class="p">,</span><span class="w"> </span><span class="nx">code</span><span class="o">:</span><span class="w"> </span><span class="kt">number</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>in Python:</p>
+<div class="codehilite" data-code-language="Python"><pre><span></span><code><span class="kn">import</span> <span class="nn">typing</span> <span class="k">as</span> <span class="nn">t</span>
+
+<span class="k">class</span> <span class="nc">Success</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">TypedDict</span><span class="p">):</span>
+  <span class="nb">type</span><span class="p">:</span> <span class="n">t</span><span class="o">.</span><span class="n">Literal</span><span class="p">[</span><span class="s2">"success"</span><span class="p">]</span>
+  <span class="n">message</span><span class="p">:</span> <span class="nb">str</span>
+
+<span class="k">class</span> <span class="nc">Failure</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">TypedDict</span><span class="p">):</span>
+  <span class="nb">type</span><span class="p">:</span> <span class="n">t</span><span class="o">.</span><span class="n">Literal</span><span class="p">[</span><span class="s2">"failure"</span><span class="p">]</span>
+  <span class="n">code</span><span class="p">:</span> <span class="nb">int</span>
+  <span class="n">message</span><span class="p">:</span> <span class="nb">str</span>
+
+<span class="n">Status</span> <span class="o">=</span> <span class="n">t</span><span class="o">.</span><span class="n">Union</span><span class="p">[</span><span class="n">Success</span><span class="p">,</span> <span class="n">Failure</span><span class="p">]</span>
+</code></pre></div>
+<p>in Rust with serde:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="cp">#[derive(Serialize, Deserialize)]</span>
+<span class="cp">#[serde(tag = </span><span class="s">"type"</span><span class="cp">)]</span>
+<span class="k">enum</span> <span class="nc">Status</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="cp">#[serde(tag = </span><span class="s">"success"</span><span class="cp">)]</span>
+<span class="w">    </span><span class="n">Success</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">message</span>: <span class="nb">String</span> <span class="p">},</span>
+<span class="w">    </span><span class="cp">#[serde(tag = </span><span class="s">"failure"</span><span class="cp">)]</span>
+<span class="w">    </span><span class="n">Failure</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">message</span>: <span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="n">code</span>: <span class="kt">u64</span> <span class="p">},</span>
+<span class="p">}</span>
+</code></pre></div>
+
+
+
+<a name="345736953"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345736953" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345736953">(Mar 30 2023 at 16:57)</a>:</h4>
+<p>One option is to extend the <code>Encoding</code>/<code>Decoding</code> ability API to take a parameter like the <code>TagEncoding</code> described above in the JSON module, for example</p>
+<div class="codehilite"><pre><span></span><code># [tag tagName payloads tagEncoding] encodes a tag variant and its payload types
+tag : Str, List (Encoder fmt), TagEncoding -&gt; Encoder fmt | fmt has EncoderFormatting
+</code></pre></div>
+<p>and then have some kind of new annotation syntax you can use for the purposes of deriving Encoding/Decoding for a type, a-la serde's use of Rust annotations or Go's tags on struct fields. For example</p>
+<div class="codehilite"><pre><span></span><code>Status := [Success { message: Str } , Failure { code : U64, message : Str }] has [Encoding with {
+  tagEncoding: InlineDiscriminant,
+  renameTags : when tag is
+    Success -&gt; &quot;success&quot;,
+    Failure -&gt; &quot;failure&quot;,
+}]
+</code></pre></div>
+<p>which are only applicable for builtin types. I haven't really thought this through, but on the surface it doesn't strike me as a good idea.</p>
+
+
+
+<a name="345740757"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345740757" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345740757">(Mar 30 2023 at 17:12)</a>:</h4>
+<p>what about this?</p>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nv">TagNameTransformation</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="nx">ToSnakeCase</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">ToKebabCase</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">ToCamelCase</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">None</span><span class="p">,</span>
+<span class="p">]</span>
+
+<span class="nv">TagNameStrategy</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">     </span><span class="c1"># e.g. [Success { message : Str }] ==&gt; { "Success": [{ "message": String }] }</span>
+<span class="w">    </span><span class="nx">BecomeFieldName</span><span class="w"> </span><span class="nx">TagNameTransformation</span><span class="p">,</span>
+
+<span class="w">     </span><span class="c1"># e.g. [Success { message : Str }] ==&gt; { "kind": "Success", "message": string }</span>
+<span class="w">    </span><span class="nx">StoredInField</span><span class="w"> </span><span class="nx">Str</span><span class="w"> </span><span class="nx">TagNameTransformation</span><span class="p">,</span>
+<span class="p">]</span>
+
+<span class="nv">format</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">TagNameStrategy</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">JsonFormatting</span>
+</code></pre></div>
+
+
+
+<a name="345741629"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345741629" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345741629">(Mar 30 2023 at 17:15)</a>:</h4>
+<p>in my experience at least, it's most common to encounter a given JSON payload that has a consistent policy like this</p>
+
+
+
+<a name="345741850"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345741850" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345741850">(Mar 30 2023 at 17:16)</a>:</h4>
+<p>e.g. all field names are kebab-case or snake_case or camelCase, discriminants are handled the same way throughout the payload, etc.</p>
+
+
+
+<a name="345742222"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345742222" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345742222">(Mar 30 2023 at 17:18)</a>:</h4>
+<p>yeah, that works as long as you use different formattings when the behavior changes</p>
+
+
+
+<a name="345742306"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345742306" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345742306">(Mar 30 2023 at 17:18)</a>:</h4>
+<p>right, but in my experience a given payload is going to be consistent within itself and not mix &amp; match</p>
+
+
+
+<a name="345742365"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345742365" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345742365">(Mar 30 2023 at 17:18)</a>:</h4>
+<p>and you already need to specify a formatting per payload that you want to encode or decode</p>
+
+
+
+<a name="345742425"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345742425" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345742425">(Mar 30 2023 at 17:19)</a>:</h4>
+<p>In the specific case I'm considering, there are instances where there are unions discriminated by a key, and cases where they are not (the unions are just disjoint without a common key name)</p>
+
+
+
+<a name="345742471"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345742471" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345742471">(Mar 30 2023 at 17:19)</a>:</h4>
+<p>within the same payload?</p>
+
+
+
+<a name="345742827"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345742827" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345742827">(Mar 30 2023 at 17:21)</a>:</h4>
+<p>They are not the same type, but they compose like</p>
+<div class="codehilite"><pre><span></span><code>MyType1 : ... # discriminate on &quot;type&quot;
+
+MyType2 : ... # no discriminant
+
+..
+
+MyCompoundType : ... # deeper references to MyType1 and MyType2
+</code></pre></div>
+
+
+
+<a name="345742982"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345742982" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345742982">(Mar 30 2023 at 17:21)</a>:</h4>
+<p>So the payloads are disjoint, but they end up being used as part of a larger structure - if that answers your question</p>
+
+
+
+<a name="345743159"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345743159" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345743159">(Mar 30 2023 at 17:22)</a>:</h4>
+<p>hm, do you have JSON of MyCompoundType? or just separate JSON payloads for MyType1 and MyType2, and then the outputs of those get put into MyCompoundType on the TypeScript side?</p>
+
+
+
+<a name="345743316"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345743316" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345743316">(Mar 30 2023 at 17:23)</a>:</h4>
+<p>Yeah, I would like to encode/decode <code>MyCompoundType</code> as a whole</p>
+
+
+
+<a name="345743600"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345743600" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345743600">(Mar 30 2023 at 17:24)</a>:</h4>
+<p>what if the discriminant was there but got ignored on the TypeScript side?</p>
+
+
+
+<a name="345743663"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345743663" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345743663">(Mar 30 2023 at 17:24)</a>:</h4>
+<p>that is, Roc encodes the discriminant but TS ignores it</p>
+
+
+
+<a name="345743869"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345743869" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345743869">(Mar 30 2023 at 17:25)</a>:</h4>
+<p>Roc would not be able to decode it if the discriminant was missing in that case, though - if you used the derived ability and the single tag encoding configuration</p>
+
+
+
+<a name="345744037"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345744037" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345744037">(Mar 30 2023 at 17:26)</a>:</h4>
+<p>hm, but how would Roc decode it without a discriminant anyway? <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="345744284"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345744284" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345744284">(Mar 30 2023 at 17:27)</a>:</h4>
+<p>One option is backtracking - for example if you have <code>[Foo {a : Str}, Bar {b : Str}]</code>, if you don't see an "a" key in the message, fallback on decoding the "Bar" variant by looking for the "b" key</p>
+
+
+
+<a name="345744797"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345744797" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345744797">(Mar 30 2023 at 17:29)</a>:</h4>
+<p>Another practical option is to have your platform encode/decode the type appropriately if it's a case like this. Since in practice you'll probably be getting these messages over a network or other effectful operation.</p>
+
+
+
+<a name="345744986"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345744986" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345744986">(Mar 30 2023 at 17:30)</a>:</h4>
+<p>well you can always handwrite a decoder at that point</p>
+
+
+
+<a name="345745495"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345745495" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345745495">(Mar 30 2023 at 17:32)</a>:</h4>
+<p>If you hand write a decoder, you would either need the Decoding API to be extended to take a tag configuration option, or you wouldn't be able to parameterize over Decoding formatters arbitrarily right. Like, you would have to write a decoder specifically for the JSON case, unless <code>Decode.tag</code> took a tag configuration option</p>
+
+
+
+<a name="345745580"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345745580" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345745580">(Mar 30 2023 at 17:32)</a>:</h4>
+<p>right, but I think having the platform encode/decode the type has the same drawback, yeah?</p>
+
+
+
+<a name="345745806"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345745806" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345745806">(Mar 30 2023 at 17:33)</a>:</h4>
+<p>yeah</p>
+
+
+
+<a name="345746269"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345746269" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345746269">(Mar 30 2023 at 17:35)</a>:</h4>
+<p>is there some way the Decoding API could be changed to make this possible without either of the following being true?</p>
+<ul>
+<li>any language changes</li>
+<li>Decoding becoming coupled to JSON</li>
+</ul>
+
+
+
+<a name="345751389"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345751389" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345751389">(Mar 30 2023 at 17:58)</a>:</h4>
+<p>yeah im not sure. Naively I would say do what serde does and have some way to specify whether it's tagged/untagged in Decode.tag/Encode.tag, but Im not sure that generalizes to arbitrary formattings. Maybe formattings can ignore that if it's not applicable.</p>
+
+
+
+<a name="345753253"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345753253" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345753253">(Mar 30 2023 at 18:07)</a>:</h4>
+<p>serde also relies on nominal types</p>
+
+
+
+<a name="345753383"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345753383" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345753383">(Mar 30 2023 at 18:08)</a>:</h4>
+<p>one of the things I think about with encoding/decoding designs is "if you want to use this, do you have to convert all your structural types into nominal types just to get the encoding/decoding behavior you want?"</p>
+
+
+
+<a name="345753400"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345753400" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345753400">(Mar 30 2023 at 18:08)</a>:</h4>
+<p>ideally not, of course <span aria-label="big smile" class="emoji emoji-1f604" role="img" title="big smile">:big_smile:</span></p>
+
+
+
+<a name="345754114"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345754114" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345754114">(Mar 30 2023 at 18:12)</a>:</h4>
+<p>well, changing the decoding API doesn't need to relate to nominal/structural typing at all. For example, similar to the API I first described, maybe you can define Encode.tag as</p>
+<div class="codehilite"><pre><span></span><code>Encode.tag : Str, List (Encoder fmt), TagEncodingStrategy, TagNaming -&gt; Encoder fmt | fmt has EncoderFormatting
+</code></pre></div>
+<p>this API works equally for structural and nominal types, other than that derived implementation must choose a default encoding and naming strategy (but I don't see how they couldn't without language changes)</p>
+
+
+
+<a name="345780368"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345780368" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Stewart <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345780368">(Mar 30 2023 at 20:27)</a>:</h4>
+<p>Could this be solved with a code generation tool? You give it a type, it generates Roc decoders/encoders for you. Then if you need to tweak it, it's easy since it's just user code at that point.</p>
+
+
+
+<a name="345806030"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806030" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806030">(Mar 30 2023 at 23:28)</a>:</h4>
+<p>that's an interesting direction...I've been thinking about how <code>roc glue</code> could be expanded to work on arbitrary <code>interface</code> modules instead of just <code>platform</code> modules</p>
+
+
+
+<a name="345806092"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806092" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806092">(Mar 30 2023 at 23:29)</a>:</h4>
+<p>and then you could give it a glue spec to generate client encoders and decoders (e.g. in Elm or TypeScript)</p>
+
+
+
+<a name="345806107"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806107" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806107">(Mar 30 2023 at 23:29)</a>:</h4>
+<p>and those could be specific to your application and its types</p>
+
+
+
+<a name="345806123"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806123" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806123">(Mar 30 2023 at 23:29)</a>:</h4>
+<p>downside being that you'd have to incorporate it into your build process</p>
+
+
+
+<a name="345806504"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806504" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806504">(Mar 30 2023 at 23:32)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="454654">Ayaz Hafiz</span> <a href="#narrow/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions/near/345754114">said</a>:</p>
+<blockquote>
+<p>well, changing the decoding API doesn't need to relate to nominal/structural typing at all.</p>
+</blockquote>
+<p>what I meant is that the <code>serde</code> approach relies on nominal types</p>
+
+
+
+<a name="345806532"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806532" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806532">(Mar 30 2023 at 23:33)</a>:</h4>
+<p>it's like "here's my type, and also here's how I want to encode its fields"</p>
+
+
+
+<a name="345806642"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806642" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806642">(Mar 30 2023 at 23:34)</a>:</h4>
+<p>that only works for nominal types, since with structural types you'd be saying "here's the shape of my type, and any time in the entire program that any type happens to have this shape, encode it as follows" which (even if abilities worked that way) wouldn't be a great design <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="345806724"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806724" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806724">(Mar 30 2023 at 23:35)</a>:</h4>
+<p>but then again, to be fair - because of how opaque types work in Roc, it's pretty easy to define an opaque wrapper just for serialization/deserialization and then say "ok now unwrap it and that's the type I'll actually use"</p>
+
+
+
+<a name="345806746"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806746" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806746">(Mar 30 2023 at 23:35)</a>:</h4>
+<p>so maybe that's not actually a real concern</p>
+
+
+
+<a name="345806843"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806843" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806843">(Mar 30 2023 at 23:36)</a>:</h4>
+<p>I guess it's annoying if you have a nested data structure which stores a structural type, and you want to serialize the whole data structure while getting some custom behavior for one of its nested structural types</p>
+
+
+
+<a name="345806874"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345806874" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345806874">(Mar 30 2023 at 23:36)</a>:</h4>
+<p>but you want to specify that custom encoding/decoding behavior in terms of the nested type, not the nested data structure that contains it</p>
+
+
+
+<a name="345807126"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345807126" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345807126">(Mar 30 2023 at 23:39)</a>:</h4>
+<p>i feel like that would only really come up during prototyping though. If these are messages over a network you’re likely to explicitly type their structure, at which point yeah there might be little overhead to use an opaque type there</p>
+
+
+
+<a name="345807237"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345807237" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345807237">(Mar 30 2023 at 23:40)</a>:</h4>
+<p>in any case , this distinction for serde’s case only matters with regard to annotations that tell it how to encode/decode the type right? which would have to be a new language addition to Roc if it were to be reflected, which i think we would prefer not to do?</p>
+
+
+
+<a name="345807441"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345807441" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345807441">(Mar 30 2023 at 23:42)</a>:</h4>
+<p>I'd definitely prefer not to do it</p>
+
+
+
+<a name="345807642"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345807642" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345807642">(Mar 30 2023 at 23:45)</a>:</h4>
+<p>I'm open to the idea in some form, but it feels like a Pandora's Box to open</p>
+
+
+
+<a name="345808107"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345808107" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345808107">(Mar 30 2023 at 23:50)</a>:</h4>
+<p>a thing I also don't love about it is that it feels like something to add to the language almost exclusively for JSON specifically, which is a category of language design decision that tends not to age well (e.g. Scala having baked-in syntax for XML, which was about as popular a serialization format at the time as JSON is now)</p>
+
+
+
+<a name="345808145"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345808145" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345808145">(Mar 30 2023 at 23:50)</a>:</h4>
+<p>like binary formats don't care about this, and I assume XML would have explicit discriminants...feels like a JSON-specific thing</p>
+
+
+
+<a name="345808268"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345808268" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345808268">(Mar 30 2023 at 23:52)</a>:</h4>
+<p>yeah I have the same feeling.</p>
+
+
+
+<a name="345808294"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345808294" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345808294">(Mar 30 2023 at 23:52)</a>:</h4>
+<p>binary formats might care about it but yeah they’re usually more standardized</p>
+
+
+
+<a name="345808311"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345808311" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345808311">(Mar 30 2023 at 23:52)</a>:</h4>
+<p>I assume a binary format would use an integer discriminant</p>
+
+
+
+<a name="345914543"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Supporting%20discriminants%20when%20encoding/decoding%20unions/near/345914543" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Martin Stewart <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions.html#345914543">(Mar 31 2023 at 11:16)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions/near/345806123">said</a>:</p>
+<blockquote>
+<p>downside being that you'd have to incorporate it into your build process</p>
+</blockquote>
+<p>What I had in mind was an editor tool. You'd create a type representing the external data you want to decode, and then you press some hotkey to generate a JSON decoder for it. After that it's just user code so you don't regenerate it unless you decide later you want to throw away your old decoder and start again. In other words, no complicated build process.</p>
+
+
+
+<hr><p>Last updated: Jul 24 2026 at 13:09 UTC</p>
+</html>

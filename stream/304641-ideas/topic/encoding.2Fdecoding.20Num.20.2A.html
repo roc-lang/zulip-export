@@ -1,0 +1,112 @@
+<html>
+<head><meta charset="utf-8"><title>encoding/decoding Num * · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html">encoding/decoding Num *</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="293930086"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293930086" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293930086">(Aug 17 2022 at 16:20)</a>:</h4>
+<p>I'm thinking about what the behavior for deriving encoding/decoding for <code>Num *</code> should be. Unlike certain low-level operations like <code>Num.toStr : Num * -&gt; Str</code>, implementors of the encoders/decoders don't have access to the compiler's code-generation procedure. That means they can't decide how to encode/decode a number after monomorphization.</p>
+<p>Actually, for encoding, it might be okay, since you could maybe piggy back off numeric operations to figure out a number's width, or us <code>Num.toStr</code>. But for decoding it would not work - if your serialization format represents integers as fixed-width bytes, how can you decode an arbitrary-width integer?</p>
+<p>With that in mind the question is what should happen for something like</p>
+<div class="codehilite"><pre><span></span><code>decodeNum = \decodeFmt, bytes -&gt;
+    when Decode.fromBytes bytes decodeFmt is
+        Ok num -&gt;
+            strNum = Num.toStr num
+            &quot;Your number was \(strNum)&quot;
+        Err _ -&gt; &quot;I couldn&#39;t decode a number&quot;
+</code></pre></div>
+<p>I see two options:</p>
+<ul>
+<li>
+<p>Make it an error to try to encode/decode a <code>Num *</code>, or derivatives like <code>10016</code>, which we know has to be at least an <code>I16</code>, but is still a <code>Num *</code>. This has the obvious disadvantage that you need to add more type annotations to your program, but the upside is that the compiler won't try to encode/decode a number type that you didn't expect.</p>
+</li>
+<li>
+<p>Default encoding/decoding a <code>Num *</code> to the default number type, which currently is <code>I64</code>, or <code>F64</code> if we know it's a float. Those types might change later, but that's not too important. This is more ergonomic, and would work okay for things like JSON - things there would only go wrong when the decoded JSON number doesn't fit in an <code>I64</code>. That's possible even if you explicitly type the decoded number as <code>I64</code>, so maybe that's something that good documentation can remedy.</p>
+</li>
+</ul>
+<p>However the implications of this are more serious for serialization formats where numbers are sent as fixed bytes rather than strings. For example if we're decoding a buffer that has a number serialized as 4 big-endian bytes into a <code>Num *</code>, the compiler deciding that we are really decoding into a <code>I64</code> is no good. These are the kind of bugs that would be really difficult to debug, especially if you're not meticulously looking at the types in your program.</p>
+<p>With that, I'm inclined to think we should make this a warning or error in the compiler. To get some advantages in development, we could issue a warning/error, but also infer the default number type in dev builds - that way if something goes wrong, the developer has a hint of where to look. They'll need to add an explicit type annotation before productionizing the code anyway, to get rid of the error. Thoughts?</p>
+
+
+
+<a name="293936007"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293936007" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293936007">(Aug 17 2022 at 16:52)</a>:</h4>
+<p>Yeah I think it should be a warning or error. If you're running CI on your Roc app it should fail.</p>
+
+
+
+<a name="293936130"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293936130" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293936130">(Aug 17 2022 at 16:53)</a>:</h4>
+<p>So the compiler should return an error status</p>
+
+
+
+<a name="293938412"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293938412" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Brian Carroll <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293938412">(Aug 17 2022 at 17:04)</a>:</h4>
+<p>Even for JSON, where 'it might work on a good day', the app developer should be forced to resolve that ambiguity. I think it's one of the key features of languages like Roc/Elm/Haskell that they force you to deal with stuff like this.</p>
+
+
+
+<a name="293948063"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293948063" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293948063">(Aug 17 2022 at 17:59)</a>:</h4>
+<p>I think warning but not error makes the most sense for decoding - e.g. it says "warning: since this number is only ever used with other <code>Num *</code> values, it will be decoded into an <code>I64</code> by default - but this default behavior may not be what you want! You could be more specific about the number type you expect by adding a type annotation, or by passing it to a function which requires a more specific number type than <code>Num *</code>."</p>
+<p>(And maybe a similar error for <code>Int *</code>, <code>Frac *</code>, etc.) - so it doesn't block you if you're just prototyping an implementation that decodes from JSON, but it does warn you about it so you know how to make it more explicit</p>
+
+
+
+<a name="293948324"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293948324" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293948324">(Aug 17 2022 at 18:01)</a>:</h4>
+<p>I think the same case could be made for encoding, too - e.g. if I'm encoding to a binary format and I just give it <code>Num *</code>, and it defaults to encoding with <code>I64</code>, is <code>I64</code> what the recipient of the encoded data expects? Maybe, maybe not - the only way to be sure is to be explicit</p>
+
+
+
+<a name="293948730"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293948730" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293948730">(Aug 17 2022 at 18:03)</a>:</h4>
+<p>yeah I think it needs to be the same for encoding and decoding</p>
+
+
+
+<a name="293949035"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293949035" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293949035">(Aug 17 2022 at 18:05)</a>:</h4>
+<p>I don't think it's feasible, either, to add a <code>anyNumber : Num * -&gt; Encoder (Num *) fmt | fmt has EncoderFormatting</code> member to the <code>EncoderFormatting</code> ability, for the reasons described above - the implementer of this ability member would not have a good way of determining how wide the passed number is, without perhaps some clever hacks</p>
+
+
+
+<a name="293950071"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293950071" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293950071">(Aug 17 2022 at 18:12)</a>:</h4>
+<p>agreed!</p>
+
+
+
+<a name="293950355"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293950355" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293950355">(Aug 17 2022 at 18:15)</a>:</h4>
+<p>actually, I guess in principle, there could be a new <code>Num.toBigEndianBytes : Num * -&gt; List U8</code> and <code>Num.toLittleEndianBytes: Num * -&gt; List U8</code> that could resolve the <code>anyNumber</code> problem</p>
+
+
+
+<a name="293950473"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293950473" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293950473">(Aug 17 2022 at 18:15)</a>:</h4>
+<p>those allocations though <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="293950630"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293950630" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293950630">(Aug 17 2022 at 18:16)</a>:</h4>
+<p>might be fine after constant lists though, since the list can then be represented with a zero capacity and the elements are just the number. so no allocations</p>
+
+
+
+<a name="293950905"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/encoding/decoding%20Num%20%2A/near/293950905" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Ayaz Hafiz <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/encoding.2Fdecoding.20Num.20.2A.html#293950905">(Aug 17 2022 at 18:18)</a>:</h4>
+<p>although I still don't think it would be worth adding for just Encode even if that's possible. Better to be consistent between encode and decode where we can be</p>
+
+
+
+<hr><p>Last updated: Jul 24 2026 at 13:09 UTC</p>
+</html>

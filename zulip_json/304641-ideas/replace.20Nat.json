@@ -1,0 +1,1118 @@
+[
+    {
+        "content": "<p>so I think there's a strong case to be made that we should replace <code>Nat</code> with <code>U64</code></p>",
+        "id": 355913473,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683248664
+    },
+    {
+        "content": "<p>not to change any data structures, mind you - just any builtin function that currently accepts or returns <code>Nat</code> instead uses <code>U64</code></p>",
+        "id": 355913506,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683248692
+    },
+    {
+        "content": "<p>so 64-bit targets would have no change, and on 32-bit targets there would be a cast behind the scenes from 32-bit to 64-bit integers (which after LLVM optimization would usually be no difference in practice I suspect)</p>",
+        "id": 355913594,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683248737
+    },
+    {
+        "content": "<p>so an obvious motivation (but not the main one, at least to me) is that it's one less concept to learn in the language, and also it means that when teaching the language to beginners, they don't need to encounter the concept of compilation targets (which isn't a thing you have to learn at all in lots of languages, e.g. the 3 most popular languages - Python, Java, JavaScript)</p>",
+        "id": 355913789,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683248824
+    },
+    {
+        "content": "<p>to me, the main reasons are:</p>\n<ul>\n<li><code>Nat</code> is the only reason Roc code given the same inputs can give different outputs on different targets; without <code>Nat</code> in the language, Roc code given the same inputs gives the same outputs on every target (or crashes, since different targets may have different system resources available). This means that, for example, if I'm running <code>roc test</code> on my 64-bit machine and on my 64-bit CI server, I can have code that will give different answers once deployed to my 32-bit WebAssembly target, despite having passed <code>roc test</code> locally and on CI. This means I can have bugs in production that would have been caught by my <code>roc test</code> tests except that <code>Nat</code> meant something different happened in my build. Also, this can be used by nefarious package authors who want to sneak exploits past my test suite. To prevent this, I would need to run <code>roc test</code> via WebAssembly, which is not currently supported - we'd need to introduce something like <code>roc test --target=wasm32</code> and then ship a wasm interpreter with every <code>roc</code> binary. The only reason to even consider this is that <code>Nat</code> is in the language.</li>\n<li>if, in the future, Roc ever supports targets other than the current 32-bit or 64-bit (e.g. if we ever get support for 16-bit or 128-bit targets), <code>Nat</code> means that change can break existing Roc code, sometimes silently. If <code>Nat</code> is not in the language, we  have the option of introducing 16-bit or 128-bit targets as a nonbreaking change (but still might choose not to)</li>\n</ul>",
+        "id": 355914105,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683248990
+    },
+    {
+        "content": "<p>the reason for both of these is that you can use <code>Nat</code> to write Roc code that runs differently on different targets, because it overflows at different points - so you can do <code>Num.addChecked 1nat 2^32</code> and on 32-bit targets it will return <code>Err</code> but on 64-bit targets it will return <code>Ok</code></p>",
+        "id": 355914280,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683249073
+    },
+    {
+        "content": "<p>this isn't true of any other type in Roc</p>",
+        "id": 355914297,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683249082
+    },
+    {
+        "content": "<p>also, code that casts <code>Nat</code> to <code>U64</code> today is lossless, but in a hypothetical future where 128-bit targets are a thing, that code will all silently become lossy and can cause bugs</p>",
+        "id": 355914431,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683249158
+    },
+    {
+        "content": "<p>similarly, the code <code>isTarget32bit = Result.isErr (Num.addChecked 1nat 2^32)</code> is accurate today, but inaccurate if we introduce a 16-bit target</p>",
+        "id": 355914575,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683249234
+    },
+    {
+        "content": "<p>(likewise for <code>isTarget64bit = Result.isOk (Num.addChecked 1nat 2^32)</code> and 128-bit targets)</p>",
+        "id": 355914640,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683249259
+    },
+    {
+        "content": "<p>granted, it's not a given that 128-bit targets will ever be a thing (since hardware today only permits using 48 of the 64 bits in practice, and we'd presumably want to start using all 64 bits before there would be demand for upgrading to 128) but in a future where 128-bit targets never happen (or perhaps by the time we want addresses that big, it's so far in the future that something more fundamental has changed about operating systems, and we need to rethink various representations of things anyway), and we only ever have 32-bit and 64-bit targets like today...then what was <code>Nat</code> getting us?</p>\n<p>We could have just had <code>U64</code> and actual target-independence and it would have been fine</p>",
+        "id": 355914898,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683249420
+    },
+    {
+        "content": "<p>supposing 128-bit targets do happen, at least having hardcoded <code>List.len</code> and friends to return <code>U64</code> gives us options; we can, for example, do any one of these:</p>\n<ul>\n<li>make the breaking change of changing all the formerly-<code>Nat</code> builtin functions to return <code>U128</code> instead of <code>U64</code>. This would theoretically affect a lot of code, but considering how often these values get used without being annotated (e.g. <code>List.get list (List.len list - 2)</code>), they might be nonbreaking in practice in a lot of cases. Also, when it does break code, the upgrade process should be automatable 99% of the time, especially considering it's a safe bet AI will be better by then (128-bit targets are so distant I haven't even seen anyone predict when they might be desirable), so transitioning a given code base from <code>U64</code> to <code>U128</code> might actually be completely automatable by then. Certainly it would seem likely to be way less painful than Python 2 -&gt; 3, which was legendarily painful but which did not stop Python becoming arguably the <a href=\"https://github.com/roc-lang/roc/issues/1\">#1</a> most popular language in the world (at least top 3 if not top 1), so there's precedent for a language making a substantial breaking change, even years after becoming popular, and still continuing to grow in popularity.</li>\n<li>keep <code>U64</code>, meaning the change is nonbreaking, but collections on 128-bit targets could only go up to 4 million terabytes in size (whereas 128-bit addressing would technically allow more). Today, Java collections are capped at 2GB because they use <code>I32</code> for their collection lengths, and considering it's one of the 3 most popular languages ever, this restriction - while presumably frustrating in some situations - clearly has not been deadly to Java's popularity. Maybe the 4 exabyte restriction would be different in this hypothetical future, but if so, there's always the \"upgrade to 128-bit and do a breaking change\" option.</li>\n</ul>",
+        "id": 355915628,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683249909
+    },
+    {
+        "content": "<p>anyway, all things considered, it seems to me that replacing <code>Nat</code> with <code>U64</code> is the right choice for the language</p>",
+        "id": 355915832,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683250031
+    },
+    {
+        "content": "<p>what do others think?</p>",
+        "id": 355915838,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683250034
+    },
+    {
+        "content": "<p>Just to clarify:</p>\n<ol>\n<li><code>Nat</code> is no longer in the language at all</li>\n<li>All builtins use 'U64' instead (so walking with an index, U64. also len, U64)</li>\n<li>If a host passes a pointer into the app, it would be as <code>Box {}</code>?</li>\n</ol>",
+        "id": 355925600,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683255931
+    },
+    {
+        "content": "<p>What about the size cost of using larger values everywhere? If roc starts supporting 16bit platforms and I want to write a program for a low-resource machine (pico-8?) would forcing all Nats to be 4 times as big create problems with using too much memory?</p>\n<p>(Don't weight my comment heavily. I don't have experience with that sort of programming and don't know if that'd be an issue, and it's all just hypothetical anyway.)</p>",
+        "id": 355941852,
+        "sender_full_name": "Sky Rose",
+        "timestamp": 1683264408
+    },
+    {
+        "content": "<p>That's a good point <span class=\"user-mention\" data-user-id=\"607308\">@Sky Rose</span>, what do you think <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span>?</p>",
+        "id": 355990287,
+        "sender_full_name": "Anton",
+        "timestamp": 1683277829
+    },
+    {
+        "content": "<p>well part of the idea here is that in data structures, we still use the pointer size. I think that mitigates most of the downsides</p>",
+        "id": 355992711,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1683278470
+    },
+    {
+        "content": "<p>yes you do have to do some stuff with 64-bit values and could strictly speaking be done with a smaller value, but I suspect that the cost is marginal.</p>",
+        "id": 355992987,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1683278532
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/replace.20.60Nat.60/near/355925600\">said</a>:</p>\n<blockquote>\n<p>Just to clarify:</p>\n<ol>\n<li><code>Nat</code> is no longer in the language at all</li>\n<li>All builtins use 'U64' instead (so walking with an index, U64. also len, U64)</li>\n<li>If a host passes a pointer into the app, it would be as <code>Box {}</code>?</li>\n</ol>\n</blockquote>\n<p>yep! Although just to be clear, the builtin functions would use <code>U64</code> but under the hood the data structures would still be <code>usize</code> internally - so for example on 32-bit targets we wouldn't be wasting memory storing 64-bit lengths in memory</p>",
+        "id": 356057522,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293094
+    },
+    {
+        "content": "<p>I was assuming builtins would all use <code>usize</code> everywhere and just add casting at the boundaries?</p>",
+        "id": 356057753,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683293142
+    },
+    {
+        "content": "<p>yeah exactly!</p>",
+        "id": 356057917,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293173
+    },
+    {
+        "content": "<p>Ok</p>",
+        "id": 356058697,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683293345
+    },
+    {
+        "content": "<p>I think this will hurt if we ever have 16bit. I don't think it will hurt too bad on 32bit.</p>",
+        "id": 356058869,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683293380
+    },
+    {
+        "content": "<p>I haven't verified on godbolt, but I expect that the fact that we convert builtins to llvm bitcode will make a lot of the casts go away</p>",
+        "id": 356059231,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293441
+    },
+    {
+        "content": "<p>for example:</p>\n<p><code>List.get list (List.len list - 2)</code></p>",
+        "id": 356059313,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293454
+    },
+    {
+        "content": "<p><code>List.len</code> on a 16-bit target would compile to:</p>\n<ul>\n<li>read this 16-bit integer out of the List <code>struct</code></li>\n<li>cast it to 64 bits</li>\n</ul>",
+        "id": 356059553,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293489
+    },
+    {
+        "content": "<p>I see 2 main issues:</p>\n<ol>\n<li>Any time you don't define a type, you will default to something that is slower and wastes memory (though sometimes that is a wanted tradeoff like Dec, so that probably doesn't matter to us)</li>\n<li>The real cost is anything that doesn't get inlined. LLVM will not optimize things through a function call. These casts will be real in many cases, wasting multiple registers or a solid chunk of stack space.</li>\n</ol>",
+        "id": 356059848,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683293546
+    },
+    {
+        "content": "<p><code>List.get</code> on a 16-bit target would compile to:</p>\n<ul>\n<li>take this 64-bit integer</li>\n<li>cast it to 16 bits</li>\n<li>add it to the 16-bit memory address in the List <code>struct</code></li>\n</ul>",
+        "id": 356059850,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293546
+    },
+    {
+        "content": "<p>so I'm pretty sure LLVM will see all that and realize that the casts from 16-bit to 64-bit and then back to 16-bit are not necessary, and will drop them</p>",
+        "id": 356060026,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293580
+    },
+    {
+        "content": "<p>Only for small functions that get inlined</p>",
+        "id": 356060097,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683293593
+    },
+    {
+        "content": "<p>sure, but I think that tends to describe the way these functions are used in practice</p>",
+        "id": 356060228,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293611
+    },
+    {
+        "content": "<p>for example, I think if I were writing some sort of SoA thing in pure Roc, I wouldn't use <code>Nat</code> anyway</p>",
+        "id": 356060530,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293668
+    },
+    {
+        "content": "<p>I'd use the smallest type that works for my use case, e.g. <code>U32</code></p>",
+        "id": 356060579,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293681
+    },
+    {
+        "content": "<p>I don't think so. Many builtins don't get inlined or at least not fully. Even something like List.set is large enough and used in enough places that it doesn't get inlined (though maybe this one got fixed when I increased the inline threshold). List.set is not that large of a function.</p>",
+        "id": 356060605,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683293688
+    },
+    {
+        "content": "<p>Also, many user lambdas may only get partial inlining that hits these issues.</p>",
+        "id": 356060733,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683293712
+    },
+    {
+        "content": "<p>I'm okay with adding \"inline always\" to those</p>",
+        "id": 356060738,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293713
+    },
+    {
+        "content": "<p>as in telling LLVM to explicitly inline them</p>",
+        "id": 356060772,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683293723
+    },
+    {
+        "content": "<p>If you catch everything and a user is careful to define types (including intermediate values inside of a function), i guess it could be ok. I still think this is likely to cause weird perf edges.</p>",
+        "id": 356061342,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683293852
+    },
+    {
+        "content": "<p>That said, I really only think it will hurt when dropping to 16 bit. Where a 64 bit value is giant and often you don't have a lot of memory so inlining everything and bloating the executable is bad.</p>",
+        "id": 356061553,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683293895
+    },
+    {
+        "content": "<p>yeah, I guess I'm kind of assuming that:</p>\n<ul>\n<li>assuming it even turns out to be a thing we want to support, and that it's actually viable in practice, I expect 16-bit Roc programming will have to involve being very careful about what your code compiles to, because allocations are a huge deal</li>\n<li>given that, you probably already have visibility into when things aren't getting inlined and optimized away, and can either optimize it yourself or else give us feedback about certain builtins needing more inlining annotations in order to get optimized away</li>\n<li>with those in mind, the cost might still be nonzero, but I'm not as worried that it's a big deal as opposed to a minor thing</li>\n</ul>",
+        "id": 356062068,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683294020
+    },
+    {
+        "content": "<p>it would be cool in theory that you could just write 16-bit Roc code in the same style as 32-bit or 64-bit, I just have a hard time imagining that would work in practice <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 356062276,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683294070
+    },
+    {
+        "content": "<p>I think we have already pointed out a number of reasons that roc isn't necessarily gonna be great for embedded. If we accept that embedded long term will remain second class for roc (which i think is totally fine, still could be fun to use on embedded and people manage to hack python to work on embedded), i think this is a totally fine change.</p>\n<p>The biggest other concern being accidental register pressure leading to more spilling to cache and potential perf hits. Just maybe you have to add a lot of casts to random variables that you normally wouldn't have typed in roc.</p>",
+        "id": 356063029,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683294213
+    },
+    {
+        "content": "<p>I do agree that the overall concern is pretty minor, but it can just randomly be wasteful and is easy to miss when many variables within functions in roc never get a type added to them.</p>",
+        "id": 356063347,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683294265
+    },
+    {
+        "content": "<p>Aside, overall, i think i am for this change and saying that roc is focused on desktop and server systems. As such, though 32 bit and 16bit may be supported (even very well), they are not the core focus. In all cases, high perf should be possible, but smaller bit systems are slightly lower class.</p>",
+        "id": 356064236,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683294411
+    },
+    {
+        "content": "<p>that makes sense to me!</p>",
+        "id": 356064343,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683294430
+    },
+    {
+        "content": "<p>Hmm...what if i want to use a 32 bit hash on 32 bit systems and for that to be faster? Will we expose a built-in to check system info?</p>",
+        "id": 356064491,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683294460
+    },
+    {
+        "content": "<p>Cause can't get that info with nat anymore</p>",
+        "id": 356064536,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683294468
+    },
+    {
+        "content": "<p>I guess we kinda have to expose similar info anyway if we want to expose a good simd chunk size to the user</p>",
+        "id": 356064816,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683294513
+    },
+    {
+        "content": "<p>hm, is that true? I thought we could do simd by offering primitives that are sort of agnostic to the chunk size</p>",
+        "id": 356065921,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683294730
+    },
+    {
+        "content": "<p>either that or we offer primitives that say \"this will operate on an exact chunk size of N, but if that's not available in hardware, we'll automatically emulate it in software\"</p>",
+        "id": 356066118,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683294774
+    },
+    {
+        "content": "<p>basically so the \"simd\" logic always works exactly the same way no matter the target - it just might be more or less efficient</p>",
+        "id": 356066220,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683294799
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/replace.20.60Nat.60/near/356064491\">said</a>:</p>\n<blockquote>\n<p>Hmm...what if i want to use a 32 bit hash on 32 bit systems and for that to be faster? Will we expose a built-in to check system info?</p>\n</blockquote>\n<p>I think this only specifically comes up when hashing collection lengths, which seems like it should be a small enough percentage of all hashes being performed that I'm not worried about it</p>",
+        "id": 356066632,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683294877
+    },
+    {
+        "content": "<p>it doesn't come up when hashing pointers because we never hash the pointer itself, but rather dereference its contents and hash that instead</p>",
+        "id": 356066694,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683294895
+    },
+    {
+        "content": "<p>No, you misunderstand. I want to change a huge chunk of my code to use <code>u32</code> and different algorithms instead of <code>u64</code>. So full replacement for faster code. I am not talking about just hashing a length.</p>",
+        "id": 356067323,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683295029
+    },
+    {
+        "content": "<p>For example, maybe I want to use sha256 on 32bit systems and sha512 on 64bit systems.</p>",
+        "id": 356067701,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683295106
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> if sha256 would suffice for the use case, why not use it on both?</p>",
+        "id": 356067923,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683295155
+    },
+    {
+        "content": "<p>This is a contrived example, but imagine that we would prefer sha512 everywhere, but it is too slow on 32bit systems.</p>",
+        "id": 356068173,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683295209
+    },
+    {
+        "content": "<p>hm, but why would we prefer it? <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 356068286,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683295235
+    },
+    {
+        "content": "<p>Lets just keep of the contrived example, assume sha512 is way faster on 64bit systems.</p>",
+        "id": 356068542,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683295276
+    },
+    {
+        "content": "<p>So pretend that sha512 is way faster on 64bit and sha256 is way faster on 32bit</p>",
+        "id": 356068626,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683295304
+    },
+    {
+        "content": "<p>I want my code to be fast on both systems, so I need a way to distinguish the systems and pick different code.</p>",
+        "id": 356069090,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683295380
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/replace.20.60Nat.60/near/356068626\">said</a>:</p>\n<blockquote>\n<p>So pretend that sha512 is way faster on 64bit and sha256 is way faster on 32bit</p>\n</blockquote>\n<p>do such algorithms exist though? Like is there any algorithm where the same algorithm runs faster on 64-bit systems but slower on 32-bit systems, and there's another algorithm which runs faster on 32-bit systems but slower on 64-bit systems?</p>",
+        "id": 356070646,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683295635
+    },
+    {
+        "content": "<p>(and does the same thing)</p>",
+        "id": 356070725,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683295650
+    },
+    {
+        "content": "<p>Hashing is always the obvious example, but the general answer is yes.</p>",
+        "id": 356070988,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683295690
+    },
+    {
+        "content": "<p>generally 64bit also has more memory. So it can use more cache and may have different levels of dependencies that makes sense.</p>",
+        "id": 356071325,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683295750
+    },
+    {
+        "content": "<p>Also, since hashing is the base for sets and dictionaries and some algorithms, it indirectly means it effects all of those uses as well.</p>",
+        "id": 356071630,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683295805
+    },
+    {
+        "content": "<p>Also, in some cases you may opt for more overflow safety on 64 bit systems, but give that up intentionally on 32 bit systems to save memory.</p>",
+        "id": 356071853,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683295857
+    },
+    {
+        "content": "<p>hm, ok so I wonder what's the specific application scenario where someone wants this</p>",
+        "id": 356072621,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296023
+    },
+    {
+        "content": "<p>it has to be something where I'm writing an application that gets deployed both to 32-bit and to 64-bit targets, and hashing is a significant part of performance</p>",
+        "id": 356072719,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296043
+    },
+    {
+        "content": "<p>Also, all integer operations will be slower if you use a <code>U64</code> instead of <code>U32</code> on a 32bit system. So if you want to not pessimize on 32bit systems, some code may want to use <code>U32</code> instead of <code>U64</code> on 32bit systems. Though I guess you could argue that you should use the use <code>U32</code> on both cause it is faster on both due to less memory pressure.</p>",
+        "id": 356072776,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683296056
+    },
+    {
+        "content": "<blockquote>\n<p>it has to be something where I'm writing an application that gets deployed both to 32-bit and to 64-bit targets, and hashing is a significant part of performance</p>\n</blockquote>\n<p>Writing a library? That you want <del>usable</del> fast on both?</p>",
+        "id": 356072872,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683296079
+    },
+    {
+        "content": "<p>yeah I think that's just a specific case of \"use the smallest integer type you can get away with\"</p>",
+        "id": 356072888,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296084
+    },
+    {
+        "content": "<p>ah fair point</p>",
+        "id": 356072918,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296092
+    },
+    {
+        "content": "<p>so I guess the \"I want to have a library that does something different on 32-bit vs 64-bit targets\" is kind of a separate discussion from <code>Nat</code> itself</p>",
+        "id": 356073080,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296128
+    },
+    {
+        "content": "<p>and the main question on my mind there is whether it's worth it to enable that at the cost of giving up \"Roc code gives the same outputs for the same inputs on all targets, so you never need to run <code>roc test</code> on different targets\"</p>",
+        "id": 356073418,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296194
+    },
+    {
+        "content": "<p>and my feeling right now is that it's not worth it, and target-aware Roc code shouldn't be a thing, even if that means we give up some perf in the specific scenario where you have one hashing algorithm that runs faster on 32-bit target and another that would run faster on 64-bit targets</p>",
+        "id": 356073564,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296235
+    },
+    {
+        "content": "<p>kinda... Though currently <code>Nat</code> enables this.</p>\n<p>Also, if your goal is to fix \"so you never need to run <code>roc test</code> on different targets\". Enabling doing different things based on 32 vs 64 would add this problem right back in. Hopefully library code is written well and only they need to test on multiple systems, but it could definitely affect end users. So I think saying we will remove <code>Nat</code>, but maybe add doing different things based on 32 vs 64, it feels like you haven't gained much.</p>",
+        "id": 356074226,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683296372
+    },
+    {
+        "content": "<p>Though I guess most places will probably only ever run code on 32 bit or 64 bit computation systems (note, wasm is a 64bit computation system), not both, so maybe it is just fine.</p>",
+        "id": 356074753,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683296477
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/replace.20.60Nat.60/near/356074226\">said</a>:</p>\n<blockquote>\n<p>Also, if your goal is to fix \"so you never need to run <code>roc test</code> on different targets\". Enabling doing different things based on 32 vs 64 would add this problem right back in.</p>\n</blockquote>\n<p>oh that's what I'm saying - I don't think we should enable doing different things based on 32 bit vs 64 bit <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 356075005,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296528
+    },
+    {
+        "content": "<p>I don't think the upsides would outweigh the downsides in practice</p>",
+        "id": 356075141,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296558
+    },
+    {
+        "content": "<p>I guess what I am trying to say is that <code>Nat</code>, doesn't have much value, but having the best perf when using hashing, dictionaries, and sets matters a lot. So I think those should be the focus of the discussion around <code>roc test</code> being consistent on all platforms.</p>",
+        "id": 356075798,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683296678
+    },
+    {
+        "content": "<p>well the builtin dictionaries and sets wouldn't be affected by this</p>",
+        "id": 356076701,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296875
+    },
+    {
+        "content": "<p>we can have them do whatever we want under the hood, and it won't be observable in userspace because we've already made their hashing functions unobservable so we can upgrade them as a nonbreaking change <span aria-label=\"grinning\" class=\"emoji emoji-1f600\" role=\"img\" title=\"grinning\">:grinning:</span></p>",
+        "id": 356076968,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296919
+    },
+    {
+        "content": "<p>so it would only affect hashing functions written in userspace</p>",
+        "id": 356077065,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683296939
+    },
+    {
+        "content": "<p>Currently it wouldn't but personally I don't think that solves the issue. What if I want to hash a file.</p>",
+        "id": 356077099,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683296944
+    },
+    {
+        "content": "<p>There are lots of cases for userland hashing.</p>",
+        "id": 356077196,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683296957
+    },
+    {
+        "content": "<p>sure</p>",
+        "id": 356077579,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683297022
+    },
+    {
+        "content": "<p>Also, we may want to expose changing the hash for dict in the long term. That or we want to implement at least 4 different hashing algorithms in the standard library dictionary.</p>",
+        "id": 356077616,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683297029
+    },
+    {
+        "content": "<p>interesting! what would be the use cases there? some hashing algorithms being faster for some key types than others?</p>",
+        "id": 356077868,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683297066
+    },
+    {
+        "content": "<p>2 per target. One for short and one for long data. That would at least be a rough approximation.</p>",
+        "id": 356077912,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683297073
+    },
+    {
+        "content": "<p>nice, yeah that makes sense - although we can just do that automatically</p>",
+        "id": 356078016,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683297094
+    },
+    {
+        "content": "<p>since we know the types at compile time</p>",
+        "id": 356078056,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683297102
+    },
+    {
+        "content": "<p>I agree that we can make an extremely fast standard library dictionary for most types. I still think that having fast and flexible userland hashing is important.</p>",
+        "id": 356078373,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683297155
+    },
+    {
+        "content": "<p>I personally don't like too much bespoke standard when it isn't needed.</p>",
+        "id": 356078509,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683297176
+    },
+    {
+        "content": "<p>Only the standard library dict is fast. No other userland datastructures can get close because they can't use the magic hash function in the standard library that is impossible to write in roc.</p>",
+        "id": 356078744,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683297222
+    },
+    {
+        "content": "<p>hm, ok I think it would help to walk through a specific example - what are some specific pairs of hashing algorithms where:</p>\n<ul>\n<li>on 32-bit targets, algorithm A is faster than algorithm B</li>\n<li>on 64-bit targets, algorithm B is faster than algorithm A</li>\n</ul>",
+        "id": 356079329,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683297321
+    },
+    {
+        "content": "<p>oh, thats easy. wyhash and wyhash32.</p>",
+        "id": 356079915,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683297425
+    },
+    {
+        "content": "<p>wyhash operates on larger blocks and use 64bit math. wyhash32 use smaller blocks and 32bit math</p>",
+        "id": 356079990,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683297445
+    },
+    {
+        "content": "<p>The larger blocks and low cost of 64bit math make wyhash faster on 64bit system. The cheaper math make wyhash32 faster on 32bit systems</p>",
+        "id": 356080195,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683297483
+    },
+    {
+        "content": "<p>A number of hashing algorithms are developed in pairs like this.</p>",
+        "id": 356080392,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683297528
+    },
+    {
+        "content": "<p>gotcha, makes sense!</p>",
+        "id": 356080432,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683297535
+    },
+    {
+        "content": "<p>Also, wyhash has a few more variants if you want to tailor more to arm cpus that are missing/occasional have extra features.</p>",
+        "id": 356080564,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683297559
+    },
+    {
+        "content": "<p>so in that situation, always using wyhash64 would be optimal as long as it's being run on 64-bit CPUs, even if you're running on a 32-bit target like wasm32 (so long as it's actually running on a 64-bit CPU)</p>",
+        "id": 356080790,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683297601
+    },
+    {
+        "content": "<p>so the issue would be the specific scenario where I have an application that wants to be used on a machine with a 64-bit CPU and also on a machine with a 32-bit CPU, like a raspberry pi</p>",
+        "id": 356081251,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683297680
+    },
+    {
+        "content": "<p>libraries aside (which could presumably be vendored if absolutely necessary), if I really wanted wyhash32 on one and wyhash64 on the other, it's still <em>possible</em> to do this by:</p>\n<ul>\n<li>making a file called <code>Wyhash.roc</code></li>\n<li>when I'm building for rpi, I populate that file with wyhash32 and then upcast its output to 64 bits</li>\n<li>when I'm building for anything else, I populate that file with wyhash64</li>\n</ul>\n<p>obviously that's much less ergonomic as having userspace selection between the two targets, but it would work. If I really really needed that performance, I could get it.</p>",
+        "id": 356082673,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683297964
+    },
+    {
+        "content": "<p>but in that specific scenario I also wonder about: if my application runs well on a rpi, it can't be too CPU-intensive in general...so is it really going to be a noticeable problem on 64-bit targets if I just choose wyhash32 always?</p>",
+        "id": 356083019,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683298047
+    },
+    {
+        "content": "<p>If someone told you that all hashing would be half as fast, would you accept that?</p>",
+        "id": 356083538,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298155
+    },
+    {
+        "content": "<p>waste is still waste, why give a worse experience on 64bit systems.</p>",
+        "id": 356083642,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298182
+    },
+    {
+        "content": "<p>but the experience is only worse if you notice it <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 356084187,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683298292
+    },
+    {
+        "content": "<p>Also, I do specifically expect this to come up the most with libraries. We totally could standardize on maintaining two versions of all functions were this perf matters. Then just manually change? Seems like terrible ergonomics for an easy to solve problem.</p>\n<div class=\"codehilite\"><pre><span></span><code>when Target.registerWidth is\n    32 -&gt;\n    64 -&gt;\n</code></pre></div>",
+        "id": 356084255,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298307
+    },
+    {
+        "content": "<p>like if you have someone run two versions of the program, one using wyhash64 and one using wyhash32, and they can't tell a difference, I don't think there's a problem</p>",
+        "id": 356084410,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683298336
+    },
+    {
+        "content": "<p>Do you ever expect a roc desktop or cli app to hash files that are large (or many of them so it adds up to a lot of data). You will feel the 2x there.</p>",
+        "id": 356084615,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298385
+    },
+    {
+        "content": "<p>but remember we're only talking about apps that run on raspberry pi too</p>",
+        "id": 356084678,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683298403
+    },
+    {
+        "content": "<p>Sounds like any linux cli app.</p>",
+        "id": 356084719,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298414
+    },
+    {
+        "content": "<p>I don't think finding examples where this could matter is hard.</p>",
+        "id": 356084787,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298432
+    },
+    {
+        "content": "<p>nice! examples would be helpful <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 356084975,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683298464
+    },
+    {
+        "content": "<p>Do none of the things I listed above count?</p>",
+        "id": 356085400,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298560
+    },
+    {
+        "content": "<p>oh I mean like a specific CLI app that you'd want to run on both a desktop and on a rpi</p>",
+        "id": 356085566,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683298593
+    },
+    {
+        "content": "<p>that does hashing of large files</p>",
+        "id": 356085605,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683298601
+    },
+    {
+        "content": "<p>git, roc, any compiler with incremental compilation, any build tool</p>",
+        "id": 356086023,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298696
+    },
+    {
+        "content": "<p>Essentially anything that interacts with files and wants to be able to short circuit by using a hash.</p>",
+        "id": 356086498,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298802
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> for files specifically, platforms could offer a function for hashing them</p>",
+        "id": 356086915,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683298876
+    },
+    {
+        "content": "<p>that could be target-specific, since platforms can already run target-specific host code</p>",
+        "id": 356086986,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683298890
+    },
+    {
+        "content": "<p>Sure, a platform can do anything.</p>",
+        "id": 356087218,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298928
+    },
+    {
+        "content": "<p>We could say that about many features in Roc.</p>",
+        "id": 356087338,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683298953
+    },
+    {
+        "content": "<p>sure, but file I/O is already coupled to platforms</p>",
+        "id": 356087474,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683298981
+    },
+    {
+        "content": "<p>I think you should think about sockets, the postgres library recently built in roc, and general platform fragmentation.</p>\n<p>all of that postgres library could be in a platform, but we want it to be possible in roc.<br>\nI think this general class should fall in the same category.</p>",
+        "id": 356088157,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683299120
+    },
+    {
+        "content": "<p>true</p>",
+        "id": 356088345,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299159
+    },
+    {
+        "content": "<p>but another good question to ask is: suppose everyone in the Roc ecosystem does 64-bit hashing, what are the specific bad things that happen?</p>",
+        "id": 356088614,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299203
+    },
+    {
+        "content": "<p>Many 32bit systems are multiple times slower any time they hash. Any app that depends decently on hashing has a significant unnecessary slowdown. All applications that use hashing take more battery life due to increased computation. We can never do hashing on 16 bit systems (well we can, but the perf would make it non-viable)</p>",
+        "id": 356089300,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683299349
+    },
+    {
+        "content": "<p>so specifically, if someone build a roc app that compiles to 32-bit raspberry pi, and does hashing of large files, then it will run slower on raspberry pi unless they're using a platform that exposes a primitive for reading and hashing files (which uses 32-bit or 64-bit under the hood depending on target), or they go out of their way to accept worse ergonomics specifically for their hashing function (and possibly vendoring libraries if need be) in that they need to swap out the file that does the hashing when building for rpi</p>",
+        "id": 356089478,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299397
+    },
+    {
+        "content": "<p>I think it's important to note that \"it has to run massively slower and everyone just has a bad experience\" is only true if the application author is willing to go to the trouble of building and distributing 32-bit binaries for rpi but not willing to do a custom build to swap out the hashing function</p>",
+        "id": 356089809,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299461
+    },
+    {
+        "content": "<p>that's an important distinction to me, because there is a big difference in my mind between:</p>\n<ul>\n<li>Roc is unavoidably slow in this use case</li>\n<li>the ergonomics of building for this target are less nice in this use case</li>\n</ul>\n<p>especially when it's a very uncommon use case</p>",
+        "id": 356090527,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299612
+    },
+    {
+        "content": "<p>Why add the friction though? Also, many apps are death by 1000 papercuts. Repeat a small slowdown in a bunch of places (or just bad architecture from the beginning) and you end up with the piles of slow apps that exist today. Everyone spent waiting longer or with a more jank experience.</p>",
+        "id": 356090534,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683299614
+    },
+    {
+        "content": "<p>well the reason to add the friction is to have the language-wide guarantee that Roc code gives the same answers regardless of target</p>",
+        "id": 356090844,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299663
+    },
+    {
+        "content": "<p>Also, I don't see the value in <code>roc test</code> being the same on all targets. You are still building on top of a platform that needs to be tested. So you fundamentally need to test on all the targets you deploy to.</p>",
+        "id": 356091042,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683299690
+    },
+    {
+        "content": "<p>to flip that around, \"why sacrifice that language-wide guarantee for the entire ecosystem for the sake of making a build step a bit more convenient for the 0.0001% of Roc programmers who are building for both 32-bit raspberry pi and desktop applications and doing enough hashing that target-specific hashing makes a noticeable performance difference\"</p>",
+        "id": 356091302,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299732
+    },
+    {
+        "content": "<p>hm, yeah I guess that's true of <code>roc test</code> with <code>expect-fx</code> tests</p>",
+        "id": 356091458,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299762
+    },
+    {
+        "content": "<p>really I'm trying to use <code>roc test</code> as a shorthand for \"cross-target concerns\"</p>",
+        "id": 356092131,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299877
+    },
+    {
+        "content": "<p>like concretely I started thinking about this because of wanting to use Roc at work by calling Roc functions from NodeJS via WebAssembly</p>",
+        "id": 356092479,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299935
+    },
+    {
+        "content": "<p>and I think about:</p>\n<ul>\n<li>we're doing development and CI on 64-bit systems</li>\n<li>we're deploying to a production 32-bit system</li>\n</ul>",
+        "id": 356092601,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299956
+    },
+    {
+        "content": "<p>which means all of our top-level <code>expect</code>s, everything we try out in the repl...it might actually do something different in production</p>",
+        "id": 356092748,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683299990
+    },
+    {
+        "content": "<p>like there might be bugs because somewhere in some Roc code path there's a conditional based on the target, and it's just doing something different - and there's a bug in that much-less-tested code path</p>",
+        "id": 356092989,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300032
+    },
+    {
+        "content": "<p>and we don't notice it until we've done a production deploy and got bitten by it</p>",
+        "id": 356093069,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300050
+    },
+    {
+        "content": "<p>and it seems like today, this same concern could happen to any wasm application</p>",
+        "id": 356093287,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300092
+    },
+    {
+        "content": "<p>and more to the point, this is not a concern in JavaScript, Java, Python, Elm, ...</p>",
+        "id": 356093721,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300157
+    },
+    {
+        "content": "<p>it's a case where Roc has a category of potential production errors that similar languages don't have</p>",
+        "id": 356093885,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300188
+    },
+    {
+        "content": "<p>or rather, similarly high-level languages</p>",
+        "id": 356093958,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300203
+    },
+    {
+        "content": "<p>and generally speaking we're trying to remove entire categories of errors compared to other high-level languages, rather than introducing them <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 356094348,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300269
+    },
+    {
+        "content": "<p>but at the same time, we also want to run faster than them, so there is definitely tension here!</p>",
+        "id": 356094519,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300295
+    },
+    {
+        "content": "<p>especially considering we also want to be useful on a variety of targets - e.g. Golang can say \"this is designed for servers\" but our scope isn't that limited</p>",
+        "id": 356094735,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300332
+    },
+    {
+        "content": "<p>I think this is a case of boundaries. When something like <code>Target.registerWidth</code> is used correctly, it should never visibly do something different in a way that affects tests. That is the same with all of the standard library. Even though small string size is different or the hashing algorithm, it shouldn't cause userspace effects based on target. That is also generally the case with platforms.</p>\n<p>What I am trying to say is that I do think the cases where something like <code>Target.registerWidth</code> should be used are extremely limited, but they tend to be the kind of stuff where performance really matters, and a whole chain of things depend on it. Hopefully because of the huge chain of dependencies, you can trust the code and not worry about cross platform issues.</p>\n<p>This happens all the time: v8, cpython, numpy, any python library that calls c code, any java library that calls c code, the jvm itself. I bet multiple of these have had bugs that affect specific targets. None the less, people still use them, test them, and ignore the platform constraints (while getting platform specific speed ups).</p>\n<p>Roc aims to be to have higher peak performance than all of these languages. As such, I think there will be some libraries where this matters. I agree with you that the rest of Roc should not need to care about this. They should just use the library, get amazing speeds, and never think about the fact it is optimized based on the target. I think removing <code>Nat</code> is completely reasonable, but if we do so, I think that we should add in some sort of <code>Target.registerWidth</code>.</p>\n<p>Other languages and tools aren't immune to the issues you list. Also, roc still wouldn't be immune due to being on top of a platform.</p>",
+        "id": 356096126,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683300586
+    },
+    {
+        "content": "<p>these are good points!</p>",
+        "id": 356097094,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300774
+    },
+    {
+        "content": "<p>I wonder if there's some way to sort of \"limit the blast radius\" here, or maybe make it more visible what subset of the program is target-specific, kinda like Rust <code>unsafe</code></p>",
+        "id": 356097217,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300798
+    },
+    {
+        "content": "<p>for example, maybe instead of having it be an expression-level thing, it's that packages can use one of two different modules depending on target</p>",
+        "id": 356097359,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300834
+    },
+    {
+        "content": "<p>so you could tell right in the package's module header whether it was doing this</p>",
+        "id": 356097415,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300842
+    },
+    {
+        "content": "<p>and if so, what the affected code would be</p>",
+        "id": 356097484,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683300852
+    },
+    {
+        "content": "<p>interesting idea. Yeah something of that nature could potentially be reasonable.</p>",
+        "id": 356097684,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683300905
+    },
+    {
+        "content": "<p>Maybe a bit more bug prone though. I would assume that would make it more likely that they don't get updated together</p>",
+        "id": 356098038,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683300968
+    },
+    {
+        "content": "<p>having them close in code is probably a good thing.</p>",
+        "id": 356098114,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683300983
+    },
+    {
+        "content": "<p>Also, other thought on testing, if we only expose 32 vs 64 register width, it totally can be fully tested on one system. So instead of testing for wasm, you are testing for 32bit and just using only 32bit assembly. So running a 32bit application on a 64bit system</p>",
+        "id": 356098564,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683301084
+    },
+    {
+        "content": "<p>whoa that's very cool, I didn't think of that!</p>",
+        "id": 356099219,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683301216
+    },
+    {
+        "content": "<p>theoretically we could even consider doing it automatically for all the relevant targets, if we could cheaply enough (e.g. using the module dependency graph) detect which code paths could possibly give different answers per target <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 356099598,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683301310
+    },
+    {
+        "content": "<p>it would be pretty cool to get an error like \"hey this test passes on 64-bit targets but not on 32-bit targets\" after running <code>roc test</code> normally, not even thinking about it</p>",
+        "id": 356101020,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683301606
+    },
+    {
+        "content": "<p>Could even have more than 1 mode if it ends up being too slow.</p>\n<ol>\n<li>Run 64bit tests but give a warning that 32bit systems could differ.</li>\n<li>Flag to run both.</li>\n<li>Flag to run specific one.</li>\n</ol>",
+        "id": 356101621,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683301750
+    },
+    {
+        "content": "<p>it's good that this is decoupled from <code>Nat</code>, since it means figuring out what to do (e.g. per-target modules vs builtin constant vs etc.) doesn't block changing the <code>Nat</code> APIs</p>",
+        "id": 356101633,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683301753
+    },
+    {
+        "content": "<p>Yeah. I totally agree. I think all of these <code>Nat</code> changes are completely great assuming we recognize what restrictions it's adding and work on a plan to alleviate that.</p>",
+        "id": 356102010,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683301840
+    },
+    {
+        "content": "<p>Computers sure are a pain aren’t they? 😅</p>",
+        "id": 356140920,
+        "sender_full_name": "Bryce Miller",
+        "timestamp": 1683312032
+    },
+    {
+        "content": "<p>I like this idea of being able to choose which size you use, but in an obvious explicit way instead of the compiler silently choosing for you. And especially the idea of being able to run the 32 bit version to test it on a 64bit machine (or visa versa). Most people will never think about it, so get all the benefits of removing Nat.</p>",
+        "id": 356171864,
+        "sender_full_name": "Sky Rose",
+        "timestamp": 1683324003
+    },
+    {
+        "content": "<p>Another idea for if we get rid of Nat: What if by default List functions always return u64, but if you know you're on a platform where the performance/size matters, and you can guarantee that the list will never be too big, you could use a List8 that returned u8, or a Dict32 that used a 32bit hash.</p>\n<p>It's explicit and opt in, so most people get the benefits of not using Nat. It would have consistent behavior no matter which target you compile for. It allows optimizing which implementation to use independent of the target (what if you want the performance of a List8 in one place, and capacity of a <del>List64</del> List in another), and is pretty future proof for adding 16bit or 128bit targets. And it combines well with the other idea of explicitly checking the target, if you want to use that to decide which implementation to use.</p>\n<p>The downside is that it's a step towards the land of Java offering 13 different implementations of Dictionaries.</p>",
+        "id": 356171895,
+        "sender_full_name": "Sky Rose",
+        "timestamp": 1683324007
+    },
+    {
+        "content": "<p>Just a clarify, in the current proposal, on a 32bit system, you would get what you have named a <code>List32</code> by default. It is just when we return a size or index to the user, we up cast it to a <code>U64</code></p>",
+        "id": 356172145,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683324141
+    },
+    {
+        "content": "<p>So impl matches the host machine, but the API always matches <code>U64</code>.</p>",
+        "id": 356172190,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683324168
+    },
+    {
+        "content": "<p>Ah, right, thanks.</p>",
+        "id": 356172883,
+        "sender_full_name": "Sky Rose",
+        "timestamp": 1683324557
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/replace.20.60Nat.60/near/356172190\">said</a>:</p>\n<blockquote>\n<p>So impl matches the host machine, but the API always matches <code>U64</code>.</p>\n</blockquote>\n<p>So, if I'm building for a 32bit system and I use, say <code>List.length</code> the type will be <code>U64</code>? wouldn't that confuse the end user? Is that why we have <code>Nat</code> currently? for typing system-bound values?</p>",
+        "id": 356175545,
+        "sender_full_name": "Georges Boris",
+        "timestamp": 1683325985
+    },
+    {
+        "content": "<p>as a complete noob in system development, I would prefer to have something explicitly dynamic, knowing that it could break at different points in different systems - and if I wanted to deploy in a system different of my own I would probably need to test my application in that system as well.</p>\n<p>wouldn't it still make it for a simple experience for 99.9% of the system that are being developed and deployed on similar hardware? (and the example given of CI using 64bit and then production using 32bit -- would you really catch these types of errors on unit tests? and wouldn't it be really advised to test your application on a similar machine?) - seems like solving it in Roc is what is at hand, but ideally this would be a infrastructure problem, am I tripping?</p>",
+        "id": 356176185,
+        "sender_full_name": "Georges Boris",
+        "timestamp": 1683326335
+    },
+    {
+        "content": "<blockquote>\n<p>So, if I'm building for a 32bit system and I use, say <code>List.length</code> the type will be <code>U64</code>? wouldn't that confuse the end user? </p>\n</blockquote>\n<p>Why is that confusing? <code>List.length</code> always returns a <code>U64</code>. That seems like a very clear contract. If you don't know systems dev, you will not know that returning <code>U64</code> is a little strange. If you do know systems dev, you may question it, but fundamentally a <code>U32</code> fits in a <code>U64</code>.</p>",
+        "id": 356178311,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683327596
+    },
+    {
+        "content": "<blockquote>\n<p>knowing that it could break at different points in different systems</p>\n</blockquote>\n<p>What can break? the <code>U64</code> will always work.</p>",
+        "id": 356178436,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683327637
+    },
+    {
+        "content": "<blockquote>\n<p>and wouldn't it be really advised to test your application on a similar machine?</p>\n</blockquote>\n<p>Probably, though roc being a sandboxed language does have some ability to make this unnecessary. Think of python or java or js. You don't feel the need to test on an rpi and on your windows desktop and on your mac laptop. You just run the tests on your linux ci server and move on.</p>",
+        "id": 356178721,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683327780
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> makes sense!</p>",
+        "id": 356278791,
+        "sender_full_name": "Georges Boris",
+        "timestamp": 1683372311
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> few more questions, sir?</p>\n<p>how does python, js and java deal with this particular problem? or they don't because their scope is narrower? (embedded systems for instance)</p>\n<p>I totally hear what Richard said about maybe our use case falls out of embedded systems most of the time but would things like console game development also face these issues?</p>\n<p>what is the best ergonomic strategy currently used for the code-once-run-anywhere when there are multiple system architectures involved?</p>\n<p>is the code-once approach not the best ergonomic in these scenarios since you would need to optimize for the opaque system-optimizer algorithm instead of just accessing the different strategies for each system directly for your own, very specific, use case?</p>",
+        "id": 356304257,
+        "sender_full_name": "Georges Boris",
+        "timestamp": 1683379659
+    },
+    {
+        "content": "<blockquote>\n<p>how does python, js and java deal with this particular problem?</p>\n</blockquote>\n<p>Looking at <code>Nat</code> specifically, none of them have it. Python has an infinitely growing integer type. Java use an <code>u32</code> for indexing (so you can't have an array with more than 4 billion-ish elements). JS has their weird number type (and is limited to 32 bits worth of elements in an array)</p>\n<p>For the general optimization based on platform. I think essentially no code written in these languages does that. They may call C code that is optimized for the platform, but generally that is in large, well tested libraries that are assumed to be correct on all platforms. Of course in the case of Java and JS, the jit can optimize for the target machine (though that will be limited by data types), and python only gets any achitecture specific optimizations added to the interpretter.</p>",
+        "id": 356315725,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683383046
+    },
+    {
+        "content": "<blockquote>\n<p>maybe our use case falls out of embedded systems most of the time but would things like console game development also face these issues?</p>\n</blockquote>\n<p>Console shouldn't hit issue with this, but will probably hit issues with reference counting and memory related costs. They are basically modern desktops with slightly limited resources where you want to use every drop of performance. Roc should have no issue replacing parts of games where lua would be used, but a pure roc console game might be very allocation heavy depending on how it is written (so would a bad c++ program though)</p>\n<p>As an aside on embedded. Embedded systems are honestly really powerful. Micropython can run on a lot of embedded devices. It has a cost, but it is usable. I believe that they mostly just lock down python types and restrict them to more basic c like types (e.g. no growing ints, just i32)</p>",
+        "id": 356316439,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683383270
+    },
+    {
+        "content": "<blockquote>\n<p>what is the best ergonomic strategy currently used for the code-once-run-anywhere when there are multiple system architectures involved?</p>\n</blockquote>\n<p>Write zig/c with good data oriented design principles and architecture generic simd/swar. Compile it for every target you care about.</p>\n<p>Yeah, I don't think there is a real answer here. Nothing I know of truly targets both 16bit machines and 64 bit machines. Many target 32 and 64, but even though systems have restrictions because of it. Like java having restricted array size.</p>",
+        "id": 356317018,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683383420
+    },
+    {
+        "content": "<blockquote>\n<p>is the code-once approach not the best ergonomic in these scenarios since you would need to optimize for the opaque system-optimizer algorithm instead of just accessing the different strategies for each system directly for your own, very specific, use case?</p>\n</blockquote>\n<p>I think Mike Acton in his DOD talk went over this some. If you want to make something with good performance, you need to know all of the details of the concrete set of systems that you are optimizing for. Of course, it would be better to target individual systems and design for each of those specifically, but a small or similar enough group of systems is also fine.  Having a vague or large set of systems is simply not possible to optimize for.</p>\n<p>In the case of libraries/core language design, generally scope is small enough that you can relatively well design each feature to run well on most systems. This does require picking specific code to run based on the systems though.</p>",
+        "id": 356318069,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683383749
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/replace.20Nat/near/356098564\">said</a>:</p>\n<blockquote>\n<p>Also, other thought on testing, if we only expose 32 vs 64 register width, it totally can be fully tested on one system. So instead of testing for wasm, you are testing for 32bit and just using only 32bit assembly. So running a 32bit application on a 64bit system</p>\n</blockquote>\n<p>Does every reasonably common 64-bit arch include compatibility support for a 32-bit ISA? I know that's the case for x86_64, but iirc, that's not the case for all others... Or do you mean compiling to use 32-bit registers and ops despite being on a 64-bit arch?</p>\n<p>Aren't these properties we can just prove or constrain in the compiler for Roc code (assuming the platform code is doing the right thing)?</p>",
+        "id": 360787448,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1684934279
+    }
+]

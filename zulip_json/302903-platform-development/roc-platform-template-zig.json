@@ -1,0 +1,356 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> is it possible that build.zig is misconfigured for a native build?  this is a very shaky area for me, but I tried a native build, and there were some glibc symbols going into a musl build, which:</p>\n<div class=\"codehilite\"><pre><span></span><code>roc test/host.roc\nld.lld: error: undefined symbol: __vfprintf_chk\n&gt;&gt;&gt; referenced by secp256k1.c\n&gt;&gt;&gt;               .zig-cache/o/68a5a1526d4b3cedd8deaf08a3d7878c/secp256k1.o:(fprintf(_IO_FILE*, char const* pass_object_size1, ...)) in archive test/../platform/targets/x64musl/libhost.a\n-- LINKER FAILED ---------------------------------\n\nThe linker failed while building for target x64musl\n\nError: LinkFailed\nerror: Recipe `test-integration` failed on line 269 with exit code 1\n</code></pre></div>",
+        "id": 569167110,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1768967601
+    },
+    {
+        "content": "<p>it may just be my <code>build.zig</code>,  not sure yet</p>",
+        "id": 569167137,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1768967631
+    },
+    {
+        "content": "<p>Codex says:</p>\n<blockquote>\n<p>You’ve got it — the “native” build is faster, but in this project “native” needs to mean  “native Roc target,” not “host libc.” On Linux, Roc’s native target is x64musl, while Zig’s default native target is typically glibc. So the current zig build native produces a glibc-flavored libhost.a and then copies it into the x64musl slot, which looks “right” but is actually wrong.</p>\n</blockquote>\n<blockquote>\n<p>How the two builds differ today:</p>\n</blockquote>\n<blockquote>\n<ul>\n<li>zig build (what build-all uses) builds each Roc target explicitly via roc_target.toZigTarget(), so x64musl is truly musl.</li>\n<li>zig build native uses the host target, which is glibc on most Linux distros, and then copies to the Roc target directory. That mismatch is the subtle bug.</li>\n</ul>\n</blockquote>\n<blockquote>\n<p>Your expectation is totally reasonable; the “native build” just isn’t configured to match the Roc target definition.</p>\n</blockquote>\n<blockquote>\n<p>If you want, I can fix native in build.zig to use detectNativeRocTarget(...) → toZigTarget() instead of standardTargetOptions(). That keeps the fast build but produces the correct musl target on Linux.</p>\n</blockquote>",
+        "id": 569167265,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1768967744
+    },
+    {
+        "content": "<p>this might be an artifact of my inclusion of <code>libsecp256k1</code>; anyhow it's resolved</p>",
+        "id": 569167366,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1768967853
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"780900\">Rick Hull</span> <a href=\"#narrow/channel/302903-platform-development/topic/roc-platform-template-zig/near/569167366\">said</a>:</p>\n<blockquote>\n<p>this might be an artifact of my inclusion of <code>libsecp256k1</code>; anyhow it's resolved</p>\n</blockquote>\n<p>At first glance I would guess it was related to this. </p>\n<p>What was the issue in the end?</p>",
+        "id": 569178694,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1768976153
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>diff --git a/build.zig b/build.zig\nindex bccf6f4..c5462eb 100644\n--- a/build.zig\n+++ b/build.zig\n@@ -99,13 +99,14 @@ pub fn build(b: *std.Build) void {\n\n     const native_target = b.standardTargetOptions(.{});\n\n-    // Detect native RocTarget and copy to proper targets folder\n+    // Detect native RocTarget based on host, then build using that Roc target.\n     const native_roc_target = detectNativeRocTarget(native_target.result) orelse {\n         std.debug.print(&quot;Unsupported native platform\\n&quot;, .{});\n         return;\n     };\n\n-    const native_lib = buildHostLib(b, native_target, optimize, builtins_module, secp256k1_dep);\n+    const native_roc_zig_target = b.resolveTargetQuery(native_roc_target.toZigTarget());\n+    const native_lib = buildHostLib(b, native_roc_zig_target, optimize, builtins_module, secp256k1_dep);\n     b.installArtifact(native_lib);\n\n     const copy_native = b.addUpdateSourceFiles();\n</code></pre></div>\n<p>I am about to publish my <code>nostr-platform</code> repo on github.  I think it's feature complete for building the rest of nostr in Roc.  But I think I need to rename it.  There is nothing in the platform specific to nostr -- it's roc-platform-template-zig, using Zig's sha256, plus libsecp256k1.   Any suggestions for repo name?</p>",
+        "id": 569260655,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769003813
+    },
+    {
+        "content": "<p>I have 3 functions from libsecp: create public key, sign a msg/hash, verify a signature.  These are all strictly related to \"Schnorr Signatures\", which are used in Bitcoin (primarily) and later adopted by Nostr Protocol</p>",
+        "id": 569261109,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769003902
+    },
+    {
+        "content": "<p><code>libsecp256k1</code> does WAY MORE than Schnorr, and Schnorr is a small optional module.  So i am going to to avoid the big mouthful and likely base on <code>schnorr</code>.  <code>roc-platform-schnorr</code>   or <code>schnorr-platform</code></p>",
+        "id": 569262471,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769004199
+    },
+    {
+        "content": "<p><code>schnorr-platform</code> sounds good</p>",
+        "id": 569265190,
+        "sender_full_name": "Anton",
+        "timestamp": 1769004851
+    },
+    {
+        "content": "<p>for day to day development, is there any reason to build all targets vs just the native target?  i assume this is for release rather than dev</p>",
+        "id": 569292737,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769011315
+    },
+    {
+        "content": "<p>Yes, the new basic-cli script allows you to choose: <a href=\"https://github.com/roc-lang/basic-cli/blob/03e94adde676e495d7a80c89b5b54de7ed17af61/build.sh#L87\">https://github.com/roc-lang/basic-cli/blob/03e94adde676e495d7a80c89b5b54de7ed17af61/build.sh#L87</a></p>",
+        "id": 569293922,
+        "sender_full_name": "Anton",
+        "timestamp": 1769011585
+    },
+    {
+        "content": "<p>is there any good reason to build all for edit-build-test cycles?</p>",
+        "id": 569294445,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769011715
+    },
+    {
+        "content": "<p>Not that I can think of</p>",
+        "id": 569295817,
+        "sender_full_name": "Anton",
+        "timestamp": 1769012061
+    },
+    {
+        "content": "<p>For \"hello world\" to work with the new compiler, a new user needs a \"new compiler\" platform.  this will be <code>basic-cli</code> by default, when it's ready.  but is <code>roc-platform-template-zig</code> the next best alternative?  for a new user wanting hello world?</p>",
+        "id": 569564146,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769107112
+    },
+    {
+        "content": "<p>Yes for now the template or possibly something like roc-ray which both have releases.</p>",
+        "id": 569580894,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769112999
+    },
+    {
+        "content": "<p>The basic-cli branch works well enough but you do need to build the platform from source so not as friendly.</p>",
+        "id": 569581048,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769113050
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"780900\">@Rick Hull</span> what OS are you running? I could make probably make a an alpha release with just the binary for your system. I could probably add http too if you are wanting to experiment with it.</p>",
+        "id": 569582261,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769113471
+    },
+    {
+        "content": "<p>this isn't for me, really, but I'm running Arch Linux.   so, step 1 of \"hello world\" is first, get a working platform with Stdout.  and a binary seems good for that.</p>",
+        "id": 569586057,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769114947
+    },
+    {
+        "content": "<p>referencing some other platform discussion in other channels...   what is the future of <code>roc-platform-template-zig</code> ?   I can imagine that <code>basic-cli</code> might be a better starting point for my <code>schnorr-platform</code>  (not really, just hypothetically).  leaving aside Rust vs Zig (I much prefer Zig, in my naivete)</p>",
+        "id": 569605481,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769123578
+    },
+    {
+        "content": "<p>perhaps it becomes <code>basic-cli-zig</code>?   or halfway there?</p>",
+        "id": 569605545,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769123609
+    },
+    {
+        "content": "<p>The future plan is to not change it... it's <em>done</em></p>",
+        "id": 569605562,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769123616
+    },
+    {
+        "content": "<p>ah, nice.  I can agree with that</p>",
+        "id": 569605605,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769123635
+    },
+    {
+        "content": "<p>Unless the roc &lt;-&gt; host boundary changes... I don't plan to change anything. It's a minimal platform template that shows just enough functionality for people to see how to build a platform. I aim to have the identical platform API for all the templates, Rust, Swift, C, Go, Zig, etc...</p>",
+        "id": 569605711,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769123696
+    },
+    {
+        "content": "<p>if there were a hypothetical <code>basic-cli-zig</code> would you recommend someone wrapping an importantly-host-only library start with <code>roc-platform-template-zig</code> or <code>basic-cli-zig</code> ?</p>",
+        "id": 569605735,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769123707
+    },
+    {
+        "content": "<p>or is there a better question lurking in here?</p>",
+        "id": 569605818,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769123757
+    },
+    {
+        "content": "<p>I don't really understand the question. What is a hypothetical basic-cli-zig... is that the basic-cli API but with a zig host?</p>",
+        "id": 569605820,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769123758
+    },
+    {
+        "content": "<p>yes, let me rephrase.  use <code>basic-cli</code> as a starting point, or <code>roc-platform-template-rust</code> ?</p>",
+        "id": 569605863,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769123783
+    },
+    {
+        "content": "<p>What are you wanting to achieve? keep in mind the crypto primitive should be implemented in Roc's builtins so you could use any platform</p>",
+        "id": 569605958,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769123829
+    },
+    {
+        "content": "<p>I recognize that this might be a poorly conceived question.  feel free to answer any related question ;)</p>",
+        "id": 569605967,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769123836
+    },
+    {
+        "content": "<p>I thought your <code>schnorr-platform</code> was a learning experiment to learn more about roc, not necessarily something you plan to publish releases for and support long term</p>",
+        "id": 569606060,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769123887
+    },
+    {
+        "content": "<p>Can you share a link to your platform? I wonder if you might want to implement it as a package instead?</p>",
+        "id": 569606188,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769123962
+    },
+    {
+        "content": "<p>If we assume the crypto primitives are in the builtins (we can simulate that by putting that in a forked platform for now) -- you would explore options to build a higher level abstraction on top of that</p>",
+        "id": 569606304,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769124022
+    },
+    {
+        "content": "<p>this is getting too specific to me.  my question is more general, about future stuff and new developers coming here with questions.  forget crypto.  pick a good example of something that belongs in the host.  maybe a fresh new arena allocator.  I've got this thing, and I want to expose it to Roc via a platform.  the platform templates are a great resource and a minimal way to get started.  <code>basic-cli</code> is very comprehensive and provides many modules that might never get used by any given application.  I guess to answer my question, I would start with the smallest thing that could possibly work.</p>",
+        "id": 569606338,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769124043
+    },
+    {
+        "content": "<p>Ahk ... so generally I would suggest forking something like basic-cli if you needed all the functionality and wanted the same API (just adding a little more).</p>",
+        "id": 569606449,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769124118
+    },
+    {
+        "content": "<p>I might tell someone: start with <code>roc-platform-template-rust</code>, which gives you basic I/O and memory mgmt.  add your host feature, and then start developing roc against your platform.  if you find that you need more platform features, you can base your host feature on <code>basic-cli</code> instead.</p>",
+        "id": 569606490,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769124139
+    },
+    {
+        "content": "<p>If you are wanting to build a new platform I would say start with a template so you can see just the parts you need more easily</p>",
+        "id": 569606499,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769124142
+    },
+    {
+        "content": "<p>also, good question about learning vs supporting for the long term.  that <code>schnorr-platform</code> is so tiny, porque no los dos?  I plan to implement nostr in roc (already done it in ruby)</p>",
+        "id": 569606565,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769124183
+    },
+    {
+        "content": "<p>If you have any interest in <del>implementing Schnorr</del> achieving a Schnorr impl in Roc, I have a line-by-line impl in Ruby that matches the spec nearly 1-1.  But this type of impl gives up some timing guarantees, etc.   I don't mean that you, Luke, undertake this.  but there are reasons not to.</p>",
+        "id": 569606771,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769124295
+    },
+    {
+        "content": "<p>Is schnorr implemented in this? <a href=\"https://ziglang.org/documentation/master/std/#std.crypto\">https://ziglang.org/documentation/master/std/#std.crypto</a></p>",
+        "id": 569606905,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769124367
+    },
+    {
+        "content": "<p>I can take a peek <span aria-label=\"spectacles\" class=\"emoji emoji-1f453\" role=\"img\" title=\"spectacles\">:spectacles:</span></p>",
+        "id": 569606930,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769124387
+    },
+    {
+        "content": "<p>huzzah! <a href=\"https://ziglang.org/documentation/master/std/#std.crypto.pcurves.secp256k1.Secp256k1\">https://ziglang.org/documentation/master/std/#std.crypto.pcurves.secp256k1.Secp256k1</a><br>\nschnorr is an optional module, almost certainly implemented</p>",
+        "id": 569607001,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769124426
+    },
+    {
+        "content": "<p>if it is not a port or wrapper around <code>libsecp256k1</code> it may be less desirable nonetheless</p>",
+        "id": 569607058,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769124462
+    },
+    {
+        "content": "<p>(this is my sophomoric understanding, not a crypto developer, IANAL etc etc)</p>",
+        "id": 569607120,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769124493
+    },
+    {
+        "content": "<p>If you design an idiomatic Roc module that wraps that zig functionality... you could propose the crypto primitive be added to Roc's builtins in a new ideas thread.</p>",
+        "id": 569607177,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769124529
+    },
+    {
+        "content": "<p>If we have a solid design proposal -- I am reasonably confident I could implement it in no time</p>",
+        "id": 569607217,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769124560
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> do you have any thoughts on adding secp256k1 as a primitive?</p>",
+        "id": 569607255,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769124591
+    },
+    {
+        "content": "<blockquote>\n<p>If you design an idiomatic Roc module that wraps that zig functionality... you could propose the crypto primitive be added to Roc's builtins in a new ideas thread.</p>\n</blockquote>\n<p>I'm gonna call this a....     S T R E T C H  G O A L</p>",
+        "id": 569607392,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769124684
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"780900\">Rick Hull</span> <a href=\"#narrow/channel/302903-platform-development/topic/roc-platform-template-zig/near/569607392\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>If you design an idiomatic Roc module that wraps that zig functionality... you could propose the crypto primitive be added to Roc's builtins in a new ideas thread.</p>\n</blockquote>\n<p>I'm gonna call this a....     S T R E T C H  G O A L</p>\n</blockquote>\n<p>If you are interesting in working on this... here was the version we almost landed for SHA256 <a href=\"https://github.com/MatthewJohnHeath/rocSHA/blob/1f30fe05e1f617605f8c17c92c2d1ac5290cc667/crates/compiler/builtins/roc/Crypto.roc\">https://github.com/MatthewJohnHeath/rocSHA/blob/1f30fe05e1f617605f8c17c92c2d1ac5290cc667/crates/compiler/builtins/roc/Crypto.roc</a></p>",
+        "id": 569608962,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769125487
+    },
+    {
+        "content": "<p>That will need some translation to use type modules and associated methods etc... but it should give you some ideas</p>",
+        "id": 569609045,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769125518
+    },
+    {
+        "content": "<p>honestly, my next step is to develop nostr in Roc on top of <code>schnorr-platform</code>; I was just getting comfortable with \"old-roc\" when I realized there was a \"new-roc\", and I hardly know either.</p>",
+        "id": 569612237,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769127068
+    },
+    {
+        "content": "<p>Using this topic as a scratchpad, maybe better than creating new topics.  Are <code>build.sh</code> and <code>bundle.sh</code> expected to be standards carried forwards?  Or would something like <code>justfile</code> or <code>Makefile</code> be better?</p>",
+        "id": 569616876,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769130006
+    },
+    {
+        "content": "<p>The plan is to replace them with <code>build.roc</code> and <code>bundle.roc</code></p>",
+        "id": 569616976,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769130066
+    },
+    {
+        "content": "<p>ok, good to know!</p>",
+        "id": 569616991,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769130076
+    },
+    {
+        "content": "<p>i haven't looked at these in detail but now on my radar</p>",
+        "id": 569617015,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769130094
+    },
+    {
+        "content": "<p>Those scripts don't exist yet, we have them in the old compiler version of basic-cli for an example</p>",
+        "id": 569617061,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769130122
+    },
+    {
+        "content": "<p><del>is there a canonical build.roc?</del></p>",
+        "id": 569617081,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769130131
+    },
+    {
+        "content": "<p>No -- the plan is to use basic-cli for scripting, but we don't have a release for that yet</p>",
+        "id": 569617107,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769130158
+    },
+    {
+        "content": "<p>I'm happy to assist with whatever I can with that, but I need to get much more comfortable with <code>basic-cli</code> ergos</p>",
+        "id": 569617178,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769130210
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/channel/302903-platform-development/topic/roc-platform-template-zig/near/569607255\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> do you have any thoughts on adding secp256k1 as a primitive?</p>\n</blockquote>\n<p>Nope... not really.</p>",
+        "id": 569820676,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1769213073
+    }
+]

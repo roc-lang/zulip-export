@@ -1,0 +1,158 @@
+<html>
+<head><meta charset="utf-8"><title>Annotation dependent inference when destructuring opaque · bugs · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/index.html">bugs</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html">Annotation dependent inference when destructuring opaque</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="611333588"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Annotation%20dependent%20inference%20when%20destructuring%20opaque/near/611333588" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html#611333588">(Jul 17 2026 at 16:59)</a>:</h4>
+<p>I'm not sure if there's some syntax I don't yet know, but I'm getting a type error only when I don't annotate push or pop from the following:</p>
+<div class="codehilite"><pre><span></span><code>Stack(v) :: {s: List(v)}.{
+    push : Stack(v), v -&gt; Stack(v)
+    push = |{s}, v| {
+        {s: s.append(v)}
+    }
+
+    pop : Stack(v) -&gt; (Stack(v), Try(v, [ListWasEmpty]))
+    pop = |s| {
+        last = s.last()
+        dropped = s.drop_last(1)
+        (Stack.{s: dropped}, last)
+    }
+    new = || {Stack.{s: []}}
+}
+</code></pre></div>
+<p>In both push and pop, the opaque backing type is destructured to get the list. If I use without annotations, I get the following error:</p>
+<div class="codehilite"><pre><span></span><code>┌───────────────┐
+│ TYPE MISMATCH ├─ The push method on Stack has an incompatible type. ────────────────────────────┐
+└┬──────────────┘                                                                                 │
+ │                                                                                                │
+ │  $s = $s.push(2)                                                                               │
+ │       ‾‾                                                                                       │
+ └───────────────────────────────────────────── main.roc:54:10 ┘
+
+    The method push has the type:
+
+        { s: a }, b -&gt; { s: c } where [a.append : a, b -&gt; c]
+
+    But I need it to have the type:
+
+        Stack(v), a -&gt; _ret
+          where [a.from_numeral : Numeral -&gt; Try(a, [InvalidNumeral(Str)])]
+</code></pre></div>
+<p>Adding in annotations the error goes away. Here is an example use for reproduction</p>
+<div class="codehilite"><pre><span></span><code>main! = |_| {
+    var $s = Stack.new()
+    $s = $s.push(2)
+    Ok({})
+}
+</code></pre></div>
+<ul>
+<li>I would have thought that without annotations would be ok, as the <code>Stack</code> member functions can access opaque internal state, as well as any other record of shape <code>{s} where s.append ...</code></li>
+<li>It's invalid syntax (version from last week) to try and destructure like <code>|Stack.{s}|</code>, so I'm not sure how else to signal without annotations that I am expecting <code>Stack</code> not a generic record.</li>
+</ul>
+
+
+
+<a name="611340477"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Annotation%20dependent%20inference%20when%20destructuring%20opaque/near/611340477" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html#611340477">(Jul 17 2026 at 17:39)</a>:</h4>
+<p>Instead of  <code>Stack.{s}</code>, you can use <code>Stack.({x})</code>! But I think that <code>pop</code> would still not work without the annotation (the compiler needs some way to know that <code>s</code> is <code>Stack</code>)</p>
+
+
+
+<a name="611341130"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Annotation%20dependent%20inference%20when%20destructuring%20opaque/near/611341130" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html#611341130">(Jul 17 2026 at 17:41)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="820027">Jonathan</span> <a href="#narrow/channel/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque/near/611333588">said</a>:</p>
+<blockquote>
+<ul>
+<li>I would have thought that without annotations would be ok, as the <code>Stack</code> member functions can access opaque internal state, as well as any other record of shape <code>{s} where s.append ...</code></li>
+</ul>
+</blockquote>
+<ul>
+<li><code>the `Stack` member functions can access opaque internal state</code>: this is not true! the scope inside the <code>Stack.{ ... }</code> has no special access to <code>Stack</code> internals!</li>
+<li><code>as well as any other record of shape `{s}` </code>: this is correct! in many cases the compiler can lift structural types like a record into the nominal type implicitly</li>
+</ul>
+
+
+
+<a name="611341347"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Annotation%20dependent%20inference%20when%20destructuring%20opaque/near/611341347" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html#611341347">(Jul 17 2026 at 17:42)</a>:</h4>
+<p>More broadly, this is a known (and not really solvable) constraint. In many cases, the compiler can figure out how to lift structural values (eg <code>{ ... }</code> or a tag) into a nominal (eg <code>Stack</code>), but not always. In these cases, either annotation or explicitly using the nominal constructor is necessary (eg <code>Stack.({ ... })</code>)</p>
+
+
+
+<a name="611341873"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Annotation%20dependent%20inference%20when%20destructuring%20opaque/near/611341873" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html#611341873">(Jul 17 2026 at 17:44)</a>:</h4>
+<p>All that said, <code>Stack.{s}</code> <em>should</em> work, so that is definitely a bug. I will make an issue &amp; fix</p>
+
+
+
+<a name="611343898"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Annotation%20dependent%20inference%20when%20destructuring%20opaque/near/611343898" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html#611343898">(Jul 17 2026 at 17:54)</a>:</h4>
+<blockquote>
+<p>Stack.({s})</p>
+</blockquote>
+<p>Ahh <span aria-label="face palm" class="emoji emoji-1f926" role="img" title="face palm">:face_palm:</span> Thank you, that's bitten me a few times now.</p>
+<blockquote>
+<p>Stack.{s} should work</p>
+</blockquote>
+<p>Is it conceptually different from Stack(.. or just equivalent sugar?</p>
+<blockquote>
+<p>has no special access to Stack internals</p>
+</blockquote>
+<p>I don't follow here, isn't this the point of opaque? From the langref:</p>
+<blockquote>
+<p>outside its defining module the backing representation is hidden, so the type can only be created and inspected through the methods that module exposes.</p>
+</blockquote>
+
+
+
+<a name="611345987"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Annotation%20dependent%20inference%20when%20destructuring%20opaque/near/611345987" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html#611345987">(Jul 17 2026 at 18:03)</a>:</h4>
+<p>equivalent sugar!</p>
+<p>then sorry, my wording was confusing there:</p>
+<ul>
+<li>you can only create a nominal type in the module that declares it (so yes this is "special access")</li>
+<li>but in the defining module, there is no special nominal coercion logic</li>
+</ul>
+<p>so more on that second point: for all accessible nominal types (eg an opaque nominal in the defining module OR a transparent Nominal anywhere), the compiler can coerce that nominal's backing type into the nominal itself, is it's clear from surrounding context. eg:</p>
+<div class="codehilite" data-code-language="Python"><pre><span></span><code><span class="n">xxx</span> <span class="p">:</span> <span class="n">Stack</span>
+<span class="n">xxx</span> <span class="o">=</span> <span class="p">{</span> <span class="n">s</span><span class="p">:</span> <span class="p">[</span> <span class="o">...</span> <span class="p">]</span> <span class="p">}</span>
+</code></pre></div>
+<p>works, because we know that <code>xxx</code> should be <code>Stack</code>, so we can coerce the plain record</p>
+<p>what I meant was that inside a nominal types method block (<code>Stack := { s: List }.{ ... }</code>), there no <em>extra</em> coercion logic, just the regular coercion I just described</p>
+
+
+
+<a name="611347742"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Annotation%20dependent%20inference%20when%20destructuring%20opaque/near/611347742" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html#611347742">(Jul 17 2026 at 18:14)</a>:</h4>
+<p>I have a PR up for <code>|Stack.{s}|</code>! <a href="https://github.com/roc-lang/roc/pull/10190">https://github.com/roc-lang/roc/pull/10190</a></p>
+
+
+
+<a name="611357969"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Annotation%20dependent%20inference%20when%20destructuring%20opaque/near/611357969" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html#611357969">(Jul 17 2026 at 19:20)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="341568">Jared Ramirez</span> <a href="#narrow/channel/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque/near/611345987">said</a>:</p>
+<blockquote>
+<p>what I meant was that inside a nominal types method block (<code>Stack := { s: List }.{ ... }</code>), there no <em>extra</em> coercion logic, just the regular coercion I just described</p>
+</blockquote>
+<p>ahh, gotcha. Thanks!</p>
+
+
+
+<a name="611359496"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Annotation%20dependent%20inference%20when%20destructuring%20opaque/near/611359496" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque.html#611359496">(Jul 17 2026 at 19:31)</a>:</h4>
+<blockquote>
+<p>Thank you, that's bitten me a few times now.</p>
+</blockquote>
+<p>And also, I'm not sure what to suggest, but I have found it a bit easy to mix up the similar syntaxes <code>|S.({x})|</code>/<code>|S.{x}|</code> and <code>|S({x})|</code> for two distinct types. I don't imagine I'll be the last, perhaps an error hint for this kind of thing?</p>
+
+
+
+<hr><p>Last updated: Jul 24 2026 at 13:09 UTC</p>
+</html>
