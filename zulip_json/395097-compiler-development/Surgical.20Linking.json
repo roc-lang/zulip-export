@@ -1,0 +1,206 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> mentioned that surgical linking will be useful for the graphics platform I have been tinkering with. </p>\n<p>I don't 100% understand how that all works, but my mental model is that we generate an executable that expects to dynamically link Roc in. We can then distribute that with the platform, in <code>roc build --bundle</code> I assume, and then when Roc builds the app the surgical linker can insert the app parts and fix it up so that it works without needing a dynamic library loaded. To do this I think it would also be desirable for platforms to be specify how they are built. I.e. offload the building to <code>build.zig</code> instead of doing that in the Roc cli build pipeline.</p>\n<p>I don't really have a question in here, but just wanted to share.</p>",
+        "id": 395504625,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1696751158
+    },
+    {
+        "content": "<p>Yes that's how it works! Including the bit about platforms being able to specify their own build.</p>\n<p>There is some minimal information the Roc build system needs to know, such as how to run the Zig compiler, what target OS and CPU to ask Zig to build for, etc. That remains true when you have a build.zig.</p>",
+        "id": 395508584,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1696753255
+    },
+    {
+        "content": "<p>Actually, I think I've just realised I can modify my Roc app, rebuild just the roc app using <code>roc build --lib</code> and the \"platform\" part (which is actually now an full executable) doesn't need to be recompiled because it will just dynamically link in the new Roc app (which was compiled to a dylib). </p>\n<p>I guess this is kind of obvious regarding how dynamic libraries work... but I wonder if it would make sense for Roc to be able to distribute the <em>platform</em> as a prebuilt executable which is expecting to dynamically link in a roc app, and use this this from a URL package. So, when I run <code>roc run</code> it can see that the platform is already built into an app, and then builds roc into a dynamic library and uses that. Does this make sense? or am I talking crazy?</p>",
+        "id": 395642582,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1696839169
+    },
+    {
+        "content": "<p>one tricky thing is that we have two-way communication: the roc app provides symbols to the host (e.g. mainForHost) , but also requires symbols from it (e.g. roc_alloc). That has been hard to get to work in the past (but should technically be possible I think?)</p>",
+        "id": 395677956,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1696851288
+    },
+    {
+        "content": "<p>theoretically linkers have flags that should just fix this (<code>--export-symbols</code> on linux, <code>--keep-symbols</code> no mac, <code>-rdynamic</code> in general for rust code)...sadly sometimes code is removed before we even get to the linker</p>",
+        "id": 395727675,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1696866795
+    },
+    {
+        "content": "<p>I've been looking at how to make a <code>build.zig</code> that generates the expected files for a roc package. I am not sure what the <code>.rh</code> file is specifically. From <code>crates/compiler/build/src/program.rs</code> I can see that it is used with the surgical linker, and my understanding is that this is an executable that roc will copy and then the linker will modify in place?</p>\n<p>To make a satisfactory <code>.rh</code> file manually, should I provide a dummy implementation separately for e.g. <code>roc__mainForHost_1_exposed_generic</code> and build an executable?</p>\n<div class=\"codehilite\"><pre><span></span><code>% ls -al ~/.cache/roc/packages/github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio/\n.. removed\n-rw-r--r--   1 luke  staff  202238528 13 Aug 00:46 linux-arm64.o\n-rw-r--r--   1 luke  staff  195862808 13 Aug 00:46 linux-x64.o\n-rw-r--r--   1 luke  staff  109044440 13 Aug 00:46 linux-x64.rh\n-rw-r--r--   1 luke  staff   37414704 13 Aug 00:46 macos-arm64.o\n-rw-r--r--   1 luke  staff   43776984 13 Aug 00:46 macos-x64.o\n-rw-r--r--   1 luke  staff       2300 13 Aug 00:46 metadata_linux-x64.rm\n</code></pre></div>\n<p>Also what is the <code>metadata_linux-x64.rm</code> file? I'm also unsure what that file is or how to generate it.</p>",
+        "id": 398597020,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1698290635
+    },
+    {
+        "content": "<p>I should be able to modify roc cli to use <code>zig build</code> for rebuilding a zig platform. I'm also hoping to have a <code>build.zig</code> that can cross compiles to generate the various artifacts required for a bundle.</p>",
+        "id": 398597746,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1698290932
+    },
+    {
+        "content": "<p>Yeah, both of those files are outputs of the surgical linker preprocessing step</p>",
+        "id": 398607213,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698294272
+    },
+    {
+        "content": "<p>Right, so I have to build them on the target operating system if I want to include these in the bundle. It looks like roc re-builds the platform, then immediately pre-processes the host. So to clarify, do I need to include these files in the bundle? I think I may have gone down a rabbit hole, and this isn't the issue with my zig cross-compiled platform.</p>",
+        "id": 398613158,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1698297618
+    },
+    {
+        "content": "<p>Theoretically the code could run on any platform</p>",
+        "id": 398678312,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698323210
+    },
+    {
+        "content": "<p>But not sure where all it is pipelined / exposed</p>",
+        "id": 398678425,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698323255
+    },
+    {
+        "content": "<p>The .rm and .rh files need to be in the bundle.</p>",
+        "id": 398860697,
+        "sender_full_name": "Anton",
+        "timestamp": 1698399038
+    },
+    {
+        "content": "<p>Can someone please have a look at <a href=\"https://github.com/lukewilliamboswell/basic-graphics\">https://github.com/lukewilliamboswell/basic-graphics</a> for me? I think we are really close to having a platform that people can use to make graphics, but the surgical linking issue prevents that for linux. I'm not sure how to generate the <code>.rm</code> and <code>.rh</code> files. </p>\n<p>Also we don't have roc cli building the platform using <code>build.zig</code> so I need another step for users to build the platform i.e. <code>bash build.sh</code>. This means that you have to use <code>roc run --prebuilt-platform</code> when running locally. </p>\n<p>Maybe a better experience here would be to see the prebuilt platform and then default to use that?  The issue with this is that when you make a change to a platform for development, you would have to tell roc somehow to rebuild the platform. So, I guess the best option is to always rebuilt the platform.</p>",
+        "id": 400045560,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1698975284
+    },
+    {
+        "content": "<p>Does your platform link with roc or consume it as a shared library?</p>",
+        "id": 400045900,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698975518
+    },
+    {
+        "content": "<p>The platform is a static library <code>lib.a</code> file.</p>",
+        "id": 400045957,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1698975556
+    },
+    {
+        "content": "<p>Roc cli links that in using <code>ld</code> for legacy linker I think.</p>",
+        "id": 400045985,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1698975579
+    },
+    {
+        "content": "<p>For the surgical linker it also has to be able to build as an executable that consumes roc as a shared library.</p>",
+        "id": 400046112,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698975650
+    },
+    {
+        "content": "<p>The other issue (which I believe is minor) is that I rename the <code>.a</code> files to <code>.o</code> and it seems to link fine. Should roc use <code>.a</code> archives instead or be able to accept both?</p>",
+        "id": 400046127,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1698975668
+    },
+    {
+        "content": "<p>Roc should accept both probably.</p>",
+        "id": 400046162,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698975697
+    },
+    {
+        "content": "<p>Maybe if I could provide a dummy implementation for the <code>extern fn roc__mainForHost_1_exposed_generic(*RocStr, *RocStr) void;</code> then I build it as an executable. But I'm not sure what happens next. Do I use roc cli somehow to preprocess it for surgical linker?</p>",
+        "id": 400046399,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1698975852
+    },
+    {
+        "content": "<p>So roc can generate a dummy lib for you that will provide <code>extern fn roc__mainForHost_1_exposed_generic(*RocStr, *RocStr) void;</code> and friends.</p>",
+        "id": 400049294,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698977537
+    },
+    {
+        "content": "<p>then you would link against that</p>",
+        "id": 400049314,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698977547
+    },
+    {
+        "content": "<p>I am not sure the state of doing this from not linux</p>",
+        "id": 400049359,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698977575
+    },
+    {
+        "content": "<p><code>roc gen-stub-lib</code> then link against the generated lib</p>",
+        "id": 400049937,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698977897
+    },
+    {
+        "content": "<p>This is something roc <code>link.rs</code> normally does under the hood automatically.</p>",
+        "id": 400049975,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698977928
+    },
+    {
+        "content": "<p>I think we may need to expose some way to call the surgical linker preprocessor on any platform if we want to enable building the <code>.rm</code> and <code>.rh</code> files from non-linux</p>",
+        "id": 400050124,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698978015
+    },
+    {
+        "content": "<p>Should just be a matter of pipelining and exposing a command</p>",
+        "id": 400050158,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698978042
+    },
+    {
+        "content": "<p>With that, I think you could drive generating all build artifacts from a <code>build.zig</code> file.</p>",
+        "id": 400050229,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698978102
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> can you please help me understand how we go from a platform to the preprocessed files required for surgical linking?</p>\n<p>My understanding is;</p>\n<ul>\n<li>Use <code>roc gen-stub-lib examples/app.roc</code> to stubbed library of the application, the app can be anthing, it doesn't matter, e.g. just returns <code>Task.ok {}</code> and does nothing.</li>\n<li>Build the platform and link the library from the previous step into a standalone executable binary</li>\n<li>Use  <code>roc preprocess-host standalone-platform-binary</code> on that  binary to produce the  <code>.rh</code> and <code>.rm</code> files used by the surgical linker</li>\n<li>Include the <code>.rh</code> and <code>.rm</code> alongside the <code>platform/main.roc</code> so they get packaged with <code>roc build --bundle .tar.br</code></li>\n</ul>\n<p>I think the problem I am currently seeing is unrelated to this, though I'm not sure. Whenever I run <code>gen-stub-lib</code> or <code>preprocess-host</code> I get a linker error.</p>\n<div class=\"codehilite\"><pre><span></span><code>$ roc gen-stub-lib examples/hello-world.roc\nthread &#39;main&#39; panicked at crates/linker/src/generate_dylib/macho.rs:90:27:\nFailed to link dummy shared library - stderr of the `ld` command was:\nld: Missing -platform_version option\n\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>$ roc preprocess-host examples/hello-world.roc\nthread &#39;main&#39; panicked at crates/linker/src/generate_dylib/macho.rs:90:27:\nFailed to link dummy shared library - stderr of the `ld` command was:\nld: Missing -platform_version option\n\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>",
+        "id": 435817535,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714277811
+    },
+    {
+        "content": "<p>Lol, almost immediately after posting that I figured out I'm missing the target <code>roc gen-stub-lib --target linux-x64 examples/hello-world.roc</code> wors <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span></p>",
+        "id": 435817645,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714277949
+    },
+    {
+        "content": "<p>So this confirms we have a bug in the command for building a dylib for macos, or it's not yet implemented.</p>",
+        "id": 435820698,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714279618
+    },
+    {
+        "content": "<p>As a note, <code>gen-stub-lib</code> is techincailly not need and we should maybe remove it. Instead you can do <code>roc build --lib someExampleApp.roc</code> Then link the platform against that and contiue with the rest of the process. Just important that the app is called <code>libapp</code> when linked to the platform.</p>",
+        "id": 435893455,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714325508
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Surgical.20Linking/near/435893455\">said</a>:</p>\n<blockquote>\n<p>we should maybe remove it</p>\n</blockquote>\n<p>I like that idea - seems like it would remove a footgun since there's a better alternative way to do it! <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 435893551,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714325583
+    },
+    {
+        "content": "<p>I would like, if you could remove <code>gen-stub-lib</code>. There are currently two ways to do this step (with <code>build --lib</code>or with <code>gen-stub-lib</code>). This was confusing for me.</p>\n<p>When you remove it, you probably also have to change<code>roc preprocess-host</code>. It is currently <a href=\"https://github.com/roc-lang/roc/blob/e424f4bacca17b5e1c2df8ad38d8498c0367d0b0/crates/cli/src/main.rs#L146\">calling</a> <code>gen-stub-lib</code> internally. This is a problem. It recreates the <code>libapp.so</code>-file. So currently, you have to remember to call <code>roc build --lib</code> after <code>roc preprocess-host</code>, or you have a wrong <code>libapp.so</code> file in your platform.</p>",
+        "id": 435895711,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1714327429
+    }
+]

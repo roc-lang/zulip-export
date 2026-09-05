@@ -1,0 +1,272 @@
+<html>
+<head><meta charset="utf-8"><title>wasm memory · compiler development · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/index.html">compiler development</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html">wasm memory</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="616710269"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616710269" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616710269">(Aug 15 2026 at 15:09)</a>:</h4>
+<p>Hey! I'm optimizing the performance of Joy and may have gotten faster than Elm in <code>js-framework-benchmark</code> which is super exciting! However, I've run into some issues regarding memory and want to check my current understanding and what's intended behaviour:</p>
+<ol>
+<li>
+<p>Roc applies a 64 MB default initial memory to wasm builds if you don't pass <code>--wasm-memory</code>, both through <code>wasm-ld</code> (<code>--opt=size</code>/<code>speed</code>) and the dev backend's linker. Would it be desirable to have the linker size the memory itself if you don't specify the size? I've submitted a PR: <a href="https://github.com/roc-lang/roc/pull/10803">https://github.com/roc-lang/roc/pull/10803</a></p>
+</li>
+<li>
+<p>In <code>--opt=speed</code>, the <code>--wasm-memory</code> value is passed to <code>wasm-ld</code> as <code>--initial-memory</code>, which treats it as a fixed number and fails if it's too low. The internal Roc linker in <code>--opt=dev</code> treats it as a floor and happily bumps it up to the app's required level. So the same flag behaves differently between opt levels. What do we want to do here?</p>
+</li>
+</ol>
+<p>Suggestion:</p>
+<ul>
+<li>Rename <code>--wasm-memory</code> to <code>--wasm-min-memory</code>.</li>
+<li>When <code>--wasm-min-memory</code>/<code>minimum_memory</code> is set, make <code>wasm-ld</code> link once without it, read the memory minimum out of the produced binary, and if it's lower than the minimum, re-link with <code>--initial-memory</code> set to the given minimum. Brutish, but I don't know of a better/equally reliable way.</li>
+<li>Add the flag <code>--wasm-max-memory</code> and map that to <code>wasm-ld</code>'s <code>--max-memory</code>, and let it override the Roc platform target config <code>maximum_memory</code>. Fix Roc's linker: it currently doesn't seem to verify that max &gt;= min.</li>
+</ul>
+<p>Given the above I believe both opt levels should behave consistently. You could go in a different direction here, e.g. say you want to specify an initial heap size instead of "total" size etc.</p>
+<ol start="3">
+<li>Is there/would we want a way to make Roc pass <code>--stack-first</code> to <code>wasm-ld</code>? Would that feature be desirable in Roc's linker? I'm not sure I'd use this if it were available, but it'd be interesting to try.</li>
+</ol>
+
+
+
+<a name="616755876"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616755876" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616755876">(Aug 16 2026 at 02:37)</a>:</h4>
+<p>I think we should probably do <code>--stack-first</code> automatically, always - I didn't know that was an option!</p>
+
+
+
+<a name="616773713"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616773713" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616773713">(Aug 16 2026 at 07:40)</a>:</h4>
+<p>Yes, it’s great and should be the default! However, it also increases binary size because:</p>
+<ul>
+<li>The pointer addresses for your apps static data are now larger (or, encode larger). Every reference is more expensive.</li>
+<li>You can’t use <code>wasm-opt</code>’s <code>—low-memory-unused</code>.</li>
+</ul>
+<p>Even after brotli these can add up and give you 0.5-5% on your bundle size (my best case is an app full of translation strings and little logic). So, if you know you don’t need the safety of <code>—stack-first</code>, it’d be nice to be able to turn it off.</p>
+<p>I’d like to port some apps and run full benchmarks with a plethora of config options.</p>
+
+
+
+<a name="616793434"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616793434" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616793434">(Aug 16 2026 at 12:57)</a>:</h4>
+<p>hrm, this reveals some problems in how we're compiling to wasm that I wasn't aware of before</p>
+
+
+
+<a name="616793455"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616793455" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616793455">(Aug 16 2026 at 12:57)</a>:</h4>
+<p>the challenge is that we have a design constraint of "compiled Roc code does not produce undefined behaivor as long as the host implementation is following the rules"</p>
+
+
+
+<a name="616793501"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616793501" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616793501">(Aug 16 2026 at 12:58)</a>:</h4>
+<p>and having just gone down a rabbit hole of stack overflows in wasm, it seems like it is currently impossible to avoid undefined behavior in wasm without a serious runtime performance cost <span aria-label="half frown" class="emoji emoji-1f615" role="img" title="half frown">:half_frown:</span></p>
+
+
+
+<a name="616793788"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616793788" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616793788">(Aug 16 2026 at 13:01)</a>:</h4>
+<p>because:</p>
+<ul>
+<li>if you put the stack at the end of the memory region and have stack addresses increase with new allocations, then you give up the ability to <code>grow</code> the size of the address space on the fly</li>
+<li>if you put the stack at the beginning of the memory region and have stack addresses decrease with new allocations, then you get the above performance penalty, <em>plus:</em><ul>
+<li>if you get really unlucky, you can end up with a stack allocation that is at exactly address 0 without quite overflowing and wrapping around (which would trigger a wasm trap on "illegal memory access" and give you the desired stack overflow crash)</li>
+<li>if you're unlucky enough for this to happen, and something else has a pointer to that memory, it will be a pointer to address 0 - which at runtime looks like a null pointer even though it's actually pointing to a valid address</li>
+<li>therefore, conditionals which checks to see if that pointer is null will incorrectly return true, and now we have undefined behavior</li>
+</ul>
+</li>
+</ul>
+
+
+
+<a name="616793838"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616793838" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616793838">(Aug 16 2026 at 13:02)</a>:</h4>
+<p>the obvious way to fix this is to emit explicit bounds checks around either every stack allocation or every memory address lookup, both of which would be crazy runtime costs to pay</p>
+
+
+
+<a name="616793933"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616793933" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616793933">(Aug 16 2026 at 13:03)</a>:</h4>
+<p>the less-obvious, roc-specific way to fix it would be to make sure we never treat null pointers as semantic; that is, never emit an "if this memory address is 0" check (and always detect such things in different ways) - which I think "just" means we miss out on some optimization opportunities</p>
+
+
+
+<a name="616793961"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616793961" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616793961">(Aug 16 2026 at 13:04)</a>:</h4>
+<p>(that is, only do that when building for wasm with stack growing towards 0)</p>
+
+
+
+<a name="616794135"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616794135" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616794135">(Aug 16 2026 at 13:06)</a>:</h4>
+<p>so in that world, if we want to maintain the guarantee that you can write whatever Roc code you want without introducing undefined behavior, the two options would have to be:</p>
+<ul>
+<li>stack decreases towards 0 + we never perform optimizations that would lead to null pointer checks at runtime - which basically means some increased total memory usage due to missing out on those optimizations</li>
+<li>stack increases + you have to specify an up-front hard cap on the total heap size you want for the entire duration of the program, and if you exhaust that address space, the program OOMs because <code>grow</code> is no longer an option</li>
+</ul>
+
+
+
+<a name="616794206"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616794206" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616794206">(Aug 16 2026 at 13:07)</a>:</h4>
+<p>so in both of those configurations, you get the "stack increments and decrements are cheap and don't require an explicit bounds check" and also "no undefined behavior from compiled Roc code" but you do of course get the other downsides mentioned there</p>
+
+
+
+<a name="616794297"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616794297" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616794297">(Aug 16 2026 at 13:09)</a>:</h4>
+<p>we could in theory say "hey just assume the 0 edge case will never come up, and it's okay if it's UB" but I really don't like the idea of opening the can of worms of "Roc programs actually can produce UB" - at that point we get into territory like "well now if we define integer overflow as UB, we can unlock even more compiler optimizations..." which is a can of worms I'd prefer not to open <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="616795931"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616795931" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616795931">(Aug 16 2026 at 13:34)</a>:</h4>
+<blockquote>
+<p>it will be a pointer to address 0 - which at runtime looks like a null pointer even though it's actually pointing to a valid address</p>
+</blockquote>
+<p>Must null pointers be address 0? Could they be represented by something else so that this issue goes away?</p>
+
+
+
+<a name="616796043"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616796043" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616796043">(Aug 16 2026 at 13:36)</a>:</h4>
+<p>hm, actually that could work!</p>
+
+
+
+<a name="616796071"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616796071" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616796071">(Aug 16 2026 at 13:36)</a>:</h4>
+<p>like we could use the highest u32 to represent them</p>
+
+
+
+<a name="616796090"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616796090" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616796090">(Aug 16 2026 at 13:37)</a>:</h4>
+<p>and then forbid growing the heap that high</p>
+
+
+
+<a name="616796114"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616796114" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616796114">(Aug 16 2026 at 13:37)</a>:</h4>
+<p>Yeah</p>
+
+
+
+<a name="616802986"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616802986" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616802986">(Aug 16 2026 at 14:09)</a>:</h4>
+<p>ok so what if, for simplicity, we just said for now we only support growing towards 0 and we do that "redefine null" trick?</p>
+
+
+
+<a name="616806478"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616806478" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616806478">(Aug 16 2026 at 14:55)</a>:</h4>
+<p>I totally understand the point about this meaning that static constants now have larger integer addresses, which can increase total binary size, but I'm wondering if that option is actively needed for your use case already, as opposed to something we could explore later while short-term having only the "grow towards zero" option with the UB removed <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="616806529"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616806529" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616806529">(Aug 16 2026 at 14:55)</a>:</h4>
+<p>(and either way, to your point about both min and max memory making sense to have as CLI flags, that seems fine <span aria-label="+1" class="emoji emoji-1f44d" role="img" title="+1">:+1:</span>)</p>
+
+
+
+<a name="616809256"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616809256" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616809256">(Aug 16 2026 at 15:30)</a>:</h4>
+<p>I think that sounds like a reasonable thing to do now</p>
+<blockquote>
+<p>if you put the stack at the beginning of the memory region and have stack addresses decrease with new allocations, then you get the above performance penalty, <em>plus:</em></p>
+</blockquote>
+<p>What performance penalty are you referring to here?</p>
+<blockquote>
+<p>if that option is actively needed for your use case already, as opposed to something we could explore later while short-term having only the "grow towards zero" option with the UB removed</p>
+</blockquote>
+<p>Indeed it's not needed, just a potential nice-to-have which I'd have to evaluate the value of anyway.</p>
+<p>However, just to clarify, the current situation is workable so there's no stress to get something out quick. I'm doing this as "good enough for now":</p>
+<div class="codehilite"><pre><span></span><code>## Stack size
+# We are using a fixed stack size of 1 MiB, which lets us have roughly
+# 10 000 levels of HTML nesting in the first render and 4 000 levels in
+# subsequent re-renders. Ergo it _should_ not overflow for the vast majority
+# of apps, but _could_ for severe outliers.
+#
+# We can&#39;t use `--stack-first`, because Roc does not currently expose that to
+# us, which means that if we overflow the stack we&#39;ll be corrupting the app&#39;s
+# static data section.
+#
+# To manage that danger we have two countermeasures:
+#
+# a) A canary memory band at the stack floor. The host scans it after every
+#    dispatch and fails loudly if any word was overwritten. Nothing fires at
+#    write time, so detection waits for the dispatch boundary, and a single
+#    frame larger than the band can step over it unseen.
+#
+# b) A stack pointer check in `roc_alloc` which traps as soon as the pointer
+#    is below the floor. Every allocation goes through the host allocator, also
+#    the ones Roc code makes, and render recursion allocates on nearly every
+#    level, so this fires mid-dispatch and catches frames of any size. Its
+#    blind spot is recursion that never allocates, which is covered by a).
+#
+# In order to have these checks we must keep the hardcoded stack size in
+# sync in two spots: the `--wasm-stack-size` flag here and `STACK_SIZE` in
+# host/host.rs.
+#
+# The engine&#39;s native call stack is a separate limit that backstops both.
+</code></pre></div>
+<p>... which, while not being the best long-term solution, seems to work really well and according to my testing gives:</p>
+<ul>
+<li>Cleaner error handling in huge apps than both Leptos and Elm</li>
+<li>Performance above Elm and below Leptos (adding that <code>roc_alloc</code> check reduced <code>js-framework-benchmark</code> perf by 0.3-1% which is totally fine)</li>
+<li>Bundle size larger than Elm, and smaller than Leptos</li>
+</ul>
+<p>If we can get rid of the UB on top of this I'm super happy ;D</p>
+
+
+
+<a name="616812689"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616812689" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616812689">(Aug 16 2026 at 16:21)</a>:</h4>
+<p>nice, yeah this design should fix both the UB and also mean you can replace that defensive scanning with just letting wasm trap normally for out-of-bounds memory reads (and then optionally investigating after the fact if it was a stack overflow, in case you want to handle that differently)</p>
+
+
+
+<a name="616812818"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616812818" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616812818">(Aug 16 2026 at 16:23)</a>:</h4>
+<p>Indeed, and regarding the perf penalty you mentioned, did you mean bundle size penalty perhaps? I can't think of any other penalty <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="616812825"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616812825" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616812825">(Aug 16 2026 at 16:23)</a>:</h4>
+<p>regarding what I meant about "the above performance potentially" - I think I previously had a bullet point above there which I ended up deleting because I realized it wasn't a necessary performance cost after all, so never mind that reference <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="616812844"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616812844" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616812844">(Aug 16 2026 at 16:24)</a>:</h4>
+<p>Cool!</p>
+
+
+
+<a name="616812866"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616812866" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616812866">(Aug 16 2026 at 16:24)</a>:</h4>
+<p>Then this is just essentially <code>--stack-first</code> with a fix for that 0 UB, which means we're aligned with what other wasm-people are doing <span aria-label="thumbs up" class="emoji emoji-1f44d" role="img" title="thumbs up">:thumbs_up:</span></p>
+
+
+
+<a name="616818382"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616818382" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616818382">(Aug 16 2026 at 17:42)</a>:</h4>
+<p>well except that I don't think anyone else is attempting to prevent the UB <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="616825548"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/395097-compiler%20development/topic/wasm%20memory/near/616825548" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/395097-compiler-development/topic/wasm.20memory.html#616825548">(Aug 16 2026 at 19:10)</a>:</h4>
+<p>That's probably very true <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<hr><p>Last updated: Sep 05 2026 at 14:09 UTC</p>
+</html>

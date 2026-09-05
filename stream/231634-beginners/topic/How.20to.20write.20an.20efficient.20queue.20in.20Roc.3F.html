@@ -1,0 +1,141 @@
+<html>
+<head><meta charset="utf-8"><title>How to write an efficient queue in Roc? · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/How.20to.20write.20an.20efficient.20queue.20in.20Roc.3F.html">How to write an efficient queue in Roc?</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="617562322"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/How%20to%20write%20an%20efficient%20queue%20in%20Roc%3F/near/617562322" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> cerk <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/How.20to.20write.20an.20efficient.20queue.20in.20Roc.3F.html#617562322">(Aug 19 2026 at 22:41)</a>:</h4>
+<p>I'm slowly making my way through some Everybody Codes problems and a lot of the time I'm reaching for a queue data structure. In Go, I'm able to make a simple queue using slices. To enqueue, I append to the slice and to dequeue, I can get the head using q[0] and get the tail using q[1:].</p>
+<p>In Roc, I'm experiencing slow performance anytime there are a lot of elements involved. I tried to make a simple flood-fill example:</p>
+<div class="codehilite"><pre><span></span><code>main! = |args| {
+    size = U64.from_str(args.get(0)?)?
+
+    # Flood fill a 1D array, starting in its middle.
+    # Use a queue to keep track of the next flood points under consideration.
+    var $array = List.repeat(0, size)
+    var $queue = [size / 2]
+    while $queue.len() &gt; 0 {
+        head = $queue.get(0)?
+        $queue = $queue.drop_first(1)
+        $array = $array.set(head, 1)?
+        if head &gt; 0 {
+            left = head - 1
+            if $array.get(left)? == 0 {
+                $queue = $queue.append(left)
+            }
+        }
+        if head &lt; $array.len() - 1 {
+            right = head + 1
+            if $array.get(right)? == 0 {
+                $queue = $queue.append(right)
+            }
+        }
+    }
+
+    for a in $array {
+        if a != 1 {
+            return Err(FloodFillIncorrect)
+        }
+    }
+
+    Ok({})
+}
+</code></pre></div>
+<p>Some sample runtimes on my machine after building with --opt=speed:</p>
+<div class="codehilite"><pre><span></span><code>$ time ./floodfill 1000
+real    0m0.008s
+user    0m0.002s
+sys 0m0.006s
+
+$ time ./floodfill 10000
+real    0m0.087s
+user    0m0.025s
+sys 0m0.059s
+
+$ time ./floodfill 100000
+real    0m0.454s
+user    0m0.110s
+sys 0m0.340s
+
+$ time ./floodfill 1000000
+real    0m4.246s
+user    0m1.004s
+sys 0m3.203s
+
+$ time ./floodfill 10000000
+real    0m42.567s
+user    0m10.011s
+sys 0m32.195s
+</code></pre></div>
+<p>I looked on github and found similar issues (but not quite the same):<br>
+<a href="https://github.com/roc-lang/roc/issues/10851">https://github.com/roc-lang/roc/issues/10851</a><br>
+<a href="https://github.com/roc-lang/roc/issues/10849">https://github.com/roc-lang/roc/issues/10849</a><br>
+<a href="https://github.com/roc-lang/roc/issues/10848">https://github.com/roc-lang/roc/issues/10848</a></p>
+<p>So are my problems due to my queue implementation being inefficient or due to a performance bug in the Roc compiler? Any guidance you could give me would be great!</p>
+
+
+
+<a name="617574919"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/How%20to%20write%20an%20efficient%20queue%20in%20Roc%3F/near/617574919" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/How.20to.20write.20an.20efficient.20queue.20in.20Roc.3F.html#617574919">(Aug 20 2026 at 00:24)</a>:</h4>
+<p>Thanks for the clear example <span class="user-mention" data-user-id="1180662">@cerk</span> this was interesting to dig into and uncovered some bugs and compiler optimizations we can follow up with. </p>
+<p>I asked my agentic friends to swing off some performance tools. The results are here if anyone is interested to read more about the approach </p>
+<p><a href="https://gist.github.com/lukewilliamboswell/4883369c71baf5b65d79186644de3f07">https://gist.github.com/lukewilliamboswell/4883369c71baf5b65d79186644de3f07</a></p>
+<p>In short, the <code>List.drop_first(1)</code> creates a seamless slice whose data pointer has moved past the beginning of the allocation. When you then call <code>append</code>, Roc doesn't reuse the capacity before that pointer, it allocates a new list, copies the remaining elements, and release the old allocation.</p>
+<p>A better general representation retains the list and advance instead of repeatedly calling <code>drop_first</code> like;</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>var $queue = List.with_capacity(size)
+$queue = $queue.append(start)
+var $cursor = 0
+while $cursor &lt; $queue.len() {
+    point = $queue.get($cursor)?
+    $cursor = $cursor + 1
+    # enqueue with $queue.append(...)
+}
+</code></pre></div>
+<p>For this flood fill, marking cells as visited when they are enqueued also prevents the same cell from being queued more than once. Explicitly using <code>0.U8</code> and <code>1.U8</code> for the visited array avoids the original program’s inferred 16-byte <code>Dec</code> elements.</p>
+<p>With those changes, the Roc implementation became allocation-free inside the traversal loop and took about <code>8.7 ms</code> at 1,000,000 elements. The corresponding Zig implementation took about <code>2.2 ms</code>. The remaining difference looks like compiler optimization work.</p>
+
+
+
+<a name="617589590"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/How%20to%20write%20an%20efficient%20queue%20in%20Roc%3F/near/617589590" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> cerk <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/How.20to.20write.20an.20efficient.20queue.20in.20Roc.3F.html#617589590">(Aug 20 2026 at 02:56)</a>:</h4>
+<p>Thanks <span class="user-mention" data-user-id="515757">@Luke Boswell</span>. Your explanation was helpful and clear. I'll stop using <code>List.drop_first(1)</code>, preallocate the queue when possible and use <code>$cursor</code>.</p>
+<p>Note that the queue size in my example only gets up to a maximum of 2 because of the 0 checks in the array. I.e., if I put this check in the while loop...</p>
+<div class="codehilite"><pre><span></span><code>    while $queue.len() &gt; 0 {
+        if $queue.len() &gt; 2 {
+            crash &quot;too many items in queue!&quot;
+        }
+        .
+        .
+        .
+    }
+</code></pre></div>
+<p>...the program never crashes. I now understand that I'm continually allocating because of <code>List.drop_first(1)</code> but it should be a small allocation. This repeated small allocation would be enough to cause the slowdown I'm seeing?</p>
+
+
+
+<a name="617597004"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/How%20to%20write%20an%20efficient%20queue%20in%20Roc%3F/near/617597004" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Eric Rogstad <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/How.20to.20write.20an.20efficient.20queue.20in.20Roc.3F.html#617597004">(Aug 20 2026 at 04:21)</a>:</h4>
+<p>I didn't follow the cursor suggestion. Is the idea that you reserve some size in memory and then wrap around to the beginning if you append off the end (and if the beginning has been freed up by dequeues)? Or is it something else?</p>
+
+
+
+<a name="617597634"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/How%20to%20write%20an%20efficient%20queue%20in%20Roc%3F/near/617597634" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/How.20to.20write.20an.20efficient.20queue.20in.20Roc.3F.html#617597634">(Aug 20 2026 at 04:27)</a>:</h4>
+<p>It's not reusable or anything, just indexes into the list</p>
+
+
+
+<a name="617672571"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/How%20to%20write%20an%20efficient%20queue%20in%20Roc%3F/near/617672571" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/How.20to.20write.20an.20efficient.20queue.20in.20Roc.3F.html#617672571">(Aug 20 2026 at 11:35)</a>:</h4>
+<p>I'd name that <code>$index</code> personally <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<hr><p>Last updated: Sep 05 2026 at 14:09 UTC</p>
+</html>

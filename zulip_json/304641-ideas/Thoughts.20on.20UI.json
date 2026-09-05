@@ -1,0 +1,1196 @@
+[
+    {
+        "content": "<p>I'd like to figure out how to write UI code in Roc. I plan on writing a series of short (?) articles in this thread about UI approaches / framework design / philosophy in this thread with the goal of organizing my own thoughts and providing background for people who aren't as into the UI side of programming. After I get tired of writing about more general topics I'll go into the API alternatives in Roc I've been working through.</p>\n<p>This will be coming mostly from a front-end persepctive even though I really don't want to tie any system I design to the browser. I've spent most of my career doing frontend development starting with the Gecko XPFE (cross-platform front end) in 2001 and more or less continuously since. I'm interested in the framework/system design of UI because I've done four graphical interface builders at different companies over the course of my career. I've done small projects in the various desktop and mobile native options but nothing in anger.</p>\n<p>I am looking for feedback on all this and am happy to answer questions. In particular, if you know of something nice from native or gaming UI I should look into, I'd like to hear about it.</p>",
+        "id": 612894256,
+        "sender_full_name": "Karl",
+        "timestamp": 1785129101
+    },
+    {
+        "content": "<h2>The LLM in the room</h2>\n<p>The switch to agent coding does a couple things for UI.</p>\n<p>The first is that it makes some degree of authoring friction significantly more bearable. I think the system design still matters because I do still read the output and having primitives behave predictably and patterns that fail gracefully leads to reduced thrashing and token spend.</p>\n<p>The second is that agents <strong>highly</strong> reward logging UI actions. I have a decent sized (10k LoC Typescript, 50k LoC Rust) Tauri-based transcription app using a variant of the re-frame architecture (somewhat similar to Elm architecture) that logs all actions to disk. I can say things like \"hitting space is skipping a mark\" and it'll dig through the history, reconstruct the state, trace the code branches affected, and fix the bug, injecting synthetic log entries as needed to debug finer points. It's so much better than attempting to do it with playwright or something that I will not design a UI framework that does not have some sort of centralized logging hook and a mechanism for obtaining a full state snapshot.</p>\n<p>I suspect Roc's lack of ambient side effects allows for an improvement on normal logging in the form of <a href=\"https://rr-project.org/\">reverse debugging</a>. By recording all the inputs along with an index of the event that previously changed the data it should be straightfoward to roll back history and track down the source.</p>\n<p>Finally, the prevalence of frontend UI code in general and React in particular results in an LLM bias towards React-shaped answers. I've only had light to moderate issues getting Claude to do other patterns but the bias is there.</p>\n<p>I have had some trouble with Roc and my logging requirement. Naïvely doing both reads and writes off the log leads to a refcount of 2 which throws modifications from O(1) to O(N) and a consequent orders of magnitude perf cliff. I don't have a solution for this other than being careful.</p>\n<p>Conceptually a <a href=\"https://en.wikipedia.org/wiki/Persistent_data_structure\">persistent datastructure</a> solves the issue and it does work quite well if the rest of the system is slow enough. I built several large apps in Clojurescript and with a persistent central store in React and they were fine but the approach is more about avoiding slowdown than about good performance. When doing a Solid 2 signals port to Rust for this project the overhead of the persistent datastructure over plain structs+Vecs (I tried two libraries) was high enough that I decided just copying would be a better approach and I suspect Roc code is fast enough for the same consideration.</p>",
+        "id": 612894305,
+        "sender_full_name": "Karl",
+        "timestamp": 1785129121
+    },
+    {
+        "content": "<p>Excited to see you explore that in roc :)</p>\n<p>UI-related things I liked, which may (or not) inspire you, and which you probably already know about:</p>\n<ul>\n<li>elm-ui by Matthew Griffith (love using it in elm apps): <a href=\"https://www.youtube.com/watch?v=Ie-gqwSHQr0&amp;t=569s\">https://www.youtube.com/watch?v=Ie-gqwSHQr0&amp;t=569s</a><div class=\"youtube-video message_inline_image\"><a data-id=\"Ie-gqwSHQr0\" href=\"https://www.youtube.com/watch?v=Ie-gqwSHQr0&amp;t=569s\"><img src=\"https://uploads.zulipusercontent.net/52ffba4041e1a1ea16d6ec8e4b3b2f3bd339699c/68747470733a2f2f692e7974696d672e636f6d2f76692f49652d67717753485172302f6d7164656661756c742e6a7067\"></a></div></li>\n<li>gpui by Zed team (Zed is great): <a href=\"https://github.com/zed-industries/awesome-gpui\">https://github.com/zed-industries/awesome-gpui</a></li>\n<li>iced (elm-inspired, used by COSMIC desktop environment): <a href=\"https://github.com/iced-rs/iced\">https://github.com/iced-rs/iced</a></li>\n<li>Raph Levien’s blog: <a href=\"https://raphlinus.github.io/\">https://raphlinus.github.io/</a></li>\n</ul>",
+        "id": 612915885,
+        "sender_full_name": "Matthieu Pizenberg",
+        "timestamp": 1785138818
+    },
+    {
+        "content": "<p>I love elm-ui too</p>",
+        "id": 612965152,
+        "sender_full_name": "Anton",
+        "timestamp": 1785155871
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/612894305\">said</a>:</p>\n<blockquote>\n<p>I have had some trouble with Roc and my logging requirement. Naïvely doing both reads and writes off the log leads to a refcount of 2 which throws modifications from O(1) to O(N) and a consequent orders of magnitude perf cliff. I don't have a solution for this other than being careful.</p>\n</blockquote>\n<p>thanks for the detailed writeup!</p>\n<p>can you say more about how the log interacts with application state, and when the reads and writes are happening?</p>",
+        "id": 612966709,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785156298
+    },
+    {
+        "content": "<p>like for example is the log a <code>List</code> and then the reads are happening in the application via <code>dbg</code> of items in that list, which is bumping the refcount?</p>",
+        "id": 612967515,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785156516
+    },
+    {
+        "content": "<p>The basic problem is that to be able to log <code>(boundary, before, after)</code> I need to have both the before and after values. This is pretty obvious written out but it's something that the agent happily bulldozed over. I set up an O(1) check and prompted the agent that writes don't have to go into the same place and to instead log and merge host side. I didn't think to look into exactly what shape was causing the issue, it was a problem with a fairly straightforward solution so I just took the solution.</p>\n<p>After setting up an O(1) check as part of the authoring process it triggered two additional times unexpectedly. The first was my deciding to do event handlers as <code>|event, model| ...</code>and that was worked around by switching to <code>|model, event} ...</code>. The other is that Elm architecture handlers needed to be boxed and the model returned directly and not wrapped as in <code>{model , cmds}</code>. Since these had workarounds I haven't really looked into them but I do plan to do a workaround sweep.</p>",
+        "id": 613037035,
+        "sender_full_name": "Karl",
+        "timestamp": 1785174827
+    },
+    {
+        "content": "<h2>The Grand Split: Retained versus Immediate</h2>\n<p>Fundamentally UI is just drawing boxes and text to the screen. The two main UI framework approaches mirror the historic retained mode and immediate mode for graphics APIs.</p>\n<p>In retained mode the client (app) doesn't draw directly to the screen. Instead it constructs a scene graph using the library's object model and the library translates that to draw calls. The advantage is that the library can optimize the rendering on an update and do the minimal amount of work.</p>\n<p>In immediate mode the client makes the draw calls directly. The advantage is not needing to coordinate between app state and a library's object state.</p>\n<p>This split carries over into UI frameworks, which have historically been retained APIs. It's speculation on my part because it significantly predates me and I haven't deliberately researched it but I think a large part of the reason is the concurrent rise of Object Oriented Programming. Regardless of the reason for the decision in other encironments, retained mode is the natural fit for the web since the object graph (DOM) can be described as data (HTML) in a way that matches domain semantics instead of drawing calls. We've collectively bolted an app platform on top of a document viewer and this is one of the consequences.</p>\n<p>The core challenge in dealing with retained mode UI frameworks is that state coordination is hard. The change might be minimal from the drawing side but if you're switching tabs in your tabset you have to highlight the new one <em>and un-highlight the old one</em>. This particular switch is handled by the tabset widget author in every widget system since it's core to the behavior contract but it's still somewhere in the system. I believe humans are fundamentally incapable of fully comprehending complex systems and the state space of any practical UI beyond our capabilities. Because of this the code dealing with executing the state transitions has historically been both verbose and error prone.</p>\n<p>The web is inherently retained but it's possible to implement an immediate mode API on top and the first library to popularize the approach was React. The vdom+diff handles the error-prone state transition part and greatly reduces the amount of code. I was consulting just as React was coming into popularity and it was fairly normal to get a 65-85% code reduction against the previous jquery / YUI / Ext version of the same app. The other reasons for React's popularity outside the immediate mode authoring experience were that it also fully solved composition and it was resistant to corruption from other JS on the page (the DOM is a mutable shared global) so it wasn't just one thing but the vdom is the headline for a reason.</p>\n<p>Aside: If anybody is wondering why it took the web 20 years to get to React when the immediate vs retained tradeoffs are well known, the answer is that Javascript got <strong>50 times</strong> faster between the summer 2008 and the summer 2009; the language simply wasn't fast enough to do significant amounts of computation. React landed in December 2011 which really wasn't that long after the approach became viable.</p>\n<p>React also happens to work particularly well with functional approaches which can describe trees quite well but can't really describe mutation. The first significant adoption of React outside of Facebook was the Clojurescript community. The whole Redux and immutable state with reducers idea is from this initial Clojure influence. Most of the other functional language takes on the domain track the Elm architecture and are predominantly on react-style frameworks. It's been a couple years since I last checked so I plan on doing a survey as part of this exercise.</p>\n<p>Despite the popularity of React the web is fundamentally retained and there's an alternative way of deriving state transitions: Signals. The general approach predates React with Knockout having some success but Knockout didn't have React's other advantages and was tied to the MVVM conceptual model that never really caught on. React basically cleared the field of all previous frameworks and the leading outstanding question for further refinement was performance. That quest plus a good experience with Knockout led Ryan Carniato to develop SolidJS and with it the general Signals model which pretty much everybody else has adopted. I can go into the history and progression of dataflow programming and reactivity if someone is interested but those aren't relevant to understanding the state of the art.</p>\n<p>The basic approach is to split up your state into small pieces that are easy to compare using equality and put each piece into a different object called a signal. Then you register any reads of that signal as a subscriber and when the state gets written compare the new value with the old one and if they're different propagate the change to all the subscribers. There are two main types of subscribers: memos which are pure state transformers (usually <code>map</code> in the FP sense) and effects which run after the signal graph is settled and affect the changes triggered by the data update.</p>\n<p>I believe that Signals are a better model for Javascript and the DOM. The implementation is lighter, they do less work, they scale better. I also find them roughly as ergonomic and the mental model is cleaner than React's hooks. Ryan is deeply dedicated to his domain and has been grinding at it for a decade now with a particular focus on composable primitives. If you want to go into the weeds, he has a roughly biweekly 6 hour livestream where he basically talks through whatever piece he's currently working on and takes feedback.</p>\n<p>So when I went to do a UI platform for Roc I had the agent do a Rust port of Solid 2 and that actually went really well. Propagation overhead is 200ns, the port can smapshot the contents of the full signal graph, and there's a hook for logging and reverse debugging that goes into a ring buffer at the cost of ~12% throughput. Pretty happy. Actually getting it into Roc with a development experience that's on par with other languages hasn't gone as well. I'll get into it but the short version is that signals need to manage control flow and actually getting fine grained updates out of the graph requires slicing up code into many thunks.</p>\n<p>I realize that this is pretty web focused but the prevalence of Web UI has led to more recent native UI frameworks being pretty heavily inspired by one or the other and I find both approaches better than older native stacks retained APIs.</p>",
+        "id": 613041818,
+        "sender_full_name": "Karl",
+        "timestamp": 1785176263
+    },
+    {
+        "content": "<p>It turns out that only the last dropped field of a record can be written in place due to refcount limitations. <a href=\"https://github.com/roc-lang/roc/issues/10426\">https://github.com/roc-lang/roc/issues/10426</a></p>",
+        "id": 613066633,
+        "sender_full_name": "Karl",
+        "timestamp": 1785184489
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613037035\">said</a>:</p>\n<blockquote>\n<p>The basic problem is that to be able to log <code>(boundary, before, after)</code> I need to have both the before and after values.</p>\n</blockquote>\n<p>hm, what do these 3 values refer to?</p>",
+        "id": 613077244,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785188944
+    },
+    {
+        "content": "<p>I want to help, but I need way more context than this haha <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 613077279,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785188958
+    },
+    {
+        "content": "<p>about the specifics of the approach you're trying, I mean</p>",
+        "id": 613077311,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785188972
+    },
+    {
+        "content": "<p>Very thoughtful writeup Karl, I'm new here, but I got excited when I saw a \"Thoughts on UI\" thread because it's a topic I have thoughts on :). I'm a Haskell guy at heart, but wind up working on other platforms that have more of a \"builder\" energy behind them. I got interested in Roc because it's a FP language that is asking a lot of exciting questions. I attended the meetup the other day and I was impressed. I thought a good way to dig in would be to port something I've been experimenting with on Haskell/Rust.</p>\n<p><a href=\"https://github.com/jbrownson/roc-puri\">https://github.com/jbrownson/roc-puri</a></p>\n<p>This is my first Roc effort, and the first time I'm discussing Puri publicly. I'm very open to feedback.</p>\n<p>I should mention that I don't always think of React as immediate mode as there is a retained DOM, so I may be using \"immediate mode\" slightly differently than the rest of this thread.</p>\n<p>I think the reason UI is such a challenge is that we are tasked with keeping two piles of state synchronized. We have our app data model, and we have the UI data model. This is fairly obvious when talking about retained mode, but even frameworks that claim to be immediate mode do this. A text box needs to know where the cursor is, what's selected, if we're dragging/etc. A scroll view needs to know the scroll offset. That state is being kept somewhere tied to some kind of identity that needs to be stable across frames. The React model was a huge step forward in acknowledging this problem, but the DOM is still inherently stateful, and the structural identity model is fragile. Immediate mode frameworks skip persisting the dom and diffing it, but still use structural identity with hashing to persist UI state as a separate pile of state that requires synchronization.</p>\n<p>In Rust there is <a href=\"https://areweguiyet.com/#ecosystem\">a lot of exploration</a> of the UI space, but most fall into some kind of diffing on a retained mode model, or immediate mode. I haven't found a model that isn't an attempt at synchronizing two piles of state. You can think of the DOM as a very complex, but widely available retained mode UI framework. A lot of frameworks target the DOM so they don't have to reinvent all the widgets (text boxes are very complicated), but in Rust many are starting to draw to canvas directly as it's more of a native platform. Each of these frameworks has to develop its own drawing style and widget behavior just to innovate on state management/synchronization/identity. <a href=\"https://linebender.org\">Linebender</a> is doing some particularly interesting work in this area, and have done a nice job offering modules instead of one monolithic stack, but their widget library is coupled to a particular state management model.</p>\n<p>Puri is a \"truly\" pure UI model that does not store any state. Each widget is a pure function from a description of the widget including its state to draw calls and an event handler. It is unopinionated about how the state is stored and reconnected in the next frame. You can choose to not make your GUI app two piles of state, but just one pile of state. You can put the UI state of your widgets right inside your data model, so when you remove an item from the list you don't have to remember to remove a &lt;li&gt; from the UI list. If you don't like that you can experiment with automatic state management/synchronization without developing your own widgets.</p>\n<p>There are deeper underlying motivations for Puri which I've briefly documented in the repo so I'll omit them here.</p>",
+        "id": 613255722,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785260039
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613041818\">said</a>:</p>\n<blockquote>\n<p>I believe that Signals are a better model for Javascript and the DOM.</p>\n</blockquote>\n<p>This is my favorite Evan talk: <a href=\"https://www.youtube.com/watch?v=Agu6jipKfYw\">https://www.youtube.com/watch?v=Agu6jipKfYw</a></p>\n<div class=\"youtube-video message_inline_image\"><a data-id=\"Agu6jipKfYw\" href=\"https://www.youtube.com/watch?v=Agu6jipKfYw\"><img src=\"https://uploads.zulipusercontent.net/0420e8f8eb9fcd6f15b4e227a7c2d8db3939add4/68747470733a2f2f692e7974696d672e636f6d2f76692f416775366a69704b6659772f6d7164656661756c742e6a7067\"></a></div><p>Signals seems to be one of those things that seems simple, but is very foot-gun prone. Do you disagree w/ the conclusions in Evan's talk Karl?</p>",
+        "id": 613257940,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785260522
+    },
+    {
+        "content": "<p>I got sidetracked by Richard's offer to help into designing a proper logging system instead of just the dumb one (copy both before/after) I put in place to prevent Claude from blocking it off. The design process turned into a round of compiler bug hunt/fixing to actually have the design work. I'll have that written up later today.</p>\n<p>But while we're both on I'd like to have at least the potential for a conversation.</p>",
+        "id": 613260302,
+        "sender_full_name": "Karl",
+        "timestamp": 1785261060
+    },
+    {
+        "content": "<p>It might not have come across but I think that the retained versus immediate is a spectrum when it comes to more abstracted environments like the web. In the C/C++ immediate mode systems the view-specific state (the cursor, selection, scroll) needs an identifying anchor but there's no real coordination with the app state. Whatever code is drawing the view simply reads from whatever state it needs and draws to the screen. See Casey Muratori's talk about the general pattern or Nic Barker's intro to Clay for examples:</p>\n<p><a href=\"https://www.youtube.com/watch?v=Z1qyvQsjK5Y\">https://www.youtube.com/watch?v=Z1qyvQsjK5Y</a></p>\n<div class=\"youtube-video message_inline_image\"><a data-id=\"Z1qyvQsjK5Y\" href=\"https://www.youtube.com/watch?v=Z1qyvQsjK5Y\"><img src=\"https://uploads.zulipusercontent.net/b3d87363a884e58b37d3f4d5463fac5af293cad4/68747470733a2f2f692e7974696d672e636f6d2f76692f5a3171797651736a4b35592f6d7164656661756c742e6a7067\"></a></div><p><a href=\"https://www.youtube.com/watch?v=DYWTw19_8r4\">https://www.youtube.com/watch?v=DYWTw19_8r4</a></p>\n<div class=\"youtube-video message_inline_image\"><a data-id=\"DYWTw19_8r4\" href=\"https://www.youtube.com/watch?v=DYWTw19_8r4\"><img src=\"https://uploads.zulipusercontent.net/21597cba471215e8ebbeb661bc27137aac68f660/68747470733a2f2f692e7974696d672e636f6d2f76692f445957547731395f3872342f6d7164656661756c742e6a7067\"></a></div>",
+        "id": 613262980,
+        "sender_full_name": "Karl",
+        "timestamp": 1785261639
+    },
+    {
+        "content": "<p>Yeah I'm familiar w/ that Casey talk, and I've used egui which is heavily based on those ideas. There is a Roc port of clay in the puri repo :)</p>",
+        "id": 613263378,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785261734
+    },
+    {
+        "content": "<p>To me immediate mode is basically specifically what Casey lays out there, it still is two piles of state. IIRC Casey doesn't specifically specify structural identity, but the library implementations seem to do it that way by default</p>",
+        "id": 613263589,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785261808
+    },
+    {
+        "content": "<blockquote>\n<p>Immediate mode frameworks skip persisting the dom and diffing it, but still use structural identity with hashing to persist UI state as a separate pile of state that requires synchronization.</p>\n</blockquote>\n<p>The structural identity comparison is purely an optimization driven by the abstraction layers. It's an important optimization when you have a single global app state but not inherent in the model. Faster vdom libraries collapse the static parts of the tree which tends to reduce the comparison to just the control flow nodes which can yield similar results. Nothing prevents both from being put into practice but the HAMT collections are pretty expensive on their own.</p>",
+        "id": 613264023,
+        "sender_full_name": "Karl",
+        "timestamp": 1785261959
+    },
+    {
+        "content": "<p>well if you are keeping a pile of state attached to a part of an output of a pure function then you need an identity system to reconnect the state every frame, so it's an optimization from other ways of doing that, but it exists because of the two state piles</p>",
+        "id": 613264270,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785262052
+    },
+    {
+        "content": "<p>For what it's worth, I have been tracking Raph's work in Rust for several years. They seem to be kind of exploratory and very much drawing/graphics focused and I do not consider that to be the hard part of  UI. I agree with you that the state coordination is the problem.</p>",
+        "id": 613264428,
+        "sender_full_name": "Karl",
+        "timestamp": 1785262123
+    },
+    {
+        "content": "<p>IIRC Casey talks about like assigning manually chosen identities for things, little names, but that doesn't scale to a general dynamic solution</p>",
+        "id": 613264485,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785262146
+    },
+    {
+        "content": "<p>Yes, Ralph is doing great work in vector graphics, I don't see a lot of novelty in the state management side, he has done a few iterations of it</p>",
+        "id": 613264556,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785262169
+    },
+    {
+        "content": "<p>Linebender is Ralphs organization for all this btw</p>",
+        "id": 613264587,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785262181
+    },
+    {
+        "content": "<p>If you are w/ me on the state coordination problem you might enjoy the motivations document in the repo, esp the incremental lambda calculus/purview stuff</p>",
+        "id": 613264790,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785262252
+    },
+    {
+        "content": "<p>Reading through it now.</p>",
+        "id": 613264953,
+        "sender_full_name": "Karl",
+        "timestamp": 1785262307
+    },
+    {
+        "content": "<p>I'm going to rewatch Casey's talk to remember exactly how he discusses the state thing, I know he addresses identity, maybe mainly for focus, I feel like he didn't really address the two state problem, but I might be forgetting, been a while</p>",
+        "id": 613265367,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785262443
+    },
+    {
+        "content": "<p>Pretty sure he just handwaves it.</p>",
+        "id": 613265417,
+        "sender_full_name": "Karl",
+        "timestamp": 1785262462
+    },
+    {
+        "content": "<p>As a point of comparison, here's the current Todo implementation example without the setup/event handlers:</p>\n<div class=\"codehilite\"><pre><span></span><code>## A row&#39;s identity is a `key` ATTR on the row node — the same list the click\n## handler goes in.\nbody : Model, Env -&gt; View(Model)\nbody = |model, _env|\n    View.col\n        .append(View.text(&quot;todos (${List.len(model.todos).to_str()} items)&quot;))\n        .append(\n            View.row\n                .append(View.input.on_input(set_draft).value(model.draft).key(&quot;new-todo&quot;))\n                .append(View.button.on_click(add).label(&quot;add&quot;)),\n        )\n        .concat(List.map(model.todos, row_view))\n\nrow_view : Todo -&gt; View(Model)\nrow_view = |todo| {\n    key = todo_key(todo)\n    View.row\n        .key(key)\n        .append(View.button.on_click(toggle(key)).label(if todo.done { &quot;[x]&quot; } else { &quot;[ ]&quot; }))\n        .append(View.text(todo.label))\n        .append(View.button.on_click(remove(key)).label(&quot;x&quot;))\n}\n\ntodo_key : Todo -&gt; Str\ntodo_key = |todo| &quot;row-${todo.id.to_str()}&quot;\n</code></pre></div>\n\n<p>I don't love the <code>.append</code> and pervasive chaining kind of makes everything feel the same in the lisp sense instead of having structure but it's roughly the amount of code/effort I'd expect.</p>",
+        "id": 613267296,
+        "sender_full_name": "Karl",
+        "timestamp": 1785263017
+    },
+    {
+        "content": "<p>I'm confused, what is that from?</p>",
+        "id": 613267712,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263157
+    },
+    {
+        "content": "<p>Sorry, this is the immediate-mode todo example from my work-in-progress platform.</p>",
+        "id": 613267823,
+        "sender_full_name": "Karl",
+        "timestamp": 1785263192
+    },
+    {
+        "content": "<p>Ahh got it, yeah looks very similar to egui</p>",
+        "id": 613267901,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263218
+    },
+    {
+        "content": "<p>a big problem I have w/ immediate mode gui that is somewhat separate from the two state problem is you wind up mutating the data model halfway through your render, so the second half is rendering a different model, unless you manually defer things</p>",
+        "id": 613268140,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263291
+    },
+    {
+        "content": "<p>I hit a lot of issues w/ that in my egui thing</p>",
+        "id": 613268174,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263300
+    },
+    {
+        "content": "<p>This was the bug that was the straw that made me give up on it: <a href=\"https://github.com/emilk/egui/issues/2142\">https://github.com/emilk/egui/issues/2142</a></p>",
+        "id": 613268230,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263317
+    },
+    {
+        "content": "<p>they fixed it by just deferring the event to the next frame, w/ stuff like that you get little frame glitches that make the app feel glitchy</p>",
+        "id": 613268291,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263340
+    },
+    {
+        "content": "<p>That is one thing this approach doesn't have. All the builders are pure so this producing a tree that the host evaluates.</p>",
+        "id": 613268405,
+        "sender_full_name": "Karl",
+        "timestamp": 1785263379
+    },
+    {
+        "content": "<p>For my actual project that is underlying the underlying motivation I want to have really fine tuned tab nav, I tried so many different UI platforms and it was broken on all of them, even Apple's core stuff</p>",
+        "id": 613268455,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263394
+    },
+    {
+        "content": "<p>If you can handle more than one event per frame you're not rendering the wrong thing, but you are running events on something different than you initially intended to potentially, I hit that too</p>",
+        "id": 613268665,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263449
+    },
+    {
+        "content": "<p>I did notice the very careful focus handling in your todo example.</p>",
+        "id": 613268844,
+        "sender_full_name": "Karl",
+        "timestamp": 1785263506
+    },
+    {
+        "content": "<p>Btw, yeah if you're comparing my TODO implementation vs one that has automatic UI state management/syncing it will be longer, but if you're building something that tests the boundaries of the automatic state manageent it's much easier to just be explicit about things, and I'd love to see immediate mode state management built against something like Puri so we can have different state models w/o having to reinvent widgets, obviously the existing widget set is for demonstration</p>",
+        "id": 613269047,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263569
+    },
+    {
+        "content": "<p>It's very tempting to work against the DOM as it's such a refined, portable retained mode GUI, but you're doing the 2 state piles thing then, IMO you need Purview to tame it, but even then the UI deltas are implicit</p>",
+        "id": 613269333,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263663
+    },
+    {
+        "content": "<p>tab nav is actually very complex, like what if gaining/losing focus mutates the UI/etc, it's one of those things that kinda mostly works, but if you are doing something at all complicated it falls apart and you wish you could just be explicit about it</p>",
+        "id": 613269515,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785263725
+    },
+    {
+        "content": "<p>I make the same arguments about drag and drop where I have my own system that I keep porting to new projects. Whenever you're doing anything drag intensive you pretty much always need to drop \"near\" something or \"off the bottom of the document\" or \"in the top half\" or \"preview the drop result\"  which breaks the more common DOM node  is drop target approach. I build a set of hitboxes off the DOM rects on drag and drop test against that which would break if I intentionally wanted to hit a moving node but I've never had a UI that wanted that.</p>",
+        "id": 613270674,
+        "sender_full_name": "Karl",
+        "timestamp": 1785264106
+    },
+    {
+        "content": "<p>Interesting, yeah, I think it's true about basically every aspect of GUI because we haven't really identified the actual problem of GUI. I haven't done much drag/drop, but I can totally see that being similar</p>",
+        "id": 613270784,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264150
+    },
+    {
+        "content": "<p>We have a lot of answers, but haven't found the right question</p>",
+        "id": 613270934,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264199
+    },
+    {
+        "content": "<p>the ILC w/ merging model is the most honest I've seen. I actually sent Phil Freeman the ILC paper which inspired his Purview, I haven't seen it anywhere outside of that</p>",
+        "id": 613271060,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264242
+    },
+    {
+        "content": "<p>I used to run the Santa Monica Haskell group before I moved back to PNW, and he was a member</p>",
+        "id": 613271171,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264274
+    },
+    {
+        "content": "<p>Purview probably requires HKT to do the Jet thing, so you can run a function in one monad for the initial computation, and another for the derivative</p>",
+        "id": 613271322,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264333
+    },
+    {
+        "content": "<p>could do it w/o, but you'd have binds and stuff everywhere, I've tried that for other reasons in Typescript and it's not good</p>",
+        "id": 613271479,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264391
+    },
+    {
+        "content": "<p>really it's <code>do</code> that's important, could have do for specific monads w/o HKT</p>",
+        "id": 613271524,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264406
+    },
+    {
+        "content": "<p>Software engineering is just dealing with state so the problem is always state but I've never liked approaches that try to avoid it completely and prefer the functional core/mutable support approach.</p>\n<p>I planned on writing a lot more about it but I think the thing that separates the UI domain from others is the pervasive optionality of everything. UI comes down to preference/taste so surprisingly little holds in a way that can be statically encoded.</p>",
+        "id": 613272071,
+        "sender_full_name": "Karl",
+        "timestamp": 1785264586
+    },
+    {
+        "content": "<p>yeah, it's not a bug if it doesn't make it to state somewhere :)</p>",
+        "id": 613272239,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264647
+    },
+    {
+        "content": "<p>This is why the advice is always \"just reboot it\" or if software gets into a glitch we relaunch it, the initial load is a pure function, then we're trying to sync state</p>",
+        "id": 613272340,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264683
+    },
+    {
+        "content": "<p>One of the reasons I've been having trouble in Roc is that everything is currently very fixed. The only two mechanisms for expressing optionality are lists (which have to be homogenous and allocate) and chaining.</p>",
+        "id": 613272477,
+        "sender_full_name": "Karl",
+        "timestamp": 1785264730
+    },
+    {
+        "content": "<p>Optionality like Haskell Maybe? Yeah it was jarring to me that there's no Maybe, I think the idiom is that you just make your own anonymous sum types? Puri does that in a couple spots</p>",
+        "id": 613272585,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264777
+    },
+    {
+        "content": "<p>I think the motivation is that you can use more expressive names</p>",
+        "id": 613272621,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264790
+    },
+    {
+        "content": "<p>No like having a variable number of children/attributes.</p>",
+        "id": 613272638,
+        "sender_full_name": "Karl",
+        "timestamp": 1785264794
+    },
+    {
+        "content": "<p>Or optional fields in  a struct (which is coming).</p>",
+        "id": 613272676,
+        "sender_full_name": "Karl",
+        "timestamp": 1785264813
+    },
+    {
+        "content": "<p>ahh okay, the way I'd do that in like Typescript is offer a map/record w/ defaults and you can {...defaults color:blue}</p>",
+        "id": 613272722,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264830
+    },
+    {
+        "content": "<p>I really don't have a problem with it in other domains but it's been a really heavy constraint on the six overall designs I've attempted in this project.</p>",
+        "id": 613272857,
+        "sender_full_name": "Karl",
+        "timestamp": 1785264873
+    },
+    {
+        "content": "<p>I will have thoughts about puri but I have to think through consequences so it'll be at least a day or two.</p>",
+        "id": 613273055,
+        "sender_full_name": "Karl",
+        "timestamp": 1785264944
+    },
+    {
+        "content": "<p>Love it, thanks for taking a look</p>",
+        "id": 613273120,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785264970
+    },
+    {
+        "content": "<p>I was planning to pitch this to the Rust community first as there are a lot of folks thinking about GUI there, but seemed like it would be more fun to do it here first</p>",
+        "id": 613273227,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785265015
+    },
+    {
+        "content": "<blockquote>\n<p>I should mention that I don't always think of React as immediate mode as there is a retained DOM, so I may be using \"immediate mode\" slightly differently than the rest of this thread.</p>\n</blockquote>\n<p>I agree, and that's even more evident in React than it is in Elm because of the concept of component-local state...but it's still evident in both because browser Elements have retained-mode state, e.g. whether a dropdown is open or closed. Really nothing in the browser is immediate mode, I'd say. <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 613275034,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785265600
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613272477\">said</a>:</p>\n<blockquote>\n<p>One of the reasons I've been having trouble in Roc is that everything is currently very fixed. The only two mechanisms for expressing optionality are lists (which have to be homogenous and allocate) and chaining.</p>\n<p>[...] like having a variable number of children/attributes. Or optional fields in a struct (which is coming).</p>\n</blockquote>\n<p>if you want to avoid allocations, then the only way to do it is to have a struct with fields that are sum types - the <a href=\"https://github.com/roc-lang/roc/pull/10320\">in-PR</a> optional record fields feature is still sum types at runtime, just different programmer ergonomics</p>",
+        "id": 613276056,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785265934
+    },
+    {
+        "content": "<p>that's true whether it's a variable number of children/attributes or optional fields</p>",
+        "id": 613276206,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785265978
+    },
+    {
+        "content": "<p>I don't think it's feasible (like, at a hardware level) to have tree nodes with a variable number of children and avoid heap allocations (or something with essentially the same characteristics as them) - your best bet to make that cheap would be to make heap allocations cheap by doing them all in an arena</p>",
+        "id": 613276351,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785266035
+    },
+    {
+        "content": "<p>The goal isn't to completely avoid allocations, just to avoid unnecessary ones. I do have a version with the tree described Elm style with a list of attrs and a list of children. This iteration turns the attrs into a struct and just has the children as a list which <code>.append</code> and <code>.concat</code> directly map to. I also feel like the Elm pattern loses a lot of its visual appeal moving from <code>div [] [text \"blah\"]</code> to <code>div([],[text(\"blah\")])</code> and when you make it multi-line you wind up with a bunch of  floating <code>),</code>.</p>",
+        "id": 613277582,
+        "sender_full_name": "Karl",
+        "timestamp": 1785266509
+    },
+    {
+        "content": "<p>yeah that makes sense! Attributes are a weird case when it comes to memory usage. Like if you do them as a record with optional fields, then your total memory usage necessarily involves storing a value for every single attribute for every single node. Like for example, you're storing font size, font face, attributes like weight etc, on every single node, even though almost no nodes will customize that. Same with border etc. And the more attributes you add, the higher your memory usage grows.</p>",
+        "id": 613288727,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785270786
+    },
+    {
+        "content": "<p>in contrast, if you do it as a <code>List</code> of attributes, you have no allocations if the list is empty, and 1 allocation if you have 1 attribute - which on the one hand is a big jump in bookkeeping (unless you're doing arena allocation) but on the other hand is still much gentler on total memory usage, and therefore cache misses, than the approach of records with optional fields</p>",
+        "id": 613288996,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785270885
+    },
+    {
+        "content": "<p>so my personal suspicion is that if you were to benchmark all of them, I'd predict that the one that would perform the best would be heap-allocated list of attributes in an arena, followed by the same thing without an arena, and I think optional record fields would likely perform best in small examples but worst in real-world examples once you had implemented all the attributes you wanted to support, just because the high total memory usage would lead to even more cache misses than the heap allocation scenario</p>",
+        "id": 613289404,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785271055
+    },
+    {
+        "content": "<p>that prediction could be wrong though!</p>",
+        "id": 613289444,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785271076
+    },
+    {
+        "content": "<p>Pushed a bunch of refinements, including drag &amp; drop for Karl :), btw fast builds go off the rails w/ this codebase during specialization, I'm guessing it's the final tagless stuff.</p>",
+        "id": 613306407,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785280341
+    },
+    {
+        "content": "<p>Does off the rails mean it's good or bad? I'm not familiar with that phrase. I assume there is a bug here and it's running slow?</p>",
+        "id": 613306590,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785280481
+    },
+    {
+        "content": "<p>bad, sorry for the Americanism, it just goes up over 10GB of memory and eventually crashes</p>",
+        "id": 613306628,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785280506
+    },
+    {
+        "content": "<p>I'm using a recent nightly</p>",
+        "id": 613306641,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785280515
+    },
+    {
+        "content": "<p>roc --version<br>\nRoc compiler version release-fast-b6cdced9</p>",
+        "id": 613306712,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785280573
+    },
+    {
+        "content": "<p>if you can push a link to a commit that reproduces it, I can take a look!</p>",
+        "id": 613307952,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785281477
+    },
+    {
+        "content": "<p>it has done it the whole time, including master HEAD, I've only tested on Mac, not sure what others are running. I can try to find a minimized case first if you like. I've just been dev building it.</p>",
+        "id": 613308030,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785281535
+    },
+    {
+        "content": "<p>I strongly suspect it's my Haskelly style stuff</p>",
+        "id": 613308112,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785281594
+    },
+    {
+        "content": "<p>perfect for flushing out bugs in the compiler <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 613308247,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785281711
+    },
+    {
+        "content": "<p>To make sure we're talking about the same thing, I'm talking about <a href=\"https://github.com/jbrownson/roc-puri\">https://github.com/jbrownson/roc-puri</a> built against <code>Roc compiler version release-fast-b6cdced9</code>, I'm running <code>make -C todo native-speed-run</code> at the root of that repo</p>",
+        "id": 613308312,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785281758
+    },
+    {
+        "content": "<p>Didn't mean to turn this into a bug report, was going to look for a minimal case first hah, but okay</p>",
+        "id": 613308463,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785281861
+    },
+    {
+        "content": "<p>I hit and diagnosed a significant number of specialization/tagging blowups while working on the platform. If it's not too much effort would you try my <a href=\"https://github.com/grayrest/roc/tree/local-fixes\"><code>local-fixes</code> branch</a> of the Roc compiler? I don't think my fixes are good for the long term health of the compiler but I would be interested if they cover your issue.</p>",
+        "id": 613308598,
+        "sender_full_name": "Karl",
+        "timestamp": 1785281946
+    },
+    {
+        "content": "<p>yeah, making a minimal repro and GH issue is always helpful. <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 613308680,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785281968
+    },
+    {
+        "content": "<p>sure why not</p>",
+        "id": 613308682,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785281971
+    },
+    {
+        "content": "<blockquote>\n<p>RocRay was the closest available native platform, but its Roc API did not expose everything needed for ordinary Puri controls: clipboard access, nested clipping, fractional two-axis trackpad scrolling, multi-click counting, minimum window sizing, and control over Raylib's Escape-to-exit behavior.</p>\n</blockquote>\n<p>Would you like me to look at adding these? </p>\n<p>I would always be happy to accept PR's too if that works better for you. I'm rolling around just working on the next thing on my list of TODO's</p>",
+        "id": 613308792,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785282043
+    },
+    {
+        "content": "<p>If I go further with this I'd switch to a linebender based platform I think. TBH I find the whole platform thing to be extremely awkward.</p>",
+        "id": 613308875,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785282108
+    },
+    {
+        "content": "<p>No worries, happy to help if you need with setting up a linebender platform foundation etc.</p>",
+        "id": 613309007,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785282196
+    },
+    {
+        "content": "<p>I like that there's a method of dropping into struct of arrays or having a way to work around refcount stuff that doesn't involve going through a C ABI. I'm interested in seeing how the breakdown of platform vs Roc tradeoffs goes.</p>",
+        "id": 613309208,
+        "sender_full_name": "Karl",
+        "timestamp": 1785282345
+    },
+    {
+        "content": "<p>I initially switched to running dev builds because I hit <a href=\"https://github.com/roc-lang/roc/issues/10317\">https://github.com/roc-lang/roc/issues/10317</a>. You guys fixed that super quick though, I was very impressed, but kept running dev until I eventually tried fast and noticed the current problem</p>",
+        "id": 613309267,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785282374
+    },
+    {
+        "content": "<blockquote>\n<p>How should independently developed packages share platform-provided nominal types and overlapping capability sets?</p>\n</blockquote>\n<p>The intended design is for cross-platform packages which define nominal types and are re-used. An example of this is the <a href=\"https://github.com/roc-lang/http\">https://github.com/roc-lang/http</a> package. However we've been working through various bugs and issues so the full design experiment hasn't really concluded much yet. Hopefully as we see more packages developed and we continue to push these ideas we can validate this or revisit the design.</p>",
+        "id": 613310066,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785283021
+    },
+    {
+        "content": "<blockquote>\n<p>Higher-kinded abstraction is missing from finally-tagless code</p>\n</blockquote>\n<p>I don't fully grok everything here... but I feel like maybe the <code>where</code> constraints are the solution or something worth exploring around this issue.</p>",
+        "id": 613310454,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785283223
+    },
+    {
+        "content": "<p>Is that from my roc-notes? those are not human reviewed, just had my LLM keep a log as I went to tidy up later, and I'm realizing the thing I might be missing most is do notation actually, I think you might be right that a .plus/+ version of do notation might be what I'm wanting</p>",
+        "id": 613312219,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785283653
+    },
+    {
+        "content": "<blockquote>\n<p>Directory-qualified local modules are missing in the Zig compiler</p>\n</blockquote>\n<p>filed at <a href=\"https://github.com/roc-lang/roc/issues/10448\">https://github.com/roc-lang/roc/issues/10448</a></p>",
+        "id": 613312459,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785283692
+    },
+    {
+        "content": "<p>Yeah I've been reading your notes and thinking about any issues or things to improve</p>",
+        "id": 613312587,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785283716
+    },
+    {
+        "content": "<p>hah I didn't mean for that to be read yet, but you guys are too quick</p>",
+        "id": 613312693,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785283736
+    },
+    {
+        "content": "<p>not complaining</p>",
+        "id": 613312767,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785283748
+    },
+    {
+        "content": "<blockquote>\n<p>Groups of method constraints cannot be named</p>\n</blockquote>\n<p>We have talked about maybe supporting aliases for this use-case, and I think it's a great idea... but we decided to see how much of an issue not having it would be in practice</p>",
+        "id": 613313503,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785283940
+    },
+    {
+        "content": "<p>Also just noticed the puri todo app has a serious memory leak, like 10GB after 10m</p>",
+        "id": 613313626,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785283975
+    },
+    {
+        "content": "<p>could be a bug in the app I suppose, closing over stuff it shouldn't? my LLM doesn't think so</p>",
+        "id": 613313714,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785283996
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>Sort(a) : a where [a.order : a, a -&gt; Ordering]\nsort : List(elem) -&gt; List(elem) where [elem.Sort]\n</code></pre></div>\n<p>Or maybe... we decided to add that and it just never got fully implemented? I can't remember where we got too with that</p>",
+        "id": 613313729,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1785284000
+    },
+    {
+        "content": "<p>I saw something about a historical feature, maybe pre-zig</p>",
+        "id": 613313790,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785284017
+    },
+    {
+        "content": "<p>obviously in Haskell I would use typeclasses</p>",
+        "id": 613313836,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785284034
+    },
+    {
+        "content": "<p>or Rust traits</p>",
+        "id": 613313860,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785284041
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613308598\">said</a>:</p>\n<blockquote>\n<p>would you try my <a href=\"https://github.com/grayrest/roc/tree/local-fixes\"><code>local-fixes</code> branch</a> of the Roc compiler?</p>\n</blockquote>\n<p>No noticeable difference building the todo demo w/ this branch.</p>",
+        "id": 613315712,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785285091
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1087940\">Jake Brownson</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613313626\">said</a>:</p>\n<blockquote>\n<p>just noticed the puri todo app has a serious memory leak, like 10GB after 10m</p>\n</blockquote>\n<p>I haven't filed the bug but at least for the Rust glue top level lists leak their contents. There's a plan for it in src/glue/src/RustGlue.roc:2109 but that only works if a RocList is wrapped in something else. The LLM says:</p>\n<blockquote>\n<p>A top-level returned <code>RocList&lt;T&gt;</code>isn't a field or a payload of anything, and glue mints no named type for it — so there's no <code>impl</code> to hang a <code>decref</code> on, and the correct code generator is simply never invoked.</p>\n</blockquote>",
+        "id": 613316690,
+        "sender_full_name": "Karl",
+        "timestamp": 1785285836
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613077244\">said</a>:</p>\n<div class=\"codehilite\"><pre><span></span><code>I want to help, but I need way more context than this\n</code></pre></div>\n<p>I originally picked something simple to fill the goal and avoid designing something that couldn't be fully logged. I read this a couple hours after it was posted and thought that if I'm going to get help I'll attempt a proper design and see what breaks. This led to some compiler bugs and Claude claiming that logging is impossible so the process took longer than expected but <a href=\"/user_uploads/22008/5W010bpvJZgY8yBfIA-b3oEV/2026-07-28-observability-reference.md\">here's the design</a> in LLM overview style.</p>\n<p>The TL;DR is that I want something toggleable but fast enough to leave on for general use. My expected use case is \"where did this go wrong\" so state modifications log which handler is making the change and the old values of the changed field contents to a ring buffer. These are numbers+bytes and the contents are formatted into strings on read.</p>\n<p>Given the history of Roc I've been generally following Elm architecture decisions when doing an immediate mode design so handlers get a lensed view of their local model using a <code>meta</code> wrapper. I'm using that point for logging and the largest problem was detecting what the handler has changed. I'm currently doing this using the formatting infrastructure (Claude: can't implement this design because Roc doesn't have row level polymorphism), my encoder just happens to  serialize changed field ids.  This caused most of the delay because a consequence of the previously linked <a href=\"https://github.com/roc-lang/roc/issues/10426\">#10426</a> is that it makes encoding <a href=\"https://github.com/roc-lang/roc/issues/10426#issuecomment-5107240468\">accidentally quadratic</a> with respect to size so I had to get a local workaround to see things working. In the process I found out that Roc doesn't seem to have a way to do reference comparison (JS ===) and the fast path for comparing strings gets dropped outside of dev builds (<a href=\"https://github.com/roc-lang/roc/issues/10444\">#10444</a>).</p>\n<p>Perf was a focus throughout and the ring buffer is sized to 16MB. My two working sample apps are a sqlite db viewer (dbx) and a port of the roc-signals Realworld demo. The logging overhead in Realworld (which doesn't have a lot of app state) maxes out at 0.26 ms and for dbx with a 5 (scalar) col x 5000 row the highest I saw was 10.2ms. I decided that was too high and added a way to opt into which fields log and the remaining state is sub ms.</p>\n<p>I am particularly interested in a better solution for \"what changed\" the result is okay here but it's still a full walk of the model.</p>",
+        "id": 613326893,
+        "sender_full_name": "Karl",
+        "timestamp": 1785293666
+    },
+    {
+        "content": "<blockquote>\n<p>Given the history of Roc I've been generally following Elm architecture decisions</p>\n</blockquote>\n<p>ah, so I suspect this is going to be a recurring stumbling block unfortunately <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> </p>\n<p>Elm Architecture relies pretty heavily (imo) on the assumption of persistent data structures for performance, and Roc doesn't have persistent data structures.</p>",
+        "id": 613329198,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785295119
+    },
+    {
+        "content": "<p>I concluded years ago based on this that Elm Architecture wouldn't work well in Roc and we'd need to take a different approach that fits Roc's opportunistic mutation design better</p>",
+        "id": 613329268,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785295161
+    },
+    {
+        "content": "<p>The reason I have a big writeup about vdom being immediate is because TEA and friends can be dropped directly onto an immediate mode library (Clay) and the design works. C can draw a lot of boxes/text to a framebuffer so it's only too slow if the substrate is the DOM.</p>\n<p>I'm pretty sure it can be done at speed on the DOM as well without persistent datastructures. There are vdom frameworks in the js frameworks benchmark that are competitive with the fastest signals ones. The basic trick is to compress/skip the static parts of the vdom tree so the diff boils down to the conditionals and leaves, which is roughly on par with what a signals framework tracks. If there's an efficient \"what changed\" primitive then that takes care of the primary use case for persistent datastructures in vdom systems, they're just used to prune the rendering tree.</p>",
+        "id": 613329659,
+        "sender_full_name": "Karl",
+        "timestamp": 1785295371
+    },
+    {
+        "content": "<blockquote>\n<p>Claude: can't implement this design because Roc doesn't have row level polymorphism</p>\n</blockquote>\n<p>aside: Roc uses row level polymorphism constantly - e.g. every record and tag union have it <span aria-label=\"laughter tears\" class=\"emoji emoji-1f602\" role=\"img\" title=\"laughter tears\">:laughter_tears:</span></p>",
+        "id": 613329800,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785295450
+    },
+    {
+        "content": "<p>anyway, for the logging - what's the format you're using for the logs? is it just raw strings or something else?</p>",
+        "id": 613329950,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785295531
+    },
+    {
+        "content": "<p>I ask because if you use <code>.inspect()</code> to turn the \"before\" into a string, that shouldn't increase the refcount at all</p>",
+        "id": 613329996,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785295556
+    },
+    {
+        "content": "<p>I'm pretty sure (there were a LOT of go-arounds) the format is frame number, a handler id, a bitfield of changed fields, and the bytes of the old values or the whole row if over half is changed or the capture cost goes over a threshold.</p>",
+        "id": 613330183,
+        "sender_full_name": "Karl",
+        "timestamp": 1785295654
+    },
+    {
+        "content": "<p>It gets fomatted as readable strings on dump (when the program crashes or it's requested)</p>",
+        "id": 613330317,
+        "sender_full_name": "Karl",
+        "timestamp": 1785295715
+    },
+    {
+        "content": "<p>ah, have you tried formatting them as strings immediately and only storing those?</p>",
+        "id": 613330986,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785296080
+    },
+    {
+        "content": "<p>I think that should prevent the original data from becoming shared</p>",
+        "id": 613331017,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785296102
+    },
+    {
+        "content": "<p>The original version was doing copies of values and that probably would have worked. This one avoids it by doing the diffing on the Rust side. I had a variant where the diffing was done on the Roc side but that required two collections in the capture which hit the <a href=\"https://github.com/roc-lang/roc/issues/10426\">#10426</a> bug and turned the capture quadratic.</p>",
+        "id": 613331553,
+        "sender_full_name": "Karl",
+        "timestamp": 1785296355
+    },
+    {
+        "content": "<p>copies of values would work too, but eagerly making the strings (assuming you have logging enabled; if it's disabled of course I'd expect it to be a no-op) sounds more efficient to me because it avoids cloning the values only to turn them into strings later</p>",
+        "id": 613333074,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785297277
+    },
+    {
+        "content": "<p>should save a bunch of allocations to just make the string right there and that's it</p>",
+        "id": 613333100,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785297291
+    },
+    {
+        "content": "<p>I did it this way because the plan is to just leave it running and when something goes wrong tap into it and get the logged state transitions. I can double check but I thought the bytes were going into a fixed size ringbuffer so there isn't any allocation.</p>",
+        "id": 613333477,
+        "sender_full_name": "Karl",
+        "timestamp": 1785297476
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613316690\">said</a>:</p>\n<blockquote>\n<p>Rust glue top level lists leak their contents.</p>\n</blockquote>\n<p>I don't believe there is any Rust in the puri todo app FYI. I do notice <a href=\"#narrow/channel/231634-beginners/topic/Is.20Roc.20compiler.20.22Type.20Checking.22.20and.20.22Specializing.22.20N.5E2.3F/with/613334564\">this thread</a> just popped up, could be related</p>",
+        "id": 613334718,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785298175
+    },
+    {
+        "content": "<p>I mentioned it because that was my large leak and then double checked and saw you were in C where that doesn't apply.</p>",
+        "id": 613335400,
+        "sender_full_name": "Karl",
+        "timestamp": 1785298692
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613333477\">said</a>:</p>\n<blockquote>\n<p>I thought the bytes were going into a fixed size ringbuffer so there isn't any allocation.</p>\n</blockquote>\n<p>I think the issue (if I understand it correctly) is that if you take the previous state (or parts of it) and send it to the host (or store it anywhere in Roc code) then that bumps its refcount because something else is holding onto it, making it ineligible for in-place mutation</p>",
+        "id": 613335749,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785298908
+    },
+    {
+        "content": "<p>if that's the issue, then either after the host copies the bytes to the ring buffer (assuming copying bytes is what it's doing) then the host should decrement the refcount so it can become eligible for in-place mutation again, or else on the roc side turn it into a string so its refcount never gets bumped in the first place</p>",
+        "id": 613335811,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785298954
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1087940\">Jake Brownson</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613308312\">said</a>:</p>\n<blockquote>\n<p>To make sure we're talking about the same thing, I'm talking about <a href=\"https://github.com/jbrownson/roc-puri\">https://github.com/jbrownson/roc-puri</a> built against <code>Roc compiler version release-fast-b6cdced9</code>, I'm running <code>make -C todo native-speed-run</code> at the root of that repo</p>\n</blockquote>\n<p>this turned out to surface 4 different bugs which work together to cause problems in this example. Fixes may take a little bit (maybe a day or two?) but thanks for the repro! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 613335890,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785299022
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613335811\">said</a>:</p>\n<blockquote>\n<p>if that's the issue</p>\n</blockquote>\n<p>I had two separate issues and they're both reported. The one I'm mentioning to Jake is a glue issue: <a href=\"https://github.com/roc-lang/roc/issues/10451\">#10451</a> while the general one is <a href=\"https://github.com/roc-lang/roc/issues/10426\">#10426</a> which I understand as \"a write increfs the record and that borrow (?) doesn't get decref'd until the last field so only the last field can write in place\". I did have some issues with trying to avoid allocs in the dumb design by holding onto the original state and therefore keeping the reference count high and your <code>.inspect()</code> suggestion would have been good for that.</p>",
+        "id": 613336920,
+        "sender_full_name": "Karl",
+        "timestamp": 1785299546
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/613335890\">said</a>:</p>\n<blockquote>\n<p>this turned out to surface 4 different bugs</p>\n</blockquote>\n<p>I had Fable churning while I was in the hot tub to find a minimal repro and it didn't, that's probably why</p>",
+        "id": 613337128,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785299619
+    },
+    {
+        "content": "<p>ahh yeah I have a fix for the record issue incoming!</p>",
+        "id": 613337485,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785299840
+    },
+    {
+        "content": "<p>ok, record issue is fixed, and also <span class=\"user-mention\" data-user-id=\"1087940\">@Jake Brownson</span> the bugs I mentioned earlier that were making roc-puri builds pathological are also fixed!</p>",
+        "id": 613562138,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785384478
+    },
+    {
+        "content": "<p>I appreciate your prompt efforts. I'll move to head tomorrow.</p>",
+        "id": 613562213,
+        "sender_full_name": "Karl",
+        "timestamp": 1785384527
+    },
+    {
+        "content": "<p>I updated and confirmed the fixes. One of the files I had lying around trying to minimize happens to segfault the compiler so I submitted it: <a href=\"https://github.com/roc-lang/roc/issues/10527\">https://github.com/roc-lang/roc/issues/10527</a></p>",
+        "id": 614107699,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614233
+    },
+    {
+        "content": "<p>I was hoping the speed build would improve the perf of the todo app more, not sure if it's the vibe-coded clay port or something dumb, but I'm going to leave it there and switch my focus back to my primary project, I got a nice sense of Roc and will definitely keep my eye on it moving forward</p>",
+        "id": 614107747,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614293
+    },
+    {
+        "content": "<p>What kind of perf are you seeing? I'm getting a peak 2.3ms on a frame with 500 todos.</p>",
+        "id": 614107807,
+        "sender_full_name": "Karl",
+        "timestamp": 1785614380
+    },
+    {
+        "content": "<p>huh, mine stops holding 60fps once I get like 3, I'm on a mac</p>",
+        "id": 614107856,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614407
+    },
+    {
+        "content": "<p>and my baseline is 90ns on a frame.</p>\n<p>Maybe the large number of continuations?</p>",
+        "id": 614107926,
+        "sender_full_name": "Karl",
+        "timestamp": 1785614453
+    },
+    {
+        "content": "<p>yeah figured something like that, my knowledge in this area is super shallow but I know Haskell does a lot to make those things reasonably fast, but strange you're seeing different perf on the same code?</p>",
+        "id": 614107965,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614490
+    },
+    {
+        "content": "<p>Sorry, not on your code. On my platform where the clay port is in Rust and Roc is producing a tree of draw instructions.</p>",
+        "id": 614108016,
+        "sender_full_name": "Karl",
+        "timestamp": 1785614540
+    },
+    {
+        "content": "<p>ahh yeah, I couldn't just use the Rust clay bindings because I wanted the contiuation based rendering, so yeah probably something Haskelly I'm doing, or just something dumb in the vibe coded sections</p>",
+        "id": 614108087,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614605
+    },
+    {
+        "content": "<p>I've read through your source and have been trying your approach to widgets on my platform.</p>",
+        "id": 614108089,
+        "sender_full_name": "Karl",
+        "timestamp": 1785614608
+    },
+    {
+        "content": "<p>the clay port is 100% vibe, but backed by an oracle against the original C version for confidence it's reasonably correct at least</p>",
+        "id": 614108105,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614625
+    },
+    {
+        "content": "<p>I spend a lot more time thinking about how to express abstractions honestly than I do about perf, so I make no claims that my model is good for perf, but I don't see any reason it's worse than others for any fundamental reasons</p>",
+        "id": 614108182,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614710
+    },
+    {
+        "content": "<p>would benefit from caching/partial inval/incremental</p>",
+        "id": 614108210,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614741
+    },
+    {
+        "content": "<p>I was really pleased how the drag/drop came out, some nice combinators popped out</p>",
+        "id": 614108251,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614794
+    },
+    {
+        "content": "<p>I'll actually build+run your setup this afternoon and report back on the reason.</p>\n<p>My guess is that it's the refcounted garbage collection. Your design probably has a whole lot of counters being worked.</p>",
+        "id": 614108253,
+        "sender_full_name": "Karl",
+        "timestamp": 1785614796
+    },
+    {
+        "content": "<p>yeah, probably right</p>",
+        "id": 614108277,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614809
+    },
+    {
+        "content": "<p>I'll have to see how your drag/drop combinators compare to my normal set.</p>",
+        "id": 614108325,
+        "sender_full_name": "Karl",
+        "timestamp": 1785614865
+    },
+    {
+        "content": "<p>yeah, not something I've thought about before, but at the end of the day it's just a function + state like anything else. I also added a lot of nuance to how the clicking interacts w/ the todo editing that would be very difficult in traidtional UI</p>",
+        "id": 614108367,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614909
+    },
+    {
+        "content": "<p>like double clicking starts the edit, but we intiailize the text box as though a single click happened, but since the text moves we make a dead zone until drag starts</p>",
+        "id": 614108406,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614946
+    },
+    {
+        "content": "<p>can't do that if the click state is all internal and implicit</p>",
+        "id": 614108419,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614961
+    },
+    {
+        "content": "<p>that's the kind of thing that makes an app feel super refined</p>",
+        "id": 614108432,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785614982
+    },
+    {
+        "content": "<p>I've been slow about getting back to you because I've been bogged down in getting the style system ready for a real widgets push (gradients, shadows, images, border effects, etc).</p>",
+        "id": 614108475,
+        "sender_full_name": "Karl",
+        "timestamp": 1785615035
+    },
+    {
+        "content": "<p>no worries at all, I had fun digging into it</p>",
+        "id": 614108501,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785615061
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1087940\">Jake Brownson</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614107747\">said</a>:</p>\n<blockquote>\n<p>I was hoping the speed build would improve the perf of the todo app more</p>\n</blockquote>\n<p>Turns out it wasn't anything in your design, though it is allocation heavy compared to the id approach.</p>\n<p>Perf pass says 96% of the time producing a frame was spent manipulating memory. The <code>roc-ray</code> platform you grabbed is using a debug allocator compiled <code>ReleaseSafe</code> so it's capturing a stacktrace for all ~500 malloc/realloc/free calls into the platform each frame. Switching to a <code>ReleaseFast</code> build of <code>roc-ray</code> stops the stackframe build and fixes the problem at a ~35x speedup.</p>\n<p>Switching the platform over to the <code>smp_allocator</code>instead of the debug allocator gets a 45x speedup and yields 93 todos at 60fps.</p>",
+        "id": 614113847,
+        "sender_full_name": "Karl",
+        "timestamp": 1785620655
+    },
+    {
+        "content": "<p>Ahh interesting, yeah the whole platform thing was all the LLM</p>",
+        "id": 614113883,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785620711
+    },
+    {
+        "content": "<p>My Rust version is all based on Linebender, if I were to take this further on Roc I'd probably do a Linebender based platform</p>",
+        "id": 614113950,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785620784
+    },
+    {
+        "content": "<p>documented this finding in the repo, thanks for taking a look</p>",
+        "id": 614114764,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785621780
+    },
+    {
+        "content": "<p>That was also with a dev build. A release build does complete on my machine and is 13x faster and is 568 todos at 60 fps.</p>",
+        "id": 614114926,
+        "sender_full_name": "Karl",
+        "timestamp": 1785621955
+    },
+    {
+        "content": "<p>wow nice</p>",
+        "id": 614114939,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785621966
+    },
+    {
+        "content": "<p>That's kind of why I was wondering because IME Roc is pretty fast.</p>",
+        "id": 614114961,
+        "sender_full_name": "Karl",
+        "timestamp": 1785622004
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614113847\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"1087940\">Jake Brownson</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614107747\">said</a>:</p>\n<blockquote>\n<p>I was hoping the speed build would improve the perf of the todo app more</p>\n</blockquote>\n<p>Turns out it wasn't anything in your design, though it is allocation heavy compared to the id approach.</p>\n<p>Perf pass says 96% of the time producing a frame was spent manipulating memory. The <code>roc-ray</code> platform you grabbed is using a debug allocator compiled <code>ReleaseSafe</code> so it's capturing a stacktrace for all ~500 malloc/realloc/free calls into the platform each frame. Switching to a <code>ReleaseFast</code> build of <code>roc-ray</code> stops the stackframe build and fixes the problem at a ~35x speedup.</p>\n<p>Switching the platform over to the <code>smp_allocator</code>instead of the debug allocator gets a 45x speedup and yields 93 todos at 60fps.</p>\n</blockquote>\n<p>Luke made a series of PR to roc-ray for 0.8.3 that includes your exact remarks and it does make a big difference</p>\n<p><a href=\"https://github.com/lukewilliamboswell/roc-ray/pull/121\">https://github.com/lukewilliamboswell/roc-ray/pull/121</a><br>\n<a href=\"https://github.com/lukewilliamboswell/roc-ray/pull/123\">https://github.com/lukewilliamboswell/roc-ray/pull/123</a></p>\n<p>Also this one brings perf benefits related to fewer allocations and more<br>\n<a href=\"https://github.com/lukewilliamboswell/roc-ray/pull/126\">https://github.com/lukewilliamboswell/roc-ray/pull/126</a></p>\n<p>All in all, terrocotta is now reaching &gt;1200fps on the toy examples.</p>",
+        "id": 614290308,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785754079
+    },
+    {
+        "content": "<p>Glad it was helpful. I think it's fun that all the GUI work is converged onto TEA running on Clay.</p>",
+        "id": 614290883,
+        "sender_full_name": "Karl",
+        "timestamp": 1785754267
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1087940\">Jake Brownson</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614108182\">said</a>:</p>\n<blockquote>\n<p>I spend a lot more time thinking about how to express abstractions honestly than I do about perf, so I make no claims that my model is good for perf, but I don't see any reason it's worse than others for any fundamental reasons</p>\n</blockquote>\n<p>I took a quick look at <a href=\"https://github.com/lukewilliamboswell/roc-ray/pull/126\">roclay</a>. I think one main difference is that even though roclay does not use the clay's original flat layout data structure. You have a nested struct which is not going to be as friendly to the CPU cache and you won't be able to reuse that allocation from frame to frame. So even though you have the same algorithm, it walks a fundamentally different data structure which is going to be slower. You can read here how I was able to use a nested declarative syntax, yet produce a flat layout for terrocotta in this architecture document <a href=\"https://github.com/obust/terrocotta/blob/main/docs/architecture.md#view\">https://github.com/obust/terrocotta/blob/main/docs/architecture.md#view</a></p>\n<p>On the abstraction side, I think your \"around\" is quite interesting. I am curious to see how various UI features build on top of that. I have a somewhat similar plan for \"middleware\" on the rendering pipeline. However it is going to be fundamentally more limited since it applies only to the post solve layout tree <a href=\"https://github.com/obust/terrocotta/issues/37\">https://github.com/obust/terrocotta/issues/37</a></p>",
+        "id": 614292193,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785754715
+    },
+    {
+        "content": "<p>also in terms of perf, text measurement caching is critical. I did not check if roclay/puri does caching but it made a big difference for terrocotta</p>",
+        "id": 614293374,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785755127
+    },
+    {
+        "content": "<p>I'm split differently than terrocotta and roclay in that my Clay port is in Rust and the Roc side sends a tree across the host boundary. The rationale is that I can potentially replace the host with one that implements a vdom and get to HTML that way.</p>\n<p>Most of my effort has gone into the platform/runtime so I have a substantial portion of Tailwind implemented using a typed builder (borders, opacity, gradients, images, box shadows, text decoration, etc), an animation framework, a state diffing logging system for LLM debugging, etc. I think I'm pretty close to the point where I'm back to doing the JS framework equivalent stuff instead of doing the browser equivalent stuff.</p>\n<p>Just this weekend I got far enough to get the main view of my transcription app ported over. The tauri version has had multiple rounds of perf work done with the goal of maintaining 100ms responsiveness over a 50k word transcript. Roc version got the accidental quadratics out of the model and is 4ms on an 80k transcript.</p>",
+        "id": 614294918,
+        "sender_full_name": "Karl",
+        "timestamp": 1785755703
+    },
+    {
+        "content": "<p>That's interesting. You might want to send ElementOp messages instead of the actual tree over the host boundary. This way in the case of native apps, you are not forced to build the actual tree which would hurt performance<br>\n<a href=\"https://github.com/obust/terrocotta/blob/main/docs/architecture.md#view\">https://github.com/obust/terrocotta/blob/main/docs/architecture.md#view</a></p>\n<p>In the case of web, the platform can build the VDOM and diff it (or diff the ElementOp stream directly?)</p>",
+        "id": 614302723,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785758719
+    },
+    {
+        "content": "<p>I haven't looked at the code, but quick note that nested records should get flattened into one contiguous chunk of memory</p>",
+        "id": 614309966,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785761208
+    },
+    {
+        "content": "<p>there may be other perf tradeoffs related to how the records are organized, but nesting alone shouldn't cause a significant problem compared to having all the fields of both records in one big field; both scenarios should have zero heap allocations from the records themselves</p>",
+        "id": 614310328,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785761306
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"680911\">Romain Lepert</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614292193\">said</a>:</p>\n<blockquote>\n<p>you won't be able to reuse that allocation from frame to frame</p>\n</blockquote>\n<p>My knowledge on clay is limited to the famous video about its algorithm. I haven't studied the original C code nor the vibe coded, but oracle verified ports. That said my understanding is the idea behind clay is to redo the calculation every frame in support of \"immediate mode\" UI. I guess you specifically said the _allocation_ though, so yeah might make sense to do some kind of arena thing?  This is not my area of expertise, my core idea here is independent of how layout is done and I just needed _something_ to create an artifact, and from a user perspective I think there is a lot of benefit in the continuation based clay as it doesn't require an identity system. I make no claims about the performance costs or benefits of that.</p>\n<p>Thanks for taking a look btw.</p>",
+        "id": 614363579,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785776470
+    },
+    {
+        "content": "<p>right, but here we nest using a list for children because each element might have an arbitrary number of children.</p>\n<p>Suppose you have this hypothetical nested UI</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>box(Id(\"card\"), { width: 300, height: 200 }, [\n    box(Id(\"header\"), { width: 300, height: 40 }, [\n        box(Id(\"profile\"), { width: 200, height: 40 }, []),\n        box(Id(\"actions\"), { width: 100, height: 40 }, []),\n    ]),\n    box(Id(\"body\"), { width: 300, height: 160 }, []),\n])\n</code></pre></div>\n<p>So here is the kind of simulated DRAM memory layout you get with nested tree vs flat contiguous list</p>\n<h2>Nested tree version</h2>\n<table>\n<thead>\n<tr>\n<th style=\"text-align: right;\">DRAM address</th>\n<th><code>Node</code> record</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td style=\"text-align: right;\">40</td>\n<td><code>{ id: \"card\", width: 300, height: 200, children: { ptr: 120, len: 2 } }</code></td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">120</td>\n<td><code>{ id: \"header\", width: 300, height: 40, children: { ptr: 480, len: 2 } }</code></td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">121</td>\n<td><code>{ id: \"body\", width: 300, height: 160, children: { ptr: 0, len: 0 } }</code></td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">480</td>\n<td><code>{ id: \"profile\", width: 200, height: 40, children: { ptr: 0, len: 0 } }</code></td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">481</td>\n<td><code>{ id: \"actions\", width: 100, height: 40, children: { ptr: 0, len: 0 } }</code></td>\n</tr>\n</tbody>\n</table>\n<h2>Flat contiguous version</h2>\n<p>node list</p>\n<table>\n<thead>\n<tr>\n<th style=\"text-align: right;\">DRAM address</th>\n<th style=\"text-align: right;\"><code>nodes</code> index</th>\n<th>Inline <code>LayoutNode</code> record</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td style=\"text-align: right;\">120</td>\n<td style=\"text-align: right;\">0</td>\n<td><code>{ id: \"card\", width: 300, height: 200, parent: none, child_start: 2, child_count: 2 }</code></td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">121</td>\n<td style=\"text-align: right;\">1</td>\n<td><code>{ id: \"header\", width: 300, height: 40, parent: 0, child_start: 0, child_count: 2 }</code></td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">122</td>\n<td style=\"text-align: right;\">2</td>\n<td><code>{ id: \"profile\", width: 200, height: 40, parent: 1, child_start: 0, child_count: 0 }</code></td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">123</td>\n<td style=\"text-align: right;\">3</td>\n<td><code>{ id: \"actions\", width: 100, height: 40, parent: 1, child_start: 0, child_count: 0 }</code></td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">124</td>\n<td style=\"text-align: right;\">4</td>\n<td><code>{ id: \"body\", width: 300, height: 160, parent: 0, child_start: 0, child_count: 0 }</code></td>\n</tr>\n</tbody>\n</table>\n<p>relationship list</p>\n<table>\n<thead>\n<tr>\n<th style=\"text-align: right;\">DRAM address</th>\n<th style=\"text-align: right;\"><code>child_indices</code> index</th>\n<th style=\"text-align: right;\">Stored <code>U64</code></th>\n<th style=\"text-align: right;\">Target node address</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td style=\"text-align: right;\">600</td>\n<td style=\"text-align: right;\">0</td>\n<td style=\"text-align: right;\">2</td>\n<td style=\"text-align: right;\">122</td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">601</td>\n<td style=\"text-align: right;\">1</td>\n<td style=\"text-align: right;\">3</td>\n<td style=\"text-align: right;\">123</td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">602</td>\n<td style=\"text-align: right;\">2</td>\n<td style=\"text-align: right;\">1</td>\n<td style=\"text-align: right;\">121</td>\n</tr>\n<tr>\n<td style=\"text-align: right;\">603</td>\n<td style=\"text-align: right;\">3</td>\n<td style=\"text-align: right;\">4</td>\n<td style=\"text-align: right;\">124</td>\n</tr>\n</tbody>\n</table>\n<h2>Pros of flat contiguous</h2>\n<p>Now the real value is two fold:</p>\n<ul>\n<li>because in the flat case those are contiguous buffers, you can allocate once, clear between frame and write back to the same buffer on the next frame.</li>\n<li>because those are contiguous in DFS order, the solve algorithm is hardware friendly</li>\n</ul>\n<h2>Layout solve</h2>\n<p>here are the clay layout solve passes and their corresponding traversal</p>\n<table>\n<thead>\n<tr>\n<th>Pass</th>\n<th>Traversal</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Order floating roots by attachment dependency</td>\n<td>DFS</td>\n</tr>\n<tr>\n<td>Resolve X sizes</td>\n<td>DFS</td>\n</tr>\n<tr>\n<td>Wrap text</td>\n<td>Linear forward</td>\n</tr>\n<tr>\n<td>Refresh intrinsic sizes</td>\n<td>Linear reverse</td>\n</tr>\n<tr>\n<td>Resolve Y sizes</td>\n<td>DFS</td>\n</tr>\n<tr>\n<td>Update content sizes</td>\n<td>Linear forward</td>\n</tr>\n<tr>\n<td>Position nodes</td>\n<td>DFS</td>\n</tr>\n</tbody>\n</table>\n<p>Nested tree memory access pattern</p>\n<ul>\n<li>DFS: 40 → 120 → 480 → 481 → 121</li>\n<li>linear forward: 40 → 120 → 480 → 481 → 121</li>\n</ul>\n<p>Flat contiguous memory access pattern</p>\n<ul>\n<li>DFS: node 120 (→ edge 602) → node 121 (→ edge 600) → node 122 (→ edge 601) → node 123 (→ edge 603) → node 124</li>\n<li>linear: 120 → 121 → 122 → 123 → 124</li>\n</ul>\n<p>Because the memory access pattern is super simple you get </p>\n<ul>\n<li>cache locality:  fetching node <code>120</code> brings its surrounding cache line into L1. That cache line maybe contain however many subsequent nodes</li>\n<li>prefetching: CPUs recognize sequential accesses and begin fetching later cache lines before they are requested</li>\n</ul>",
+        "id": 614363730,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785776526
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"680911\">Romain Lepert</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614292193\">said</a>:</p>\n<blockquote>\n<p>I think your \"around\" is quite interesting</p>\n</blockquote>\n<p>Yeah that was a nice thing that fell out of this. It works well for the fine-tuned \"double click to edit\" functionality. I think having combinators like that is a side effect of the core idea of truly pure UI widgets.</p>",
+        "id": 614364601,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785776864
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"680911\">Romain Lepert</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614363730\">said</a>:</p>\n<blockquote>\n<p>So here is the kind of simulated DRAM memory layout you get with nested tree vs flat contiguous list</p>\n</blockquote>\n<p>interesting analysis. I'm not a perf guy, and roclay was just a thing needed to demo the idea, not surprised there is a lot of room for improvement.</p>",
+        "id": 614364834,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785776947
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1087940\">Jake Brownson</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614363579\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"680911\">Romain Lepert</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614292193\">said</a>:</p>\n<blockquote>\n<p>you won't be able to reuse that allocation from frame to frame</p>\n</blockquote>\n<p>My knowledge on clay is limited to the famous video about its algorithm. I haven't studied the original C code nor the vibe coded, but oracle verified ports. That said my understanding is the idea behind clay is to redo the calculation every frame in support of \"immediate mode\" UI. I guess you specifically said the _allocation_ though, so yeah might make sense to do some kind of arena thing?  This is not my area of expertise, my core idea here is independent of how layout is done and I just needed _something_ to create an artifact, and from a user perspective I think there is a lot of benefit in the continuation based clay as it doesn't require an identity system. I make no claims about the performance costs or benefits of that.</p>\n<p>Thanks for taking a look btw.</p>\n</blockquote>\n<p>Yes clay does one static arena allocation and only uses that. In terrocotta I use the standard List allocation which copies to a bigger buffer when it reaches the limit. I pay the price of copies in the first few frames but eventually the number of nodes becomes stable and there is no new allocation.</p>",
+        "id": 614364859,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785776956
+    },
+    {
+        "content": "<p>I'm not familiar with terrocotta, and not finding it on google, got a link?</p>",
+        "id": 614365130,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777056
+    },
+    {
+        "content": "<p>oh I see one above</p>",
+        "id": 614365180,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777071
+    },
+    {
+        "content": "<p>yes sorry, I mentioned it here <a class=\"stream-topic\" data-stream-id=\"304902\" href=\"/#narrow/channel/304902-show-and-tell/topic/Terrocotta/with/614332971\">#show and tell &gt; Terrocotta</a></p>",
+        "id": 614365284,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785777104
+    },
+    {
+        "content": "<p>how do you track UI state like cursor position, scroll offset, focus?</p>",
+        "id": 614365628,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777240
+    },
+    {
+        "content": "<p>I'll read your show and tell</p>",
+        "id": 614365643,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777246
+    },
+    {
+        "content": "<p>I guess my point is that immediate mode UI requires a fast layout+render logic because you want to keep as much 8ms computing budget (120 fps) to your business logic. The way clay achieves this is through the data layout and exploiting this layout with a DFS solver. Without the data layout you loose most of the perf of clay</p>",
+        "id": 614365789,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785777307
+    },
+    {
+        "content": "<p>I'm not sure I understand what you mean by data layout, are you saying there is something fundamentally costly about the continuation API modification?</p>",
+        "id": 614366025,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777411
+    },
+    {
+        "content": "<p>Are you talking about retaining/caching the layout between frames?</p>",
+        "id": 614366052,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777422
+    },
+    {
+        "content": "<p>Not a perf guy so I may be missing something obvious</p>",
+        "id": 614366091,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777434
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1087940\">Jake Brownson</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614365628\">said</a>:</p>\n<blockquote>\n<p>how do you track UI state like cursor position, scroll offset, focus?</p>\n</blockquote>\n<p>I don't see this mentioned in the architecture.md. To me this is the most important question from a usability standpoint, we tend to hand-wave this and try to not treat it as state, which is the core idea in puri</p>",
+        "id": 614366691,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777672
+    },
+    {
+        "content": "<blockquote>\n<p>The flat representation is critical for performance</p>\n</blockquote>\n<p>Ahh okay, I see what you're saying in the layout thing, sounds like your clay port is way more thoughtful about perf than mine</p>",
+        "id": 614366881,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777738
+    },
+    {
+        "content": "<p>again, my roclay is just vibe coded w/ an oracle to verify output vs the C version, not claiming any innovation there</p>",
+        "id": 614366936,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777759
+    },
+    {
+        "content": "<p>The main thing Puri benefits from is not requiring stable identities across frames for UI elements, but might be able to do your perf stuff w/ a continuation thing too, might need some heap allocations though</p>",
+        "id": 614367143,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777831
+    },
+    {
+        "content": "<p>Puri is not an answer to the full stack, it's the idea of separating state management from widget behavior/rendering, so maybe your layout work could pair w/ it</p>",
+        "id": 614367387,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777926
+    },
+    {
+        "content": "<p>no, not the continuation API in particular. The problem is the nested tree structure. It is not good for the layout solver.</p>\n<p>The example gives those DRAM memory access pattern:</p>\n<blockquote>\n<p>Nested tree memory access pattern</p>\n<ul>\n<li>DFS: 40 → 120 → 480 → 481 → 121</li>\n<li>linear forward: 40 → 120 → 480 → 481 → 121</li>\n</ul>\n<p>Flat contiguous memory access pattern</p>\n<ul>\n<li>DFS: node 120 (→ edge 602) → node 121 (→ edge 600) → node 122 (→ edge 601) → node 123 (→ edge 603) → node 124</li>\n<li>linear: 120 → 121 → 122 → 123 → 124</li>\n</ul>\n</blockquote>\n<p>You see how in the second case the pattern is super simple. That means CPU can predict it and prefetch in advance. Then your CPU is doing pure compute and hides away all the loading from DRAM. That is what makes the Layout solve fast.</p>\n<blockquote>\n<p>Are you talking about retaining/caching the layout between frames?</p>\n</blockquote>\n<p>And yes, that is the second reason the clay approach is fast. you never re-allocate for your layout.</p>",
+        "id": 614367535,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785777984
+    },
+    {
+        "content": "<p>if you pair Puri w/ automatic state management/id system like retained or immediate/react style structural identity then you don't need the continuation based layout</p>",
+        "id": 614367557,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785777997
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"680911\">Romain Lepert</span> <a href=\"#narrow/channel/304641-ideas/topic/Thoughts.20on.20UI/near/614367535\">said</a>:</p>\n<blockquote>\n<p>you never re-allocate for your layout.</p>\n</blockquote>\n<p>I'm still a bit confused here, you specifically are saying re-allocate, but do you mean re-compute the layout? I thought clay was designed to re-compute the layout every frame in the same way immediate model UI re-renders every frame as opposed to retained mode.</p>\n<p>I could see a more thoughtful memory management approach where we re-compute the layout every frame, but don't re-allocate its memory and use some kind of arena thing.</p>\n<p>I'm unfamiliar with the DRAM pattern ideas you're referencing, but I can def imagine a contiguous/flat allocation being more efficient.</p>",
+        "id": 614368128,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785778214
+    },
+    {
+        "content": "<blockquote>\n<p>how do you track UI state like cursor position, scroll offset, focus?</p>\n</blockquote>\n<p>so this is my state that I keep between frames<br>\n<a href=\"https://github.com/obust/terrocotta/blob/main/package/Program.roc#L83\">https://github.com/obust/terrocotta/blob/main/package/Program.roc#L83</a></p>\n<p>it stores not only the layout, but also some UI state like which nodes are hovered, focused, what is their scroll offset.</p>\n<p>the whole UI runtime loop is here and pretty readable<br>\n<a href=\"https://github.com/obust/terrocotta/blob/main/package/Program.roc#L137\">https://github.com/obust/terrocotta/blob/main/package/Program.roc#L137</a></p>",
+        "id": 614368719,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785778346
+    },
+    {
+        "content": "<p>focused is a U64 which implies there is some kind of identity system to assign stable identities to widgets? Is it structural like React/most immediate mode things?</p>\n<p>Where do we store cursor position in a text box? Do we only support one top-level scroll?</p>",
+        "id": 614369118,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785778433
+    },
+    {
+        "content": "<blockquote>\n<p>I could see a more thoughtful memory management approach where we re-compute the layout every frame, but don't re-allocate its memory and use some kind of arena thing.</p>\n</blockquote>\n<p>yes, that is exactly what is happening</p>",
+        "id": 614369208,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1785778450
+    },
+    {
+        "content": "<p>Awesome, yeah this is exactly why I think something like Puri is useful, though I included roclay in the repo it's not part of puri itself, if we want to innovate on layout or state management with something like Puri we don't have to reinvent widgets</p>",
+        "id": 614369428,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785778507
+    },
+    {
+        "content": "<p>Puri doesn't include many widgets of course as it's just a demo if the idea, but if we invested in building out widgets once we don't have to do it for every new state management or layout experiment</p>",
+        "id": 614369667,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785778564
+    },
+    {
+        "content": "<p>I don't claim the roclay name btw, it's a pretty great name for a roc clay port, someone is welcome to take it if they do a serious port vs my slop port</p>",
+        "id": 614370681,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785778820
+    },
+    {
+        "content": "<p>though I would encourage any clay port to a functional language to use the continuation modification to the API</p>",
+        "id": 614371032,
+        "sender_full_name": "Jake Brownson",
+        "timestamp": 1785778908
+    }
+]

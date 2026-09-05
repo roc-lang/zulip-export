@@ -1,0 +1,311 @@
+<html>
+<head><meta charset="utf-8"><title>Reworking Rust Glue · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html">Reworking Rust Glue</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="613786181"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613786181" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karl <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613786181">(Jul 31 2026 at 04:48)</a>:</h4>
+<p>The current Rust glue doesn't really take advantage of Rust's features and leaves the door open for errors that those features prevent. The GUI platform I'm working on (named <code>roc-solid</code> because it was going to be  a Solid port; needs a rename) is up to ~30k lines of Rust and 3k LoC glue and <code>tower-platform</code> is 10.5k Rust and 3.7k glue  so I feel they're large enough to exercise the glue reasonably well. I have had Claude do the wrong thing at several points along the way. Since I'm waiting on the weekly token reset tonight and design work is cheap I thought I'd take a swing at it tonight. This isn't particularly carefully considered and my total investment is a couple hours of thinking about it so I'm not particularly committed to anything.</p>
+<p>Goals going in were to eliminate <code>unsafe</code> outside of generated code and to have the borrow checker earn its keep. I'm going to dump some LLM summaries and code examples and do some more formal process if there's interest. If not then I enjoyed thinking about it.</p>
+
+
+
+<a name="613786310"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613786310" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karl <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613786310">(Jul 31 2026 at 04:49)</a>:</h4>
+<p>I didn't explicitly restrict things to just the glue layer so a couple compiler feature requests grew out of the session:</p>
+<h3>1. Retain the source alias name for structural types</h3>
+<p><code>glue.zig</code> walks <em>through</em> <code>.alias</code> nodes to reach the backing record and discards <code>alias.name</code> on the way (<a href="http://src/glue/glue.zig:2455">:2455</a>, :2837, :4216, :4268). Keep it and hand emitters the module-qualified name. One field on <code>RecordRepr</code>; no layout change; all three emitters benefit.</p>
+<blockquote>
+<p><code>platform-im/Element.roc</code> declares <code>ArgPod : { kind : U8, a : I32, b : I32 }</code>. The host writes <code>abi::AnonStruct17fa5d8cd542867 { kind, a, b }</code> in eight places — the name the author gave it is discarded between declaration and emission.</p>
+</blockquote>
+<h3>2. Expose the erased-callable argument-struct layout</h3>
+<p>Add the packed args <code>AbiLayout</code> (and the return layout) to <code>FunctionRepr</code> beside the existing type ids, so emitters can generate and assert the struct the ABI actually passes instead of reconstructing it.</p>
+<blockquote>
+<p>Both platforms hand-declare <code>#[repr(C)] struct Args { … }</code> and pass <code>&amp;args as *const u8</code> into <code>callable_fn_ptr</code>. roc-solid's hazards note records <code>(Str, Bool, model -&gt; model)</code> SIGBUSing on a sub-word parameter in a non-final slot — a hand-written struct can't be checked against anything, and neither host has any way to know it guessed wrong.</p>
+</blockquote>
+<h3>3. Export an ABI fingerprint symbol from compiled apps</h3>
+<p>Hash every layout fact the type table exposes and export a zero-sized symbol named for it; glue emits an opt-in <code>roc_abi_assert!()</code> referencing it, so a host built against stale bindings fails at link rather than at runtime.</p>
+<blockquote>
+<p>roc-solid's standing hazards records "<code>Element</code> moves if <code>Info</code> grows — a glue regen and an ABI change," and its staleness check lives in the <em>consumer's</em> Justfile (<code>stat</code> the roc binary, shasum the platform sources). Nothing on the roc side lets a host detect that its bindings no longer match the app.</p>
+</blockquote>
+<h3>4. (Optional) A warning channel for glue scripts</h3>
+<p><code>make_glue : List(Types) -&gt; Try(List(File), Str)</code> lets a script fail the build but not warn, so there's no way to tell a platform author about a boundary shape that is legal but hazardous. Fallback needing no compiler change: emit the warning as a comment or <code>#[deprecated]</code> note in the generated source.</p>
+<blockquote>
+<p><code>TextInput(Str, Str)</code> — two payload slots the type system can't tell apart, so transposing them compiles silently in every host. Worth naming; not worth failing a build over.</p>
+</blockquote>
+<h3>5. (Small) Pin "host-visible allocations use atomic refcounts" as a test</h3>
+<p><code>arc.zig</code>'s visibility analysis picks <code>single_thread</code> only for allocations no host thread can touch (<a href="http://src/lir/arc.zig:4667">:4667</a>). Generated glue is about to rely on that to declare Roc types <code>Send</code>/<code>Sync</code> by default. Add a test asserting boundary-reachable allocations always get <code>.atomic</code>.</p>
+<blockquote>
+<p>tower-platform runs a multi-threaded tokio runtime and shares Roc handlers and the app model across workers behind seven hand-written <code>unsafe impl Send/Sync</code>. That's sound <em>because</em> of the visibility rule — but the rule is currently an implementation property, not a pinned contract, and glue is about to extend it to every host.</p>
+</blockquote>
+
+
+
+<a name="613786379"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613786379" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karl <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613786379">(Jul 31 2026 at 04:50)</a>:</h4>
+<h2>Overall Design</h2>
+<h3>Memory &amp; ownership</h3>
+<ul>
+<li><strong>Release mechanism</strong> — <code>Drop</code> on refcounted leaves (<code>RocStr</code>, <code>RocListWith&lt;T&gt;</code>, <code>RocBox&lt;T&gt;</code>, <code>RocErasedCallable</code>) plus a generated <code>Drop</code> per tag union; records use derived drop glue. <em>Rejected: explicit release helpers (chosen first, then revisited — Rust's drop glue <strong>is</strong> the reachability closure, so the gap can't reopen); Drop-bomb.</em></li>
+<li><strong>Retain</strong> — <code>Clone = incref</code> uniformly, including generated records and tag unions. <em>Rejected: Clone-on-leaves-only, which was hedging a cost that doesn't exist — <code>Element::incref</code> is ≤4 relaxed atomics, bounded by the static type.</em></li>
+<li><strong>Consuming iteration</strong> — <code>try_into_iter() -&gt; Result&lt;IntoIter, Self&gt;</code>, <code>iter()</code> for borrows. <em>Rejected: clone-on-shared (silent cost cliff); no consuming iterator at all.</em></li>
+</ul>
+<h3>Runtime</h3>
+<ul>
+<li><strong>Allocator access</strong> — helpers call the <code>roc_alloc</code>/<code>roc_dealloc</code> linker symbols. Forced by <code>Drop</code> taking no parameters. <em>Rejected: keeping the vtable (chosen first, incompatible with Drop); registered global host pointer; split symbol/vtable APIs — the two-paths-disagree shape.</em></li>
+<li><strong>Override</strong> — compile-time, via a <code>RocRuntime</code> trait and <code>roc_runtime!(Impl)</code> macro. <code>dbg</code>/<code>expect_failed</code>/<code>crashed</code> take <code>&amp;[u8]</code>.</li>
+<li><strong>Canned impl</strong> — <code>SystemRuntime</code>, methods directly callable. <em>Rejected: <code>DefaultRuntime</code> (implies automatic and recommended, both false); <code>TestingRuntime</code> (used as a production building block).</em></li>
+<li>Six symbols mandatory, macro optional; both is a duplicate-symbol error. Retires <code>no_roc_std_helpers</code> and <code>unexpected_cfgs</code>.</li>
+</ul>
+<h3>Types &amp; naming</h3>
+<ul>
+<li><strong>Source aliases</strong> — the compiler retains <code>alias.name</code> at the four <code>.alias</code> drill-through sites. Module-qualified; canonical by <code>(module, name)</code> sort; others as <code>pub type</code>; <strong>each use site spelled with the alias reached there</strong>. <em>Rejected: one canonical name spelled everywhere (<code>BorderTok</code> in an Element signature); hash-canonical with all names as aliases (hash leaks into rustc errors).</em></li>
+<li><strong>Inline anonymous records</strong> — repaired path-derived fallback, scoped to structures with no source alias, one name per structure, emitter asserts both invariants. <em>Rejected: readable structural encoding; dropping the fallback. Accepted cost: a rename churns host code, loudly.</em></li>
+<li><strong>Lists</strong> — <code>unsafe trait RocElement</code>, <code>RocList&lt;T: RocElement&gt;</code>, <code>RocListRaw</code> escape hatch.</li>
+<li><strong>Boxes</strong> — <code>RocBox&lt;T&gt;</code> newtype with safe deref.</li>
+<li><strong>Identifiers</strong> — one escaping function, complete keyword set, uniform suffix form. <em>Rejected: <code>r#</code> raw identifiers; fixing only the tag sites.</em></li>
+</ul>
+<h3>Tag unions</h3>
+<ul>
+<li><strong>Representation</strong> — <code>[u8; disc_offset]</code> + zero-sized alignment marker at both widths; <code>union</code> deleted; <code>payload_x_unchecked()</code> as escape hatch. <em>Rejected: keeping the 64/32 split; union everywhere — Roc's unrounded payload area is inexpressible as a Rust union, and the divergence is reachable on x86-64.</em></li>
+<li><strong>Access</strong> — borrowed view enum, <code>into_view()</code>, constructors. <em>Rejected: <code>Option</code>-returning accessors (no exhaustiveness); view enum without constructors.</em></li>
+<li><strong>Payload naming</strong> — struct variants when the payload is a single record; <code>_0</code>/<code>_1</code> otherwise, with a doc comment listing each slot's Roc type, and a warning scoped to variants with ≥2 slots of the same type. <em>Rejected: tuple structs (padding shifts indices); per-position newtypes (<code>Deref</code> reintroduces the swap hazard, and without <code>Deref</code> reads become <code>t._0.0</code>); refusing positional payloads outright.</em></li>
+<li><strong>Rationale recorded</strong> in <code>store.zig</code>, <code>layout.zig</code>, and the glue README — tag-last with an unrounded payload area is a space optimization (16 vs 24 bytes on the canonical example), not a convention.</li>
+</ul>
+<h3>Callables &amp; construction</h3>
+<ul>
+<li>Typed newtype per signature, safe <code>call()</code>, args struct and return buffer from committed layout with <code>AbiLayout</code> assertions, <code>Clone</code>/<code>Drop</code>. <em>Rejected: generated Args structs with a generic call helper; args-only typing.</em></li>
+<li>Construction covers everything in the platform's type table. <em>Rejected: host-created callables; per-app glue.</em></li>
+<li><code>mem::zeroed</code> replaced by constructors, <code>roc_unreachable() -&gt; !</code>, and <code>T::zeroed()</code> emitted only for types with no refcounted fields.</li>
+</ul>
+<h3>Errors</h3>
+<ul>
+<li>Infallible mainline (<code>From&lt;&amp;str&gt;</code>, <code>from_str</code>, <code>from_iter</code>, <code>new</code>); <code>try_*</code> for the genuinely fallible. No panic path in generated code. <em>Rejected: blanket <code>Result</code> (overscoped — <code>RocOps.alloc</code> already unwraps, so OOM is fatal by contract); abort-everywhere.</em> [ASSUMPTION] null from <code>roc_alloc</code> aborts through <code>roc_crashed</code>.</li>
+</ul>
+<h3>Boundary &amp; build</h3>
+<ul>
+<li>Safe wrappers for provided entrypoints over <code>mod raw</code>; every <code>into_raw()</code> lives inside them. <em>Rejected: the <code>AbiChecked</code> token.</em></li>
+<li><code>roc_abi_assert!()</code>, opt-in. <em>Rejected: unconditional link-time symbol (breaks app-less builds); stub macro; hash-suffixed entrypoint names (blast radius across linker, shim, hot-reload).</em></li>
+<li>Provenance header: ABI fingerprint + glue spec identity only. <em>Rejected: full provenance (churns per compiler build, breaking the no-rebuild property); none.</em></li>
+<li>Safe introspection API — <code>refcount()</code>, <code>element_stride()</code>, <code>is_seamless_slice()</code>.</li>
+<li><code>improper_ctypes</code> allows scoped to <code>mod raw</code>. Single <code>#[path]</code> file, <code>rustfmt::skip</code> spelled correctly. <em>Rejected: generated crate; rustfmt-clean emission.</em></li>
+</ul>
+<h3>Scope</h3>
+<p>Compiler-side work (alias retention, fingerprint, teardown reachability) for all three emitters; the Rust API redesign Rust-only.</p>
+<h3>Defects found, independent of the redesign</h3>
+<ol>
+<li>Tag identifiers bypass keyword escaping; keyword list missing 12 reserved words — a Roc tag named <code>Try</code> fails to compile.</li>
+<li><code>rustfmt_skip</code> is the pre-2018 spelling, inert.</li>
+<li>Union rounding vs <code>disc_offset</code> diverges on x86-64.</li>
+<li><code>make_roc_host</code> defaults to a different allocator than the host's own symbols.</li>
+<li>Unnamed records and unnamed multi-variant unions emit <code>""</code> with no <code>compile_error!</code>.</li>
+</ol>
+<h3>Accepted losses</h3>
+<p>Implicit <code>Copy</code> duplication (the mechanism itself); deliberate leaks need <code>mem::forget</code>; per-platform helper allocators in one process; a host that skips <code>roc_abi_assert!()</code> gets no check; path-derived names churn on platform reorganization — loudly.</p>
+<h3>Open</h3>
+<p>One item: whether Zig and C adopt equivalents of the view/constructor surface, or stop at the Phase 1 metadata fixes.</p>
+
+
+
+<a name="613786473"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613786473" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karl <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613786473">(Jul 31 2026 at 04:51)</a>:</h4>
+<p>The 196 <code>unsafe</code> blocks break down as:</p>
+<table>
+<thead>
+<tr>
+<th>category</th>
+<th>count</th>
+<th>fate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>decref</code> / <code>incref</code></td>
+<td>86</td>
+<td>gone — <code>Drop</code> / <code>Clone</code></td>
+</tr>
+<tr>
+<td><code>&amp;*</code> box deref</td>
+<td>20</td>
+<td>gone — <code>RocBox&lt;T&gt;</code> derefs safely</td>
+</tr>
+<tr>
+<td><code>call_erased</code></td>
+<td>14</td>
+<td>gone — typed callable newtypes</td>
+</tr>
+<tr>
+<td><code>abi::roc_*</code> entrypoint calls</td>
+<td>12</td>
+<td>gone — safe wrappers</td>
+</tr>
+<tr>
+<td><code>from_slice</code> / <code>allocate</code></td>
+<td>6</td>
+<td>gone — <code>from_iter</code></td>
+</tr>
+<tr>
+<td><code>from_raw_parts</code></td>
+<td>7</td>
+<td>mostly gone — see below</td>
+</tr>
+<tr>
+<td>raw casts / <code>ptr::read</code></td>
+<td>8</td>
+<td>mixed</td>
+</tr>
+<tr>
+<td>remainder</td>
+<td>~55</td>
+<td>untouched — clay/wgpu FFI, nothing to do with Roc</td>
+</tr>
+</tbody>
+</table>
+<p>(Categories overlap slightly; a block can match two patterns.) Let me show what the survivors actually are.</p>
+
+
+
+<a name="613786629"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613786629" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karl <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613786629">(Jul 31 2026 at 04:53)</a>:</h4>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>Text(Info, List(Tok), Str),
+Node(Str, Info, List(Tok), List(Box(Element))),
+Button(Info, List(Tok), U64, List(Box(Element))),
+Input(Info, List(Tok), U64, Str),
+Rich(Info, List(Tok), List(Run)),
+</code></pre></div>
+<p><strong><code>_0</code> is <code>Info</code> in every variant except <code>Node</code>, where it's <code>Str</code>.</strong> Same union, same slot index, different meaning — and nothing in the host says so.</p>
+<h2>Today</h2>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">label_of</span><span class="p">(</span><span class="n">el</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">abi</span><span class="p">::</span><span class="n">Element</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">match</span><span class="w"> </span><span class="n">el</span><span class="p">.</span><span class="n">tag</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">abi</span><span class="p">::</span><span class="n">ElementTag</span><span class="p">::</span><span class="n">Text</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">text_of</span><span class="p">(</span><span class="o">&amp;</span><span class="n">el</span><span class="p">.</span><span class="n">payload_text</span><span class="p">().</span><span class="n">_2</span><span class="p">),</span>
+<span class="w">        </span><span class="n">abi</span><span class="p">::</span><span class="n">ElementTag</span><span class="p">::</span><span class="n">Node</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">el</span><span class="p">.</span><span class="n">payload_node</span><span class="p">();</span>
+<span class="w">            </span><span class="c1">// SAFETY: Box(Element) crosses as a live, parent-owned pointer.</span>
+<span class="w">            </span><span class="n">n</span><span class="p">.</span><span class="n">_3</span><span class="p">.</span><span class="n">as_slice</span><span class="p">().</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|&amp;</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">label_of</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;*</span><span class="n">c</span><span class="w"> </span><span class="p">})).</span><span class="n">collect</span><span class="p">()</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="n">abi</span><span class="p">::</span><span class="n">ElementTag</span><span class="p">::</span><span class="n">Button</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="kd">let</span><span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">el</span><span class="p">.</span><span class="n">payload_button</span><span class="p">();</span>
+<span class="w">            </span><span class="n">b</span><span class="p">.</span><span class="n">_3</span><span class="p">.</span><span class="n">as_slice</span><span class="p">().</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|&amp;</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">label_of</span><span class="p">(</span><span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">&amp;*</span><span class="n">c</span><span class="w"> </span><span class="p">})).</span><span class="n">collect</span><span class="p">()</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">String</span><span class="p">::</span><span class="n">new</span><span class="p">(),</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<h2>After — platform unchanged (positional payloads)</h2>
+<p>Glue emits this above the payload struct, which is the legibility fix for the <code>Node</code> trap:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="sd">/// Payload for `Element.Node`.</span>
+<span class="sd">/// _0: Str, _1: Info, _2: List(Tok), _3: List(Box(Element))</span>
+<span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">ElementNodePayload</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">pub</span><span class="w"> </span><span class="n">_0</span><span class="p">:</span><span class="w"> </span><span class="nc">RocStr</span><span class="p">,</span><span class="w"> </span><span class="k">pub</span><span class="w"> </span><span class="n">_1</span><span class="p">:</span><span class="w"> </span><span class="nc">UiInfo</span><span class="p">,</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<p>and the walk becomes:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">label_of</span><span class="p">(</span><span class="n">el</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Element</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">match</span><span class="w"> </span><span class="n">el</span><span class="p">.</span><span class="n">view</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Text</span><span class="p">(</span><span class="n">t</span><span class="p">)</span><span class="w">   </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">text_of</span><span class="p">(</span><span class="o">&amp;</span><span class="n">t</span><span class="p">.</span><span class="n">_2</span><span class="p">),</span>
+<span class="w">        </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Node</span><span class="p">(</span><span class="n">n</span><span class="p">)</span><span class="w">   </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">n</span><span class="p">.</span><span class="n">_3</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">label_of</span><span class="p">(</span><span class="n">c</span><span class="p">)).</span><span class="n">collect</span><span class="p">(),</span>
+<span class="w">        </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Button</span><span class="p">(</span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">b</span><span class="p">.</span><span class="n">_3</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">label_of</span><span class="p">(</span><span class="n">c</span><span class="p">)).</span><span class="n">collect</span><span class="p">(),</span>
+<span class="w">        </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Input</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Rich</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Spacer</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">String</span><span class="p">::</span><span class="n">new</span><span class="p">(),</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>No <code>unsafe</code> — <code>n._3.iter()</code> yields <code>&amp;RocBox&lt;Element&gt;</code> and derefs at the call. Note <code>|c| label_of(c)</code> rather than <code>.map(label_of)</code>: deref coercion fires at a call site, not when passing a function item. The <code>_ =&gt;</code> becomes an explicit list, so a sixth variant stops the build. And <code>t</code> is now a <em>borrow</em> of the payload rather than the copy <code>payload_text()</code> returns today — which under <code>Drop</code> types is the difference between correct and a double release.</p>
+<p>Still <code>_0</code>/<code>_1</code>/<code>_2</code> — better than today (no <code>unsafe</code>, exhaustive, doc comment on the page) but not <em>good</em>.</p>
+<h2>After — with record payloads</h2>
+<p>One change in <code>Element.roc</code>:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>Text({ info : Info, styles : List(Tok), text : Str }),
+Node({ label : Str, info : Info, styles : List(Tok), kids : List(Box(Element)) }),
+Button({ info : Info, styles : List(Tok), handler : U64, kids : List(Box(Element)) }),
+</code></pre></div>
+<p>and the view enum gets struct variants:</p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="k">fn</span><span class="w"> </span><span class="nf">label_of</span><span class="p">(</span><span class="n">el</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Element</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">match</span><span class="w"> </span><span class="n">el</span><span class="p">.</span><span class="n">view</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Text</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">text</span><span class="p">,</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w">   </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">text_of</span><span class="p">(</span><span class="n">text</span><span class="p">),</span>
+<span class="w">        </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Node</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">kids</span><span class="p">,</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w">   </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">kids</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">label_of</span><span class="p">(</span><span class="n">c</span><span class="p">)).</span><span class="n">collect</span><span class="p">(),</span>
+<span class="w">        </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Button</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">kids</span><span class="p">,</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="n">kids</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">c</span><span class="o">|</span><span class="w"> </span><span class="n">label_of</span><span class="p">(</span><span class="n">c</span><span class="p">)).</span><span class="n">collect</span><span class="p">(),</span>
+<span class="w">        </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Input</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Rich</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">ElementView</span><span class="p">::</span><span class="n">Spacer</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">..</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">String</span><span class="p">::</span><span class="n">new</span><span class="p">(),</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><code>Node</code>'s odd slot order stops mattering entirely — you bind <code>info</code> by name and the position is irrelevant. The Roc side improves identically, since app code destructures by name too.</p>
+<p>One thing to know about <code>styles.as_slice().to_vec()</code>: under non-<code>Copy</code> types that's <code>T: Clone</code>, so it increfs each element. <code>Tok</code> is plain data, so its generated <code>Clone</code> is a memcpy with no atomics — free. It would not be free for a list of <code>Str</code>.</p>
+
+
+
+<a name="613786695"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613786695" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karl <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613786695">(Jul 31 2026 at 04:54)</a>:</h4>
+<p><strong>The handler call</strong> </p>
+<div class="codehilite" data-code-language="Rust"><pre><span></span><code><span class="c1">// before</span>
+<span class="cp">#[repr(C)]</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">Args</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">arg0</span><span class="p">:</span><span class="w"> </span><span class="nc">RocRequest</span><span class="w"> </span><span class="p">}</span><span class="w">          </span><span class="c1">// a guess at committed layout</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">abi</span><span class="p">::</span><span class="n">incref_box</span><span class="p">(</span><span class="n">model</span><span class="p">.</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="p">};</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Args</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">arg0</span><span class="p">:</span><span class="w"> </span><span class="nc">RocRequest</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ctx</span><span class="p">,</span><span class="w"> </span><span class="n">headers</span><span class="p">:</span><span class="w"> </span><span class="nc">roc_kv_list</span><span class="p">(</span><span class="o">&amp;</span><span class="n">parts</span><span class="p">.</span><span class="n">headers</span><span class="p">),</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">};</span>
+<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">ret</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">core</span><span class="p">::</span><span class="n">mem</span><span class="p">::</span><span class="n">MaybeUninit</span><span class="p">::</span><span class="o">&lt;</span><span class="n">RocResponse</span><span class="o">&gt;</span><span class="p">::</span><span class="n">uninit</span><span class="p">();</span>
+<span class="k">unsafe</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">payload</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">abi</span><span class="p">::</span><span class="n">roc_erased_callable_payload_ptr</span><span class="p">(</span><span class="n">handler</span><span class="p">.</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">capture</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">abi</span><span class="p">::</span><span class="n">roc_erased_callable_capture_ptr</span><span class="p">(</span><span class="n">handler</span><span class="p">.</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="p">((</span><span class="o">*</span><span class="n">payload</span><span class="p">).</span><span class="n">callable_fn_ptr</span><span class="p">)(</span><span class="n">host</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">_</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="n">_</span><span class="p">,</span>
+<span class="w">        </span><span class="n">ret</span><span class="p">.</span><span class="n">as_mut_ptr</span><span class="p">()</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">mut</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">args</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">Args</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="kt">u8</span><span class="p">,</span><span class="w"> </span><span class="n">capture</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ret</span><span class="p">.</span><span class="n">assume_init</span><span class="p">();</span>
+
+<span class="w">    </span><span class="c1">// Take the list out and neutralize the response's copy FIRST: `response.decref`</span>
+<span class="w">    </span><span class="c1">// below recursively decrefs the body field, and `RocListWith` is `Copy`, so</span>
+<span class="w">    </span><span class="c1">// without this an arena body would be a harmless double no-op but a &gt;4 MiB</span>
+<span class="w">    </span><span class="c1">// cap-fallback (global) body would be genuinely freed out from under the owner.</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">body_list</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">response</span><span class="p">.</span><span class="n">body</span><span class="p">;</span>
+<span class="w">    </span><span class="n">response</span><span class="p">.</span><span class="n">body</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">abi</span><span class="p">::</span><span class="n">RocListWith</span><span class="p">::</span><span class="n">empty</span><span class="p">();</span>
+<span class="w">    </span><span class="err">…</span>
+<span class="w">    </span><span class="n">response</span><span class="p">.</span><span class="n">decref</span><span class="p">(</span><span class="n">host</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="c1">// after</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">handler</span><span class="p">.</span><span class="n">call</span><span class="p">(</span><span class="n">RocRequest</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">ctx</span><span class="p">,</span><span class="w"> </span><span class="n">model</span><span class="p">:</span><span class="w"> </span><span class="nc">model</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span><span class="w"> </span><span class="n">headers</span><span class="p">:</span><span class="w"> </span><span class="err">…</span><span class="p">,</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="p">});</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">body_list</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">response</span><span class="p">.</span><span class="n">body</span><span class="p">;</span><span class="w">      </span><span class="c1">// partial move — the neutralization line is unwriteable</span>
+<span class="err">…</span>
+<span class="c1">// remaining fields drop at scope end</span>
+</code></pre></div>
+<p>That comment describes a double-free that only manifests above 4 MiB — a hazard that passes every small-payload test, which is the same shape as roc-solid's "a payload under 24 bytes cannot exhibit this." Under move semantics it isn't a hazard that's been fixed; it's a state that can't be expressed. Taking <code>response.body</code> out is a partial move, and Rust drops the remaining fields itself.</p>
+
+
+
+<a name="613786714"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613786714" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karl <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613786714">(Jul 31 2026 at 04:54)</a>:</h4>
+<p>That should be enough to get the idea across.</p>
+
+
+
+<a name="613788441"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613788441" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613788441">(Jul 31 2026 at 05:08)</a>:</h4>
+<p>I haven't read everything above ... but the general idea was certainly to make the generated code as idiomatic and nice to use as possible.</p>
+
+
+
+<a name="613788540"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613788540" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613788540">(Jul 31 2026 at 05:09)</a>:</h4>
+<p>The reason we went with three languages to start with is because a) we needed those, but b) it would be easy to overfit the API for one language ... so having multiple helps us keep the API generic and suitable for multiple target languages</p>
+
+
+
+<a name="613788662"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613788662" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Karl <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613788662">(Jul 31 2026 at 05:10)</a>:</h4>
+<p>This is mostly a feature request and not a concrete proposal. I wanted to bring up the topic as soon as I felt like I could do it reasonably because glue changes are disruptive.</p>
+
+
+
+<a name="613790434"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Reworking%20Rust%20Glue/near/613790434" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Reworking.20Rust.20Glue.html#613790434">(Jul 31 2026 at 05:31)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="705503">Karl</span> <a href="#narrow/channel/304641-ideas/topic/Reworking.20Rust.20Glue/near/613786181">said</a>:</p>
+<blockquote>
+<p>named <code>roc-solid</code> because it was going to be a Solid port; needs a rename</p>
+</blockquote>
+<p>This has to be the coolest name for a project... <span aria-label="rock" class="emoji emoji-1faa8" role="img" title="rock">:rock:</span> the only thing cooler might be <code>solid-roc</code>. Here's a very Australian song to help convince you... </p>
+<p><a href="https://youtu.be/tSNxFGW09Mo?si=PtRfEo74SpZS-V8R">https://youtu.be/tSNxFGW09Mo?si=PtRfEo74SpZS-V8R</a></p>
+<div class="youtube-video message_inline_image"><a data-id="tSNxFGW09Mo" href="https://youtu.be/tSNxFGW09Mo?si=PtRfEo74SpZS-V8R"><img src="https://uploads.zulipusercontent.net/d593b88ed267f861f5e407786e3929b788aef7a0/68747470733a2f2f692e7974696d672e636f6d2f76692f74534e7846475730394d6f2f6d7164656661756c742e6a7067"></a></div>
+
+
+
+<hr><p>Last updated: Sep 05 2026 at 14:09 UTC</p>
+</html>

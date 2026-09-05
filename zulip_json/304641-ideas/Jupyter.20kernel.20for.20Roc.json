@@ -1,0 +1,230 @@
+[
+    {
+        "content": "<p>I've started implementing a Jupyter kernel for Roc. I've got a first version running. It's not quite ready for prime-time yet, but here's a teaser:</p>\n<p><a href=\"/user_uploads/22008/T71QZ5b6XHOJQpjl8bW5RSmU/roc-kernel.mov\">roc-kernel.mov</a></p>\n<div class=\"message_inline_image message_inline_video\"><a href=\"/user_uploads/22008/T71QZ5b6XHOJQpjl8bW5RSmU/roc-kernel.mov\" title=\"roc-kernel.mov\"><video preload=\"metadata\" src=\"/user_uploads/22008/T71QZ5b6XHOJQpjl8bW5RSmU/roc-kernel.mov\"></video></a></div>",
+        "id": 607774942,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1782977908
+    },
+    {
+        "content": "<p>How does jupyter work with functional langs and immutability? I'm not sure how to phrase the question other than by example - the notebooks I use with Elixir must execute in sequence, and rerunning a cell only captures variable state from earlier cells and not any that have been reassigned. This prevents the number of times, or sequence you have run cells, from being a concern except for external effects. Can you control this kind of behaviour with a jupyter kernel (if desirable)? I imagine it might be interesting with Roc with vars too, but lack of shadowing does prevent the badness I'm thinking of.</p>",
+        "id": 607782520,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1782980340
+    },
+    {
+        "content": "<p>Basically a Jupyter kernel is a little server that communicates over 5 ZeroMQ sockets:</p>\n<ul>\n<li>Shell: receives code, executes it, and says \"completed\" (but doesn't return the output). This socket can also handle autocomplete requests, introspection, input history, code completeness check, etc.</li>\n<li>IOPub: broadcast outputs and kernel status.</li>\n<li>Control: to interrupt or shutdown the kernel.</li>\n<li>StdIn: so the kernel can query user inputs.</li>\n<li>Heartbeat: to ping the kernel and ensure it's alive.</li>\n</ul>\n<p>I've plugged into the Roc REPL so it's exactly like a regular Roc REPL session. In the REPL, you can redefine a function (which is what I demo near the end of the video by redefining the <code>square</code> function to return x<em>x</em>x. I don't know how the REPL does that.</p>",
+        "id": 607791374,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1782982856
+    },
+    {
+        "content": "<p>For example, when I ran <code>square(3)</code>, the code came in through the <strong>Shell</strong> socket. The kernel immediately broadcast <code>status (busy)</code> over the <strong>IOPub</strong> socket. The Roc compiler evaluated the code, and the kernel pushed the <code>\"9\"</code> out over <strong>IOPub</strong>. Finally, the kernel told <strong>IOPub</strong> to broadcast <code>status (idle)</code> and told <strong>Shell</strong> that the request was complete. Meanwhile, <strong>Heartbeat</strong> was pinging in the background to keep the connection alive.</p>",
+        "id": 607798581,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1782984761
+    },
+    {
+        "content": "<p>There are various ways to build a Jupyter kernel. Here are a few options:</p>\n<p><img alt=\"image.png\" class=\"inline-image\" data-original-content-type=\"image/png\" data-original-dimensions=\"1790x600\" data-original-src=\"/user_uploads/22008/niLh0mZgub0-4zQUIiqgPIq-/image.png\" src=\"/user_uploads/thumbnail/22008/niLh0mZgub0-4zQUIiqgPIq-/image.png/840x560.webp\"></p>\n<p>JMP means Jupyter Messaging Protocol.</p>\n<p>Option A is the simplest: the kernel just launches a roc repl and uses stdin/stdout to send commands to it, and capture the responses. It's cool for a proof of concept, but it's brittle (any change to the REPL's UI will break it) and it doesn't allow the full set of Jupyter features (e.g., no autocomplete).</p>\n<p>Option B would improve greatly on option A: instead of capturing the REPL's stdin/stdout, Roc could have a special mode which would give access to all of its REPL features through a programmatic interface, such as JSON RPC. The kernel would launch something like <code>roc eval-server</code> and communicate with it. Any tool can query it using JSON RPC.</p>\n<p>Option C is the same as Option B but it uses the JMP protocol instead of JSON RPC. This means that the roc binary integrates the Jupyter kernel directly: you run <code>roc jupyter</code> and it acts as a Roc kernel, serving the 5 ZMQ sockets I listed earlier. Any JMP-compatible tool can use it.</p>\n<p>Option D: the kernel lives separately from the main code, but it is based on the same Zig libraries. This is what I have implemented to get started, but the downside is that the kernel needs to be recompiled every time the Roc compiler changes. Moreover, it makes the kernel quite large since it includes Roc.</p>\n<p>Wdyt?</p>",
+        "id": 607806402,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1782986929
+    },
+    {
+        "content": "<p>Oh I couldn't say <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span> but thank you I now understand Jupyter better!</p>",
+        "id": 607941130,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1783027949
+    },
+    {
+        "content": "<p>I implemented option B in <a href=\"https://github.com/roc-lang/roc/pull/9923\">draft PR #9923</a>: running <code>roc repl --rpc</code> will make the REPL wait for JSON commands and output JSON outputs, for example:</p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>%<span class=\"w\"> </span>roc<span class=\"w\"> </span>repl<span class=\"w\"> </span>--rpc\n<span class=\"o\">{</span><span class=\"s2\">\"method\"</span>:<span class=\"w\"> </span><span class=\"s2\">\"repl.start\"</span>,<span class=\"w\"> </span><span class=\"s2\">\"id\"</span>:<span class=\"w\"> </span><span class=\"s2\">\"req001\"</span><span class=\"o\">}</span>\n<span class=\"o\">{</span><span class=\"s2\">\"session_id\"</span>:<span class=\"s2\">\"68da396c-9302-4d2a-a800-a3b644665c68\"</span>,<span class=\"s2\">\"id\"</span>:<span class=\"s2\">\"req001\"</span><span class=\"o\">}</span>\n<span class=\"o\">{</span><span class=\"s2\">\"method\"</span>:<span class=\"w\"> </span><span class=\"s2\">\"repl.evaluate\"</span>,<span class=\"w\"> </span><span class=\"s2\">\"params\"</span>:<span class=\"w\"> </span><span class=\"o\">{</span><span class=\"s2\">\"session_id\"</span>:<span class=\"w\"> </span><span class=\"s2\">\"68da396c-9302-4d2a-a800-a3b644665c68\"</span>,<span class=\"w\"> </span><span class=\"s2\">\"code\"</span>:<span class=\"w\"> </span><span class=\"s2\">\"2 + 2\"</span><span class=\"o\">}</span>,<span class=\"w\"> </span><span class=\"s2\">\"id\"</span>:<span class=\"w\"> </span><span class=\"s2\">\"req003\"</span><span class=\"o\">}</span>\n<span class=\"o\">{</span><span class=\"s2\">\"result\"</span>:<span class=\"s2\">\"4.0\"</span>,<span class=\"s2\">\"stdout\"</span>:<span class=\"s2\">\"\"</span>,<span class=\"s2\">\"diagnostics\"</span>:null,<span class=\"s2\">\"id\"</span>:<span class=\"s2\">\"req003\"</span><span class=\"o\">}</span>\n<span class=\"o\">{</span><span class=\"s2\">\"method\"</span>:<span class=\"w\"> </span><span class=\"s2\">\"repl.stop\"</span>,<span class=\"w\"> </span><span class=\"s2\">\"params\"</span>:<span class=\"w\"> </span><span class=\"o\">{</span><span class=\"s2\">\"session_id\"</span>:<span class=\"w\"> </span><span class=\"s2\">\"68da396c-9302-4d2a-a800-a3b644665c68\"</span><span class=\"o\">}</span>,<span class=\"w\"> </span><span class=\"s2\">\"id\"</span>:<span class=\"w\"> </span><span class=\"s2\">\"req004\"</span><span class=\"o\">}</span>\n<span class=\"o\">{</span><span class=\"s2\">\"success\"</span>:true,<span class=\"s2\">\"id\"</span>:<span class=\"s2\">\"req004\"</span><span class=\"o\">}</span>\n</code></pre></div>\n<p>I built a <a href=\"https://github.com/ageron/iroc\">Roc kernel for Jupyter</a> based on this RPC mode. Feel free to try it out, you should have an experience similar to the video I posted earlier in this thread. You need to compile Roc with the draft PR <a href=\"https://github.com/roc-lang/roc/issues/9923\">#9923</a>, and follow the build &amp; install instructions for the Roc kernel.</p>",
+        "id": 607995610,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1783060305
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> said that he'd rather not introduce JSON into any of our CLI or compiler outputs. I'm happy to change the draft PR: what other options do we have to ensure that the REPL can be controlled programmatically?</p>\n<p>I went this JSON-RPC route because I believe that's how the LSP works? Actually, perhaps we could just extend the LSP to support these extra methods (start/stop/reset a session and evaluate some code in a given session)?</p>",
+        "id": 607995756,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1783060382
+    },
+    {
+        "content": "<p>We could add support for a repl \"plugin\" script like <code>roc glue</code> maybe? and then handle the json inside that?</p>",
+        "id": 608015442,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1783067688
+    },
+    {
+        "content": "<p>Or maybe this is something <code>roc tooling</code> could help with?</p>",
+        "id": 608015541,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1783067719
+    },
+    {
+        "content": "<p>Idk ... just throwing some ideas around</p>",
+        "id": 608015596,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1783067731
+    },
+    {
+        "content": "<p>I'm not familiar with <code>roc glue</code> or <code>roc tooling</code>. I believe that <code>roc experimental-lsp</code> starts a JSON RPC server (JSON objects in through stdin, JSON objects out through stdout), so I figured that this was the way to go, since it's very similar functionality (i.e., the LSP provides static info &amp; features, while the REPL-RPC provides dynamic features).</p>",
+        "id": 608017226,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1783068284
+    },
+    {
+        "content": "<p>yeah I don't want us to</p>",
+        "id": 608083495,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783089677
+    },
+    {
+        "content": "<p>have lsp in the CLI either <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 608083528,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783089687
+    },
+    {
+        "content": "<p>in general I want to follow glue's example</p>",
+        "id": 608083570,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783089702
+    },
+    {
+        "content": "<p>where you write roc code to transform into whatever format you need (json etc)</p>",
+        "id": 608083631,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783089719
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/channel/304641-ideas/topic/Jupyter.20kernel.20for.20Roc/near/608015442\">said</a>:</p>\n<blockquote>\n<p>We could add support for a repl \"plugin\" script like <code>roc glue</code> maybe? and then handle the json inside that?</p>\n</blockquote>\n<p>I'm also not familiar with how glue works, but what comes to mind is a built in platform that is coupled to the compiler. You could only use it if you version it correctly in your app, but other than that, it would give you programatic access to the repl.<br>\nAs I'm typing this, the question arises: how do we do IO in such an application? And that is a rabit hole where the compiler includes a builtin platform with every possible io type, so I immediately dislike my idea.</p>\n<p>How would the plugin approach work?</p>",
+        "id": 608136391,
+        "sender_full_name": "Norbert Hajagos",
+        "timestamp": 1783116284
+    },
+    {
+        "content": "<p>for something like this I assume we wouldn't support arbitrary I/O</p>",
+        "id": 608136551,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783116438
+    },
+    {
+        "content": "<p>glue is like \"give me a list of output files you want, and their contents, and I will write them to disk\" and I think it has restrictions on where they can go (e.g. must be a subdirectory of the current dir or something)</p>",
+        "id": 608136593,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783116478
+    },
+    {
+        "content": "<p>Yes <code>roc glue</code> is what I have been calling the \"plugin\" use-case... there are no prebuilt host files in the platform, the roc cli itself embeds the roc compiler (it's already there for <code>roc build</code> etc) and compiles the app and runs the script. </p>\n<p>This is a pattern I have used elsewhere too, like another totally unrelated program that runs the roc apps instead of the roc cli building standalone binaries.</p>",
+        "id": 608152334,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1783128476
+    },
+    {
+        "content": "<p>In future you could imagine <code>libroc</code> for doing this more easily, but for now you can wrap the roc modules using a zig program easy by pointing it at the roc-lang/roc repo.</p>",
+        "id": 608152379,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1783128553
+    },
+    {
+        "content": "<p>The LSP is currently named experimental, because the long term goal is to remove all that logic from the compiler, and decouple that. So the LSP can upgrade independently etc.</p>",
+        "id": 608152432,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1783128605
+    },
+    {
+        "content": "<p>I'm happy to follow the Roc glue path, but I'm not sure I have a good understanding of the architecture we're shooting for. Is it the option D in my diagram above? Basically the Roc eval tools would be compiled directly into the Roc kernel?</p>",
+        "id": 608205091,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1783181969
+    },
+    {
+        "content": "<p>I've already implemented option D, where the Roc kernel simply uses the Roc compiler code to evaluate the cells directly, without using the Roc CLI at all. It works fine, but it has two drawbacks:</p>\n<ol>\n<li>Every time the Roc compiler changes, we must build and deploy the new Roc kernel. Jupyter kernels for other languages typically don't change much since they just proxy code from Jupyter to the target language's interpreter or compiler. For the end user, bumping the language version just requires updating one thing, not two.</li>\n<li>The Roc kernel is quite large for a Jupyter kernel: 200 MB. Since most kernels are just simple proxies, they are typically quite small.</li>\n</ol>\n<p>I still haven't really understood the alternative \"roc-glue-like\" architecture you have in mind. Would someone be kind enough to draw a picture? It sounds to me like it's similar to Option D, so it would still have these two issues, wouldn't it? I'm not pushing back, I'm just confused.</p>",
+        "id": 608382546,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1783324626
+    },
+    {
+        "content": "<p>I am also not entirely sure, thinking out loud for what it's worth? I don't know how 'glue like' it is, but the repl could operate like the elm architecture, where a plugin receives/subscribes to repl events, and emits actions (or directly calls effectful host functions not sure) etc, like \"evaluate snippet\" or \"write these bytes to a socket\". The compiler supplies the repl platform, and expects the plugin to expose handlers etc. I think you would be able to supply this to Roc like <code>roc repl --plugin jupyter.roc</code>, and the terminal repl could be a bundled terminal.roc plugin?</p>",
+        "id": 608399584,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1783329954
+    },
+    {
+        "content": "<p>I think this is along the lines of what <a href=\"#narrow/channel/304641-ideas/topic/Jupyter.20kernel.20for.20Roc/near/608152334\">Luke meant</a> - the repl plugin is compiled against a platform, but stops short of linking against it and instead roc drives it directly? This is also my very rough <a href=\"https://github.com/roc-lang/roc/blob/main/src/glue/glue.zig#L6-L12\">understanding of the glue pipeline</a>.</p>",
+        "id": 608404241,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1783331068
+    },
+    {
+        "content": "<p>There's definitely some design questions here about what are the effects or the API for this kind of functionality</p>",
+        "id": 608406161,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1783331591
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"734214\">Aurélien Geron</span> <a href=\"#narrow/channel/304641-ideas/topic/Jupyter.20kernel.20for.20Roc/near/608382546\">said</a>:</p>\n<blockquote>\n<p>I still haven't really understood the alternative \"roc-glue-like\" architecture you have in mind. Would someone be kind enough to draw a picture? It sounds to me like it's similar to Option D, so it would still have these two issues, wouldn't it? I'm not pushing back, I'm just confused.</p>\n</blockquote>\n<p>yeah sorry, I haven't really had time to dig deeply into this...the basic idea is:</p>\n<ul>\n<li>suppose we want to add some functionality to the <code>roc</code> CLI that involves communicating data in a structured format</li>\n<li>we <em>could</em> do that by having the <code>roc</code> CLI understand JSON - emit it, consume it, whatever</li>\n<li>however, I would prefer if instead it used plain Roc code, which it already understands, and which is strictly more flexible (and allows for doing higher-performance serialization formats in the future)</li>\n<li>so for example, if the compiler has some structs named <code>Foo</code> and <code>Bar</code>, instead of having the <code>roc</code> CLI serialize those structs to <code>output.json</code>, you have the CLI take a <code>.roc</code> file which exposes a function that receives these <code>Foo</code> and <code>Bar</code> structs as ordinary Roc records, and then returns a <code>List(U8)</code> for what to print to stdout. (This is basically what <code>glue</code> does - you write a Roc function that takes ordinary Roc data structures which represent the shape of your host boundary, and then you return a description of what files you want to be written to disk.)</li>\n</ul>",
+        "id": 608440019,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783342718
+    },
+    {
+        "content": "<p>so if you wanted to go the JSON route, you could implement that function to take the <code>Foo</code> and <code>Bar</code> structs from the compiler and just have the Roc function serialize them as JSON and return that, at which point you have the same interface to Jupyter as the original PR (but with the indirection of having the Roc code say \"I want to turn this into JSON\" instead of having that be hardcoded in the compiler)</p>",
+        "id": 608440320,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783342794
+    },
+    {
+        "content": "<p>but it also opens up other possibilities, e.g. you could make the Roc code not be restricted to just returning a <code>Str</code> that gets printed to stdout, you could do things like have it describe what bytes to send over a socket, and the CLI could take care of opening that socket for you, watching the filesystem, and just calling the Roc function repeatedly whenever things change</p>",
+        "id": 608440615,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783342855
+    },
+    {
+        "content": "<p>does that make sense?</p>",
+        "id": 608440645,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783342860
+    },
+    {
+        "content": "<p>Ah, that makes complete sense, thanks for the detailed explanation <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> . <span aria-label=\"folded hands\" class=\"emoji emoji-1f64f\" role=\"img\" title=\"folded hands\">:folded_hands:</span><br>\nSo the Jupyter kernel could remain exactly the same as today, but instead of calling <code>roc repl --rpc</code>, it would call something like <code>roc repl json-rpc.roc</code>.</p>\n<p>Would the <code>json-rpc.roc</code> script be based on the CLI platform to read from stdin and write to stdout? If so, how would it interface with Roc's REPL (for the <code>Foo</code> and <code>Bar</code> data structures)? Or should I develop a Roc platform designed for this use-case, which would provide both Stdin/Stdout and the REPL interface?</p>",
+        "id": 608467504,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1783349549
+    },
+    {
+        "content": "<p>is it literally just taking in repl inputs and responding with output?</p>",
+        "id": 608467746,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783349605
+    },
+    {
+        "content": "<p>if so, we could abstract it more than that - like it just receives a <code>Str</code> from the repl and then returns a <code>Str</code> for what to output, for example</p>",
+        "id": 608467814,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783349625
+    },
+    {
+        "content": "<p>Yes, the core functionality is just <code>Str</code> in, <code>Str</code> out, but kernels typically offer a few more functionalities, including auto-complete and type info.</p>",
+        "id": 608470143,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1783350138
+    },
+    {
+        "content": "<p>Oh and there can also be rich outputs, like HTML, images, and even interactive outputs (HTML+JavaScript).</p>",
+        "id": 608472187,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1783350525
+    },
+    {
+        "content": "<p>I'd say let's start with just the core functionality then</p>",
+        "id": 608483478,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783353190
+    },
+    {
+        "content": "<p>like basically a way to drive the repl programmatically</p>",
+        "id": 608483553,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1783353216
+    }
+]

@@ -1,0 +1,104 @@
+[
+    {
+        "content": "<p>I have been playing with the platform stuff for a week or so now and a couple questions have been nagging at me.</p>\n<p>In the Roc FAQ it says:</p>\n<blockquote>\n<p>it's possible to write Roc code that can be used across multiple platforms. Applications can use platform-agnostic packages, as well as packages involving I/O, as long as their platform supports the I/O operations in question</p>\n</blockquote>\n<p>This seems problematic for very complex packages that most other languages hand off to some shared library or the OS. Some that come to mind are:</p>\n<ul>\n<li>POSIX files and sockets</li>\n<li>YAML parsers</li>\n<li>SQLite</li>\n<li>GPU driver bindings / GUI frameworks</li>\n</ul>\n<p>While it seems like no problem to create a platform that supports any one of these the issue would seem to arise in composition. With the ecosystem today if I want a sqlite database for my application I need to use basic-webserver. But what if I just need it in a cli context? At that point am I forking basic-cli to add it? Is every reasonably robust \"general purpose\" platform expected to embed sqlite? I don't see a world where sqlite or QT get re-implemented in roc. Maybe this isn't as big a problem as i think since the Rust package ecosystem acts as a pseudo package manager for platforms? Could some of the module param work I have seen happening provide \"feature flags\" for platforms?</p>\n<p>If you have read this far know that I am not trying to be antagonistic. I love the platform concept and understand that every design has its limitations. I am just trying to understand if I am missing something.</p>\n<p>The above quote implies that so long as there is a mechanism for it in the platform packages can be effectful. Has there been ideas around standardized effects across platforms? POSIX, Python's WSGI, and Java's ODBC come to mind.</p>",
+        "id": 448703397,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719954473
+    },
+    {
+        "content": "<p>I think your concern will be shored up pretty soon, if I understand you correctly. </p>\n<p>Given that IO and other effectful operations can only be done by specific platforms, the language as it currently is does not support packages that do IO. However, as is described in <a href=\"https://docs.google.com/document/d/1-h9bNNCLuYV2wSvjQA58SsGHOJivH9NHGr4wU_VF5I0/edit\">this proposal</a>, by adding the <code>Task</code> (e.g. IO monad) as a standard library feature built-in, we make it possible for packages to take a function that runs IO and return a <code>Task</code> that composes an operation using said <code>Task</code>. For example,</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">loadJsonDataFromApi</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"kt\">Json</span><span class=\"w\"> </span><span class=\"nv\">err</span>\n<span class=\"nv\">loadJsonDataFromApi</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">url</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">getData</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">data</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">getData</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"nv\">url</span>\n<span class=\"w\">    </span><span class=\"nv\">parseJson</span><span class=\"w\"> </span><span class=\"nv\">data</span>\n</code></pre></div>\n<p>This would now be able to go in a platform-agnostic package, and all a caller would have to do is use some <code>Http.get</code> from their platform and do</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kn\">import</span><span class=\"w\"> </span><span class=\"nc\">cli.Http</span>\n<span class=\"kn\">import</span><span class=\"w\"> </span><span class=\"nc\">Package</span><span class=\"w\"> </span><span class=\"nv\">exposes</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nv\">loadJsonDataFromApi</span><span class=\"p\">]</span>\n\n<span class=\"nv\">myData</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">loadJsonDataFromApi</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"s\">\"http://api.com\"</span><span class=\"w\"> </span><span class=\"kt\">Http</span><span class=\"nf\">.</span><span class=\"nv\">get</span>\n</code></pre></div>\n<p>There's already a <a href=\"https://github.com/roc-lang/roc/pull/6836\">PR for this</a>, we just need to finish testing and then you can do the above!</p>",
+        "id": 448706468,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1719955863
+    },
+    {
+        "content": "<p>You will notice that this is a bit clunky, though. What if you don't want to pass <code>Http.get</code> or <code>Sql.query</code> to every invocation of an effectful function imported from a package? Well, we have <a href=\"https://docs.google.com/document/d/110MwQi7Dpo1Y69ECFXyyvDWzF4OYv1BLojIm08qDTvg/edit\">another proposal for that</a> for module params, which lets us pass variables/functions to modules when we import them. That means we can define our package module as</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kn\">module</span><span class=\"w\"> </span><span class=\"err\">[</span><span class=\"nc\">loadJsonDataFromApi</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">getData</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"p\">}</span>\n\n<span class=\"nv\">loadJsonDataFromApi</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"kt\">Json</span><span class=\"w\"> </span><span class=\"nv\">err</span>\n<span class=\"nv\">loadJsonDataFromApi</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">url</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">data</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">getData</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"nv\">url</span>\n<span class=\"w\">    </span><span class=\"nv\">parseJson</span><span class=\"w\"> </span><span class=\"nv\">data</span>\n</code></pre></div>\n<p>and then just use it from a platform as such</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kn\">import</span><span class=\"w\"> </span><span class=\"nc\">cli.Http</span>\n<span class=\"kn\">import</span><span class=\"w\"> </span><span class=\"nc\">Package</span><span class=\"w\"> </span><span class=\"nv\">exposes</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nv\">loadJsonDataFromApi</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">getData</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Http</span><span class=\"nf\">.</span><span class=\"nv\">get</span><span class=\"w\"> </span><span class=\"p\">}</span>\n\n<span class=\"nv\">myData</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">loadJsonDataFromApi</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"s\">\"http://api.com\"</span>\n</code></pre></div>\n<p>There's also <a href=\"https://github.com/roc-lang/roc/pull/6861\">a PR</a> that just got put out <em>today</em> by the industrious <span class=\"user-mention\" data-user-id=\"489294\">@Agus Zubiaga</span> for that, so wait a couple weeks and you can do this yourself</p>",
+        "id": 448707190,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1719956164
+    },
+    {
+        "content": "<p>Once these two features (Task as a built-in and Module Params) get merged in, the ecosystem will be fully modular! I think the only thing beyond that I'd personally be worried about is Roc's understanding of whether two packages with different versions are API-compatible. What if the platform uses <code>roc-url</code> v0.2.0 and I use v0.2.1? Currently, I can't pass my own opaque <code>Url</code> because it's a type error, but once Roc understands they're the same thing basically, then it will be less annoying to use common external packages between a platform and an application. <a href=\"https://docs.google.com/document/d/1rklo1p2jETKVxhkAtClcMH8N4sHIgePm2JgJ3ciBR60/edit\">Relevant proposal</a></p>",
+        "id": 448707770,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1719956465
+    },
+    {
+        "content": "<p>Thank you for the detailed answer. I have seen a lot of these PRs flying and I have been struggling to develop the image for where that makes the language end up when they are all landed.</p>",
+        "id": 448708122,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719956629
+    },
+    {
+        "content": "<p>Also, I think forking platforms to add new effects and customise things is encouraged <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 448708215,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719956653
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"453714\">Ryan Barth</span> <a href=\"#narrow/stream/231634-beginners/topic/Complex.20packages/near/448708122\">said</a>:</p>\n<blockquote>\n<p>Thank you for the detailed answer. I have seen a lot of these PRs flying and I have been struggling to develop the image for where that makes the language end up when they are all landed.</p>\n</blockquote>\n<p>I think the language will have all the tools it needs, but we'll need to wait for a pattern to emerge on passing <code>Task</code> context for complex scenarios. What if I want an ORM-style package that supports 3 different SQL implementations? How do I organize taking DB connection config if I want to allow a Str or a record? I have some ideas on how I will do it in Weaver and roc-uuid, but I'm not sure what will be the standard in the ecosystem yet.</p>",
+        "id": 448711053,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1719957935
+    },
+    {
+        "content": "<p>I don't think Task as builtin or module params fix this.</p>",
+        "id": 448728254,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719966475
+    },
+    {
+        "content": "<p>I think they help in a specific case, but they don't fix it.</p>",
+        "id": 448728322,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719966487
+    },
+    {
+        "content": "<p>If you need SQLite, that has to be in the platform. If you need GPU driver bindings, that has to be in the platform. If you need sockets, that has to be in the platform.</p>",
+        "id": 448728420,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719966524
+    },
+    {
+        "content": "<p>While module params may allow you to build functionality based on a flexible set of primitives, it does not fix the limitations of every primitive needing to be exposed by the platform.</p>",
+        "id": 448728497,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719966569
+    },
+    {
+        "content": "<p>There is no arbitrary c ffi and that definitely is a limitation.</p>",
+        "id": 448728515,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719966583
+    },
+    {
+        "content": "<p>YouTube personalities are going to be talking about how they \"re-wrote it in roc\" in the future <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 448728649,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719966650
+    },
+    {
+        "content": "<p>Theoretically, someone could make a wrapper around libffi to alleviate this, but it likely will be a complex to get write and nice to use. We maybe even should look into supporting it at the language level (still forcing tasks). Theoretically with tasks as builtins, we could allow arbitrary cffi via shared libraries. basically allow a package to define it's own hosted like module, but for shared libraries. That is probably something we should seriously look into for more flexibility.</p>",
+        "id": 448728730,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719966722
+    },
+    {
+        "content": "<p>I see module params more as alleviating mapping problems. It allows for a generic print function that might print to the terminal or might send an http request to a logging server. It can abstract over graphics primitives such that many different gui libraries and platform graphics solution can communicate with each other.</p>\n<p>But module params and builtin task to not allow for fixing the issue of need primitives that are not part of a platform. The lack of platform composability makes development harder.</p>",
+        "id": 448728918,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719966865
+    },
+    {
+        "content": "<p>Theoretically, ready made host language packages and feature flags could be added to something like basic cli to support more of theses features, but today, forking is the solution.</p>",
+        "id": 448728975,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719966913
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/231634-beginners/topic/Complex.20packages/near/448728649\">said</a>:</p>\n<blockquote>\n<p>uTube personalities are going to be talking about how they \"re-wrote it in roc\" in the fut</p>\n</blockquote>\n<p>What's my plan hahah</p>",
+        "id": 449522515,
+        "sender_full_name": "Albert",
+        "timestamp": 1720283451
+    }
+]

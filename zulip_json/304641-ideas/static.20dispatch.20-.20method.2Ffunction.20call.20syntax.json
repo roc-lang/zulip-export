@@ -1,0 +1,380 @@
+[
+    {
+        "content": "<p>Ok, I've had some additional thoughts, taking one more stab at this.</p>\n<p>Goals: I want to look for a design that has the same or better weirdness budget as the proposed one for folks coming from a mainstream language, the same or better autocomplete support, the same or better conciseness, and can replace abilities in the same way. But I'd like to avoid a chain operator that scopes based on the value flowing through the chain, to help the code stand on its own in places without editor integration.</p>\n<p>Firs step, replace: <code>|&gt;</code> with <code>.</code> and whitespace-calling with paren-calling, but don't change any semantics:</p>\n<div class=\"codehilite\"><pre><span></span><code>when headers.(List:keepIf \\{ name } -&gt; name == &quot;cookie&quot;) is\n    [reqHeader] -&gt;\n        reqHeader.value\n        .Str:fromUtf8\n        .Result:try(.Str:split(&quot;=&quot;).List:get(1))\n        .Result:try(Str:toI64)\n        .Result:mapErr(\\_ -&gt; BadCookie)\n\n    _ -&gt; Err(NoSessionCookie)\n</code></pre></div>\n<p>I also changed the module separator to <code>:</code> as before to avoid ambiguity.</p>\n<p>I think so far:</p>\n<ul>\n<li>Weirdness budget: pretty good. Using <code>:</code> for module-separation is pretty common in mainstream languages (ruby and rust come to mind). Needing it in method calls is unconventional, but not ambiguous, plus autocomplete will add it for you.</li>\n<li>Autocomplete support: as good as in the original proposal, maybe better. Autocomplete will offer completions for functions that would 'fit' type-wise from any module. Say you type <code>.</code> on a <code>Str</code> value then along with many functions from the <code>Str</code> module you will also see <code>Graheme:split</code> if you have <code>roc-unicode</code> as a project dependency.</li>\n<li>Conciseness: not great, we have all these extra qualifiers.</li>\n</ul>\n<p>To improve conciseness, let's first make it worse. New rule: all function calls need to be qualified. Local function calls need to be qualified with <code>Self:</code> (alternatives: <code>This:</code>, <code>Here:</code>, <code>Local:</code>, <code>~:</code>, ...).</p>\n<p>Additional rule: A module qualifier counts as 'in scope' for later and nested function calls and doesn't need to be repeated in the same block, until the use of a different module qualifier. Repeated uses are still allowed, but the autoformatter will take them out. With these additional rules, the earlier snippet changes to this:</p>\n<div class=\"codehilite\"><pre><span></span><code>when headers.(List:keepIf \\{ name } -&gt; name == &quot;cookie&quot;) is\n    [reqHeader] -&gt;\n        reqHeader.value\n        .Str:fromUtf8\n        .Result:try(.Str:split(&quot;=&quot;).List:get(1))\n        .try(Str:toI64)\n        .mapErr(\\_ -&gt; BadCookie)\n\n    _ -&gt; Err(NoSessionCookie)\n</code></pre></div>\n<p>That helped some, the repeated calls to <code>Result</code> have dropped out, but a lot of modifiers remain. Still, I think we pruned the noise and kept the qualifiers that support readability.</p>\n<p>In code that calls the same module a lot the effect is stronger. For instance, with scoped qualifiers the parsing snippet from the proposal gets even more concise than the code in the original proposal, in a way I don't think hurts readability:</p>\n<div class=\"codehilite\"><pre><span></span><code>    Parser.const(\\str -&gt; Heading(One, str))\n    .keep(.chompWhile(Self:notEol).map(.utf8))\n    .skip(Self:eol)\n    .skip(.strConst(&quot;==&quot;))\n    .skip(.chompWhile(\\b -&gt; Self:notEol(b) &amp;&amp; b == &#39;=&#39;))\n</code></pre></div>\n<p>Additionally, scoped module qualifiers would work in a wider variety of scenarios. You could write Html with it and only need to qualify the element in your <code>Html</code> snippet:</p>\n<div class=\"codehilite\"><pre><span></span><code>Html:nav([], [\n    a([Attr:class(&quot;link&quot;), href(&quot;...&quot;)], [ ... ]),\n    a(...),\n]),\n</code></pre></div>\n<p>I think with this we might not need <code>import</code> statements anymore (except when needing to pass module params, need to think more about that). Note that scoped qualifiers also implicitly enforce the Elm convention to only have one module using <code>exposing (..)</code> at a time. Using a different qualifier, for instance the <code>Attr:</code> qualified in the example above, means that now <code>Attr:</code> and not <code>Html:</code> is in scope for later calls in that attribute list.</p>\n<p>Scoped module qualifiers definitely take from the weirdness budget, but I think they add value too and read pretty intuitively. Plus there's an easy escape hatch: in doubt, add a qualifier (and let the formatter figure out the rest). In the original proposal you could similarly get a function in a chain in a way that \"always works\" by putting it in <code>.(..)</code>, but the formatter won't be able to simplify that for you because it's not type-aware.</p>\n<p>I think on conciseneness we're doing pretty good now. Couple additional qualifiers in some places compared to the main proposal, fewer qualifiers in other places. Plus we can drop import statements.</p>\n<p>The one thing missing now is some way to do static dispatch for abilities. Many options:</p>\n<div class=\"codehilite\"><pre><span></span><code>&quot;Hi!&quot;.Module:inspect   # Special &#39;Module:&#39; qualifier\n&quot;Hi!&quot;.call(.inspect)   # Special calling function\n&quot;Hi!&quot;.$inspect         # Special operator\n</code></pre></div>\n<p>Essentially the possibities are the same as the ones we discussed above, only instead of applying it to local function chaining we use that syntax for static dispatch instead. It's a much less important decision in this proposal though, because people will almost never encounter it. Most calls to ability functions are wrapped in an operator (like <code>==</code>), or another function (like <code>Decode.fromBytesPartial</code>).</p>\n<p>So to summarize:</p>\n<ul>\n<li>Instead of <code>.</code> performing static dispatch, in this proposal it's just a renamed <code>|&gt;</code>. To folks new to the language this will still look and feel like method calls, plus we enable auto-complete experience on-par with built-for-IDE-languages. But we don't introduce a form of indirection that's hard to untangle without editor support, which benefits reading Roc snippets in simple text editors, PR review, zulip threads, anywhere else code snippets are posted.</li>\n<li>All function calls are qualified, but direct sequential or nested repetition of the same qualier can be omitted. This improves conciseness while still keeping qualifiers in the places where they count most. With that we can drop import statements, improving conciseness further. Caveat: have to figure out interplay with module params.</li>\n<li>We still have static dispatch to replace abilities, but it's a special case and folks will not run into it often, even when using abilities.</li>\n</ul>\n<p>Curious what you think!</p>",
+        "id": 481544382,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731230778
+    },
+    {
+        "content": "<p>Wow, I find this really compelling.</p>\n<p><del>I don't see why \"The only thing missing now is some way to do static dispatch for abilities.\" - it seems like <code>.</code> would just work for those methods too. I'm probably missing something.</del> Oh, for <code>Module:</code> you're saying we'd want some way to still qualify the method without naming/knowing its module name?<br>\n<em>(Maybe this is a more apt use case for <code>Self:</code>, which I believe is the Pythonic convention for the same concept that many new users would be familiar with. For anyone above who liked <code>_</code> for the first argument, in <code>foo.bar.Self:my_method(baz)</code>, <code>Self</code> could serve the same purpose of showing the missing first arg to the method.)</em><br>\n<strong>HOWEVER</strong><br>\nOne flaw I see is that <code>Module:</code> <em>(or <code>Self:</code>2.0 if my adjustment is well taken)</em> alone can be repeated while the type is changing. If the formatter removes those repeats in an all-methods chain that goes from <code>Str</code> to <code>List Str</code> to <code>List U8</code> to <code>U8</code>, an IDE would still be required to show that visually. Even if true-method calls did't get the formatter trimming (which would feel inconsistent), you still wouldn't see the type names in the source code.<br>\n<strong>Since the author knows the qualifying module names anyways, I'd prefer instead to just qualify with the method's own module name, which would simplify the syntax by not needing any <code>Module:</code> equivalent.</strong><br>\nExample: <code>[1, 2, 3].List:append(4)</code></p>\n<p>Sorry if I'm still misunderstanding your approach to static dispatch or true methods, and/or your different use of <code>Self</code> above. Speaking of that...</p>\n<p>Besides the slight extra verbosity (which is debatably an upside), the big downside I see in your examples is the excess verbosity of your <code>Self:</code>/<code>Local:</code>, which seems easily addressed by using <code>$</code> that has gained consensus above for the same concept! Would that simplify this counter-proposal to mostly just be \"YES AND let's qualify every method-style call, change qualification to be <code>:</code>, and have the formatter remove repeated qualifiers\"? If so, this stock vim user says \"<span aria-label=\"money face\" class=\"emoji emoji-1f911\" role=\"img\" title=\"money face\">:money_face:</span>\".</p>",
+        "id": 481565680,
+        "sender_full_name": "jan kili",
+        "timestamp": 1731248303
+    },
+    {
+        "content": "<p>I believe your proposal looks like</p>\n<h2>dot-with-nonrepeated-qualifiers</h2>\n<div class=\"codehilite\" data-code-language=\"Perl\"><pre><span></span><code><span class=\"n\">pipes</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">prev</span><span class=\"o\">.</span><span class=\"n\">pipes</span><span class=\"o\">.</span><span class=\"n\">Local:updatePipes</span><span class=\"p\">(</span><span class=\"s\">\"extra argument\"</span><span class=\"p\">)</span><span class=\"o\">.</span><span class=\"n\">List:appendIfOk</span><span class=\"p\">(</span><span class=\"nb\">pipe</span><span class=\"p\">)</span>\n<span class=\"c1\">#                                               maybe .Module:appendIfOk(pipe)</span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Perl\"><pre><span></span><code><span class=\"n\">pipes</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">prev</span><span class=\"o\">.</span><span class=\"n\">pipes</span><span class=\"o\">.</span><span class=\"n\">Pipes:update</span><span class=\"p\">(</span><span class=\"s\">\"extra argument\"</span><span class=\"p\">)</span><span class=\"o\">.</span><span class=\"n\">List:appendIfOk</span><span class=\"p\">(</span><span class=\"nb\">pipe</span><span class=\"p\">)</span>\n<span class=\"c1\">#                                               maybe .Module:appendIfOk(pipe)</span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Perl\"><pre><span></span><code><span class=\"n\">pipes</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">    </span><span class=\"n\">prev</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">pipes</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">Local:updatePipes</span><span class=\"p\">(</span><span class=\"s\">\"extra argument\"</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">List:appendIfOk</span><span class=\"p\">(</span><span class=\"nb\">pipe</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"c1\"># maybe .Module:appendIfOk(pipe)</span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Perl\"><pre><span></span><code><span class=\"n\">pipes</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">    </span><span class=\"n\">prev</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">pipes</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">Pipes:update</span><span class=\"p\">(</span><span class=\"s\">\"extra argument\"</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">List:appendIfOk</span><span class=\"p\">(</span><span class=\"nb\">pipe</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"c1\"># maybe .Module:appendIfOk(pipe)</span>\n</code></pre></div>",
+        "id": 481566444,
+        "sender_full_name": "jan kili",
+        "timestamp": 1731248913
+    },
+    {
+        "content": "<p>I believe with <code>$</code>s it would look like</p>\n<h2>dot-dollar-with-nonrepeated-qualifiers</h2>\n<div class=\"codehilite\" data-code-language=\"Perl\"><pre><span></span><code><span class=\"n\">pipes</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">prev</span><span class=\"o\">.</span><span class=\"n\">pipes</span><span class=\"o\">.</span><span class=\"nv\">$updatePipes</span><span class=\"p\">(</span><span class=\"s\">\"extra argument\"</span><span class=\"p\">)</span><span class=\"o\">.</span><span class=\"n\">List:appendIfOk</span><span class=\"p\">(</span><span class=\"nb\">pipe</span><span class=\"p\">)</span>\n<span class=\"c1\">#                                          maybe .Module:appendIfOk(pipe)</span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Perl\"><pre><span></span><code><span class=\"n\">pipes</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">prev</span><span class=\"o\">.</span><span class=\"n\">pipes</span><span class=\"o\">.</span><span class=\"n\">Pipes:update</span><span class=\"p\">(</span><span class=\"s\">\"extra argument\"</span><span class=\"p\">)</span><span class=\"o\">.</span><span class=\"n\">List:appendIfOk</span><span class=\"p\">(</span><span class=\"nb\">pipe</span><span class=\"p\">)</span>\n<span class=\"c1\">#                                          maybe .Module:appendIfOk(pipe)</span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Perl\"><pre><span></span><code><span class=\"n\">pipes</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">    </span><span class=\"n\">prev</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">pipes</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"nv\">$updatePipes</span><span class=\"p\">(</span><span class=\"s\">\"extra argument\"</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">List:appendIfOk</span><span class=\"p\">(</span><span class=\"nb\">pipe</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"c1\"># maybe .Module:appendIfOk(pipe)</span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Perl\"><pre><span></span><code><span class=\"n\">pipes</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">    </span><span class=\"n\">prev</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">pipes</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">Pipes:update</span><span class=\"p\">(</span><span class=\"s\">\"extra argument\"</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"o\">.</span><span class=\"n\">List:appendIfOk</span><span class=\"p\">(</span><span class=\"nb\">pipe</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"c1\"># maybe .Module:appendIfOk(pipe)</span>\n</code></pre></div>",
+        "id": 481566467,
+        "sender_full_name": "jan kili",
+        "timestamp": 1731248944
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"462053\">JanCVanB</span> <a href=\"#narrow/channel/304641-ideas/topic/static.20dispatch/near/481565680\">said</a>:</p>\n<blockquote>\n<ul>\n<li>Oh, for <code>Module:</code> you're saying we'd want some way to still qualify the method without naming/knowing its module name? Hmm, I don't have a strong opinion on that.</li>\n</ul>\n</blockquote>\n<p>That's what I was thinking, though I don't feel super strongly about what they keyword should be, or if it even should be keyword or some other syntax. I think the important part with regards to the rest of the design is that it's the special case. Because calling a function where you don't know the qualifier is pretty rare (just what's ability-function calls today) we'd not see much of it anyway.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"462053\">JanCVanB</span> <a href=\"#narrow/channel/304641-ideas/topic/static.20dispatch/near/481565680\">said</a>:</p>\n<blockquote>\n<p>One flaw I see is that <code>Module:</code> <em>(or <code>Self:</code>2.0 if my adjustment is well taken)</em> can be repeated while the type is changing. If the formatter removes those repeats in an all-methods chain that goes from <code>Str</code> to <code>List Str</code> to <code>List U8</code> to <code>U8</code>, an IDE would still be required to show that visually.</p>\n</blockquote>\n<p>Maybe, though I think that's no different from a chain of local functions calls using <code>|&gt;</code> today. My goal with the proposal wasn't necessarily to mark in the syntax any time the type of the pipeline changes, but to make explicit where these functions that get called are located.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"462053\">JanCVanB</span> <a href=\"#narrow/channel/304641-ideas/topic/static.20dispatch/near/481565680\">said</a>:</p>\n<blockquote>\n<p><strong>Since the author knows the qualifying module names anyways</strong></p>\n</blockquote>\n<p>I don't think this is the case for the type of generic code that uses abilities today. For instance, suppose we want to write a function that should work for any type that implements <code>Decode</code>. That function might want to call <code>decodeU8</code> for the type of whatever value is passed in.</p>",
+        "id": 481569598,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731251283
+    },
+    {
+        "content": "<p>Personally I think removing the module name and just having types with associated methods is one of the biggest benefits. I can simply write two different container types without any abilities. As long as most of the methods are the same, porting between the two is pretty trivial. If the methods are exactly the same. Porting is free.</p>\n<p>I do think interfaces or abilities or contracts or something are great for clearly specific common function groupings, but for many things that are more adhoc. A very similar API is enough. Change over with basically no code changes.</p>",
+        "id": 481570461,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731251952
+    },
+    {
+        "content": "<p>The only issue I have with it is the name, all other special stuff in Roc is a one-word keyword, and I'd call this a keyword kinda thing</p>",
+        "id": 481571381,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731252706
+    },
+    {
+        "content": "<p>So it'd be nice to pick a one-word equivalent</p>",
+        "id": 481571399,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731252716
+    },
+    {
+        "content": "<p>But that's aesthetic</p>",
+        "id": 481571405,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731252721
+    },
+    {
+        "content": "<p>The behavior makes perfect sense, and as Brendan points out, it's a feature that no one else has</p>",
+        "id": 481571458,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731252741
+    },
+    {
+        "content": "<p>I think <code>call</code> would probably be the most expected one word</p>",
+        "id": 481571465,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731252749
+    },
+    {
+        "content": "<p>Or <code>pipe</code></p>",
+        "id": 481571472,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731252759
+    },
+    {
+        "content": "<p><code>apply</code> tho</p>",
+        "id": 481571479,
+        "sender_full_name": "jan kili",
+        "timestamp": 1731252767
+    },
+    {
+        "content": "<p>My vote is for <code>call</code></p>",
+        "id": 481571498,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1731252787
+    },
+    {
+        "content": "<p>Let's not bike she's the word right now</p>",
+        "id": 481571513,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731252798
+    },
+    {
+        "content": "<p>Just the idea of it is enough for discussion</p>",
+        "id": 481571522,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731252810
+    },
+    {
+        "content": "<p>So even if it's longer than a method call, it's still a good improvement to the standard function changing apparatus in other languages</p>",
+        "id": 481571542,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731252827
+    },
+    {
+        "content": "<p><em>Side note, should I rename this thread to <code>static dispatch - syntax</code>?</em></p>",
+        "id": 481571552,
+        "sender_full_name": "jan kili",
+        "timestamp": 1731252842
+    },
+    {
+        "content": "<p>We should either make another thread for it or wait for now</p>",
+        "id": 481571590,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731252846
+    },
+    {
+        "content": "<p>Ehh, this is the thread with the original doc</p>",
+        "id": 481571615,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731252868
+    },
+    {
+        "content": "<p>Proposal would be the most accurate suffix</p>",
+        "id": 481571627,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731252881
+    },
+    {
+        "content": "<p><em>Zide note, should I move all messages starting with Jasper's this morning to a new thread called <code>static dispatch - syntax</code>?</em></p>",
+        "id": 481571672,
+        "sender_full_name": "jan kili",
+        "timestamp": 1731252923
+    },
+    {
+        "content": "<p><em>There are now 3.5 threads on this, so it would fit.</em></p>",
+        "id": 481571765,
+        "sender_full_name": "jan kili",
+        "timestamp": 1731252979
+    },
+    {
+        "content": "<p>sure, maybe something more specific since these are all kinda syntax related?</p>",
+        "id": 481571777,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731253003
+    },
+    {
+        "content": "<p><code>static dispatch - function chaining syntax</code>?</p>",
+        "id": 481571795,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731253016
+    },
+    {
+        "content": "<p>Or <code>- function vs. method chaining</code></p>",
+        "id": 481571821,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731253038
+    },
+    {
+        "content": "<p><code>func/meth call syntax</code></p>",
+        "id": 481571850,
+        "sender_full_name": "jan kili",
+        "timestamp": 1731253073
+    },
+    {
+        "content": "<p>we don't need to bikeshed the topic name (though it may be fitting for the syntax thread). You can just move the messaeges</p>",
+        "id": 481571926,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731253124
+    },
+    {
+        "content": "<p>lmao</p>",
+        "id": 481571931,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731253130
+    },
+    {
+        "content": "<p>Sorry if that comes off in the wrong tone. I just read like 150 messages to catch up with this thread and am a bit tired of naming</p>",
+        "id": 481571973,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731253168
+    },
+    {
+        "content": "<p>No, it's good to actively push against this stuff</p>",
+        "id": 481571998,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731253190
+    },
+    {
+        "content": "<p>Though I know that apology wasn't to me</p>",
+        "id": 481572057,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731253210
+    },
+    {
+        "content": "<p>34 messages were moved here from <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/channel/304641-ideas/topic/static.20dispatch\">#ideas &gt; static dispatch</a> by <span class=\"user-mention silent\" data-user-id=\"462053\">JanCVanB</span>.</p>",
+        "id": 481572124,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1731253279
+    },
+    {
+        "content": "<p>34 messages were moved from this topic to <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/channel/304641-ideas/topic/static.20dispatch.20-.20method.2Ffunction.20call.20syntax\">#ideas &gt; static dispatch - method/function call syntax</a> by <span class=\"user-mention silent\" data-user-id=\"462053\">JanCVanB</span>.</p>",
+        "id": 481572125,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1731253279
+    },
+    {
+        "content": "<p>We did it.</p>",
+        "id": 481572212,
+        "sender_full_name": "jan kili",
+        "timestamp": 1731253346
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"477725\">@Jasper Woudenberg</span> I can't keep my eyes open, let me read this again when I wake up and give more useful thoughts</p>",
+        "id": 481575833,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731255823
+    },
+    {
+        "content": "<p>And if I forget, never feel bad pinging me, this is an actual game plan for implementing a complex feature in stages and would be really useful to discuss!</p>",
+        "id": 481575963,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1731255877
+    },
+    {
+        "content": "<p>Thanks for taking the time to take a look at it, Sam!</p>",
+        "id": 481576488,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731256109
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/304641-ideas/topic/static.20dispatch.20-.20method.2Ffunction.20call.20syntax/near/481570461\">said</a>:</p>\n<blockquote>\n<p>Personally I think removing the module name and just having types with associated methods is one of the biggest benefits. I can simply write two different container types without any abilities. As long as most of the methods are the same, porting between the two is pretty trivial. If the methods are exactly the same. Porting is free.</p>\n<p>I do think interfaces or abilities or contracts or something are great for clearly specific common function groupings, but for many things that are more adhoc. A very similar API is enough. Change over with basically no code changes.</p>\n</blockquote>\n<p>I think that's definitely a downside in the design I proposed, even with fewer qualifiers. That said though, wouldn't the porting cost of changing one container type with another that has an identical API already be pretty low today? Worst case a couple minutes of surfing compiler errors for an uncommon task, fewer if you can search-and-replace in an isolated bit of code.</p>\n<p>Personally I'd prefer to take the hit on on code-writability side here and have tooling mitigate that (maybe some automated refactors), then to take the hit on the code-readability side and require tooling to counteract that (inlay type hints).</p>",
+        "id": 481577787,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731257104
+    },
+    {
+        "content": "<p>It's more about the diff than the work to port</p>",
+        "id": 481578988,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731258054
+    },
+    {
+        "content": "<p>I like that this proposal makes it possible to figure out which module you're calling just from reading the code, I think that's important.</p>\n<p>I think it's a little awkward that the module is sometimes there and sometimes not. I think it'd be hard to predict in any one case whether it's needed or not. If the formatter will fix it, it's not a huge deal, but I can imagine lots of minor papercuts of forgetting the module when it's needed or being surprised when the formatter removes it when it's not needed.</p>",
+        "id": 481585296,
+        "sender_full_name": "Sky Rose",
+        "timestamp": 1731263263
+    },
+    {
+        "content": "<blockquote>\n<p>As long as most of the methods are the same, porting between the two is pretty trivial.</p>\n</blockquote>\n<p>I don't think being able to change implementations should be prioritized. It's pretty rare, and usually there's an important difference where you want to check every call anyway. Like, you change from a <code>Dict</code> to a <code>List</code>, but now you need to double check your <code>Dict.remove</code> calls to decide whether you want to remove all matching elements or only the first one. Having abilities and matching names are more about being able to use data structures generically in other code and about having predictable understandable features, rather than about being able to do a find and replace in your source code.</p>",
+        "id": 481585310,
+        "sender_full_name": "Sky Rose",
+        "timestamp": 1731263275
+    },
+    {
+        "content": "<blockquote>\n<p>I like that this proposal makes it possible to figure out which module you're calling just from reading the code, I think that's important.</p>\n</blockquote>\n<p>I think I often find it to be more noise. That is the main reason I don't like it. Ignore the ability to change completely. I would still want unqualified method calls for readability. Having <code>List.</code> repeated on essentially every line of a function using a list heavily is just a ton of extra noise.</p>\n<p>I really like the name appearing less. In my ideal world, it appears once in the function signature. If the value is created during the function, the type is listed once where the variable is created (e.g. <code>x = Dict.empty</code>). It may also be hinted at or put in the variable name if that makes sense.</p>",
+        "id": 481587140,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731264720
+    },
+    {
+        "content": "<p>Brendan, how do you feel about the latest version of the idea I posted in terms of reducing qualifier use? I had the sense I got it to a level where the amount of qualifiers was sometimes a bit more than in Richard's original proposal, sometimes less (check the markdown parsing example). In case of a long chain of <code>List</code> operations it would remove all but the first.</p>",
+        "id": 481589680,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731266681
+    },
+    {
+        "content": "<p>Ah missed that. Specifically only adding <code>Module:</code> on the first use of a module.</p>",
+        "id": 481589811,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731266787
+    },
+    {
+        "content": "<p>I'm not particularly a fan of the inconsistency. Like I get there is a rule, but I don't think that all because I switch between string and list it makes sense to add in extra noise.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">myStr</span><span class=\"p\">.</span><span class=\"n\">toUtf8</span><span class=\"p\">().</span><span class=\"n\">List</span><span class=\"p\">:</span><span class=\"nc\">map</span><span class=\"p\">(</span><span class=\"n\">upper</span><span class=\"p\">).</span><span class=\"n\">Str</span><span class=\"p\">:</span><span class=\"nc\">fromUtf8</span><span class=\"p\">()</span><span class=\"o\">?</span>\n</code></pre></div>\n<p>That just reads a lot worse to me than</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">myStr</span><span class=\"p\">.</span><span class=\"n\">toUtf8</span><span class=\"p\">().</span><span class=\"n\">map</span><span class=\"p\">(</span><span class=\"n\">upper</span><span class=\"p\">).</span><span class=\"n\">fromUtf8</span><span class=\"p\">()</span><span class=\"o\">?</span>\n</code></pre></div>",
+        "id": 481590158,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731267028
+    },
+    {
+        "content": "<p>It does solve a major case, but I don't feel the noise is needed at all. I will just go to definition in my editor either way.</p>",
+        "id": 481590238,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731267084
+    },
+    {
+        "content": "<p>Or load up quick reference documentation</p>",
+        "id": 481590252,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731267102
+    },
+    {
+        "content": "<p>I guess I feel that the standard method dot syntax works just fine in rust and go and etc. People don't generally complain about module scope clarity issues. So it feels like extra noise to solve a problem that isn't going to be a big deal in practice. It just is different from our current state so it feels like a big deal.</p>\n<p>Not to belittle any opinions or use cases (without lsp or etc). This is just from my personal flow and what I think most mainstream developers live with.</p>",
+        "id": 481590508,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731267261
+    },
+    {
+        "content": "<p>I think you're accidentally hitting on one of the benefits of the approach though. The following isn't valid in the static dispatch proposal:</p>\n<div class=\"codehilite\"><pre><span></span><code>myStr.toUtf8().map(upper).fromUtf8()?\n</code></pre></div>\n<p>It'd have to be this:</p>\n<div class=\"codehilite\"><pre><span></span><code>myStr.toUtf8().map(upper).(Str.fromUtf8())?\n</code></pre></div>\n<p>Which brings back one qualifier. </p>\n<p>Additionally, Rust and Go don't support the above syntax. In such languages you'd have to write something like this:</p>\n<div class=\"codehilite\"><pre><span></span><code>upperBytes = myStr.toUtf8().map(upper)\nStr.fromUtf8(upperBytes)\n</code></pre></div>\n<p>The static dispatch proposal combines method chaining with pizza chaining with partial application. We'll be able to build much longer (nested) chains without qualifiers than you can in either Go or Rust, and I think the experience is going to be quite different from those languages. Maybe more like Ruby on Rails which has a lot of methods in scope implicitly, though admittedly easier to statically inspect.</p>",
+        "id": 481595426,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731271321
+    },
+    {
+        "content": "<p>We will still have qualifiers, like the example above demonstrates. But those qualifiers will appear wherever we need the method <code>a -&gt; b</code> we need happens to live in <code>b</code>'s module rather than <code>a</code>'s. I think in terms of inconsistency that's way more arbitrary then how qualifiers are placed in my proposal above. And it leeds to more noise in places too, like the repeated use of <code>Parser</code> int he markdown parsing example on Richard's original proposal.</p>",
+        "id": 481596362,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731272036
+    },
+    {
+        "content": "<p>We would just add a method on list to convert to string if we want that or use a pipe. That is a question of exact API design.</p>",
+        "id": 481597073,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731272601
+    },
+    {
+        "content": "<p>I still think there are tons of builders and various types that switch module and the extra noise isn't necessary</p>",
+        "id": 481597225,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731272729
+    },
+    {
+        "content": "<p>Also I would still go for static dispatch proposal without <code>.&gt;</code> or <code>.(Module.fn)</code> or etc. so I probably have a lot of bias here.</p>",
+        "id": 481597417,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731272870
+    },
+    {
+        "content": "<p>I do agree that it is arbitrary in the proposal, but importantly it is in user API design space instead of a compiler rule.</p>",
+        "id": 481597539,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731272964
+    },
+    {
+        "content": "<p>I think I'd prefer the dispatch proposal without <code>.&gt;</code> or <code>.(Module.fn)</code> actually.</p>",
+        "id": 481597555,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731272979
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/304641-ideas/topic/static.20dispatch.20-.20method.2Ffunction.20call.20syntax/near/481597539\">said</a>:</p>\n<blockquote>\n<p>I do agree that it is arbitrary in the proposal, but importantly it is in user API design space instead of a compiler rule.</p>\n</blockquote>\n<p>I wonder how much control we'd have. For instance, the <code>roc-unicode</code> package has a <code>split : Str -&gt; Result (List Str) Utf8ParseErr</code> function. We won't be able to move that to the <code>Str</code> module. Unless we decide to pull unicode into the stdlib that is, but there's going to be other modules that will define functions taking a <code>Str</code>.</p>\n<p>Kotlin (or maybe it's Java) has a thing called 'Extensions' (<a href=\"https://kotlinlang.org/docs/extensions.html\">link</a>) to solve this problem, allowing library authors to 'extend' a base type and add extra methods onto it. I don't find it great to use though, I've on multiple occasions tried to call a method an instance and got a compiler error saying the method didn't exist even though I saw us calling that same method in another bit of code, then it turned out I wasn't importing a particular extension. I think pizza-chaining saves us from needing that type of crowbar.</p>",
+        "id": 481598234,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731273511
+    },
+    {
+        "content": "<p>(deleted)</p>",
+        "id": 481598366,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731273620
+    },
+    {
+        "content": "<p>yeah I'm definitely against that category of \"extension\" designs - Rust has the same thing and I dislike it there too</p>",
+        "id": 481598894,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731274031
+    },
+    {
+        "content": "<p>I'd rather we (continue to) not support that</p>",
+        "id": 481598906,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731274047
+    },
+    {
+        "content": "<p>also great use of \"crowbar\" <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 481599079,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1731274177
+    },
+    {
+        "content": "<p>Yeah extensions are great (for flexibility and convenience) but also lead to very hard to follow code.</p>",
+        "id": 481602301,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731277050
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"477725\">Jasper Woudenberg</span> <a href=\"#narrow/stream/304641-ideas/topic/static.20dispatch.20-.20method.2Ffunction.20call.20syntax/near/481597555\">said</a>:</p>\n<blockquote>\n<p>I think I'd prefer the dispatch proposal without <code>.&gt;</code> or <code>.(Module.fn)</code> actually.</p>\n</blockquote>\n<p>I would totally go for that as a starting point</p>",
+        "id": 481602316,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731277070
+    }
+]

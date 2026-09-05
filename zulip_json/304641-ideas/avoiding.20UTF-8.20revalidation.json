@@ -1,0 +1,176 @@
+[
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Host.20Refcounting.20of.20List.20with.20Size.20on.20Heap/near/431994479\">said</a>:</p>\n<blockquote>\n<p>Haven't done any analysis as to why we are 2.2x slower than Go. Might be a bad implementation of <code>splitWhiteSpace</code> on my part (probably this I think I am doing extra unicode verification that is costing, why a builtin may be needed here).</p>\n</blockquote>\n<p>this led to <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/stream/304641-ideas/topic/split.20whitespace\">#ideas &gt; split whitespace</a> but I wanted to start a separate thread to discuss the (likely) broader problem here and potential ideas for a more general solution</p>",
+        "id": 431996890,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589190
+    },
+    {
+        "content": "<p>so let's say I want to split a <code>Str</code> into smaller strings based on some unusual delimiter - like something that would never be a builtin, for example \"split it whenever we encounter a digit followed immediately by a digit that's 1 more than that digit was\" - e.g. <code>0</code> followed by <code>1</code> means split, and so does <code>2</code> followed by <code>3</code></p>",
+        "id": 431997397,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589274
+    },
+    {
+        "content": "<p>that's a contrived example, but the point is that a builtin like <a href=\"https://www.roc-lang.org/builtins/Str#split\"><code>Str.split</code></a> wouldn't work, because that requires a hardcoded separator - whereas this is a separator that varies based on what came before it - and also, unlike splitting on whitespace, it wouldn't make sense to have a builtin for something this specific</p>",
+        "id": 431997809,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589354
+    },
+    {
+        "content": "<p>now today, I could do the splitting by <a href=\"https://www.roc-lang.org/builtins/Str#walkUtf8WithIndex\">walking over the string as UTF-8 bytes</a> - that's no problem</p>",
+        "id": 431998092,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589401
+    },
+    {
+        "content": "<p>however, what I can't do is end up with <code>Str</code> slices into the original string, like I can with <code>Str.split</code></p>",
+        "id": 431998181,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589420
+    },
+    {
+        "content": "<p>that's unfortunate, because for performance reasons that's definitely what I want it to do</p>",
+        "id": 431998223,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589430
+    },
+    {
+        "content": "<p>so to get the best performance out of an operation like this, while still returning a <code>List Str</code> (of <em>slices</em> into the original string, like <code>Str.split</code> can return), I would need some way to say \"traverse the UTF-8  bytes of this string, and then after each byte tell me whether you want to split or not\"</p>",
+        "id": 431998972,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589586
+    },
+    {
+        "content": "<p>and in fact if I want to end up with a <code>List Str</code>, then there's no way for me to avoid doing some amount of UTF-8 revalidation (in addition to one allocation per <code>Str</code> in that list), because either I have to convert a <code>List</code> slice into a <code>Str</code> (which requires revalidation) or else I have to build up the <code>Str</code> one code point at a time (which also requires validation)</p>",
+        "id": 431999218,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589638
+    },
+    {
+        "content": "<p>one idea for how that could look:</p>\n<div class=\"codehilite\" data-code-language=\"Haskell\"><pre><span></span><code><span class=\"kt\">Str</span><span class=\"o\">.</span><span class=\"n\">partitionByUtf8</span><span class=\"w\"> </span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">state</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">state</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"w\"> </span><span class=\"ow\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">state</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">Keep</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">Discard</span><span class=\"p\">]))</span><span class=\"w\"> </span><span class=\"ow\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"kt\">Str</span>\n</code></pre></div>",
+        "id": 431999651,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589729
+    },
+    {
+        "content": "<p>so basically you go 1 byte at a time through the UTF-8, and then return whether you want to keep that byte or discard it, and the discarded bytes end up being the separators between the strings (so, all the \"keeps\" result in one <code>Str</code> slice until you get to either a <code>Discard</code> or the end of the input <code>Str</code>)</p>",
+        "id": 432000004,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589806
+    },
+    {
+        "content": "<p>A note, here:</p>\n<p>You totally can get seamless slices from the original string (as long as it isn't a small string). I am doing it in my function.</p>\n<ol>\n<li><code>Str.toUtf8</code> This gives you a list sharing the underlying allocation with the string</li>\n<li><code>List.walkWithIndex</code> or whatever to whatever the bytes. </li>\n<li>Very important, do not build new strings a character at a time. Instead track indices</li>\n<li><code>List.sublist</code> to get seamless slices of the original string.</li>\n<li><code>Str.fromUtf8</code> is the only cost we currently can't remove. Will be seamless still, but will pay the cost of validating the utf8.</li>\n</ol>",
+        "id": 432000456,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712589895
+    },
+    {
+        "content": "<p>ha, that's clever! I didn't think of <code>sublist</code> and indices <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 432000618,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712589933
+    },
+    {
+        "content": "<p>One idea that is safe and would help (but not completely fix) the perf issues would be to a <code>Str.subStrUtf8Bytes</code>(or whatever similar name). That function would only verify the first character and last character in the substring are valid utf8. All characters in between are guaranteed to be valid substrings due to being part of the original string. Just need to make sure not to split in the build of a character.</p>",
+        "id": 432000847,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712589978
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>Str.partitionByUtf8 : Str, state, (state, U8 -&gt; (state, [Keep, Discard])) -&gt; List Str\n</code></pre></div>\n<p>I assume you would want this to return a results and track the utf8 is split in valid locations that don't lead to invalid utf8 in strings?</p>",
+        "id": 432001235,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712590065
+    },
+    {
+        "content": "<p>so there would be a couple of annoying things about that <code>Str.partitionByUtf8</code> API idea:</p>\n<ol>\n<li>each individual UTF-8 byte would contain the usual UTF-8 markers about whether you have a multi-byte code point, and you'd have to translate those into code points yourself, which would be annoying in a \"walk\" style where you're maintaining partial code point parsing in a <code>state</code></li>\n<li>you could return <code>Keep</code> in the middle of a multi-byte code point, and then that would result in a returned <code>Str</code> being invalid UTF-8, so we'd still need to validate that</li>\n</ol>",
+        "id": 432001411,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590097
+    },
+    {
+        "content": "<p>yeah</p>",
+        "id": 432001440,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590103
+    },
+    {
+        "content": "<p>so (1) could be improved by changing <code>(state, U8 -&gt; ...)</code> to <code>(state, U32 -&gt; ...)</code> and having it receive a decoded code point instead of a raw UTF-8 byte, but now we're always paying for a bunch of code point decoding work that might be unnecessary to the partitioning algorithm</p>",
+        "id": 432001780,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590175
+    },
+    {
+        "content": "<p>the original api could have relatively cheap validation. <del>Just is the <code>Discard</code> within a utf multi-byte code point, but not repeated for the whole codepoint.</del> actually, it is more simple, just did we change state in the middle of a multi-byte codepoint</p>",
+        "id": 432002035,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712590222
+    },
+    {
+        "content": "<p>also it still wouldn't change the fact that some code points are not valid scalar values, so it wouldn't be valid to keep them either, so (2) would still apply</p>",
+        "id": 432002067,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590230
+    },
+    {
+        "content": "<p>I have a vague sense that we could further improve validation performance by not getting <code>Result</code> involved</p>",
+        "id": 432002812,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590397
+    },
+    {
+        "content": "<p>Oh, big problem with <code>partitionByUtf8</code> api if it only uses <code>U8</code></p>\n<p>You may not know if you want to discard until you read the entire codepoint. This api you have to specify keep/discard at each individual byte.</p>",
+        "id": 432002857,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712590409
+    },
+    {
+        "content": "<p>that's a good point!</p>",
+        "id": 432002950,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590431
+    },
+    {
+        "content": "<p>also you might need multiple code points I guess</p>",
+        "id": 432003046,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590449
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/avoiding.20UTF-8.20revalidation/near/432000847\">said</a>:</p>\n<blockquote>\n<p>One idea that is safe and would help (but not completely fix) the perf issues would be to a <code>Str.subStrUtf8Bytes</code>(or whatever similar name). That function would only verify the first character and last character in the substring are valid utf8. All characters in between are guaranteed to be valid substrings due to being part of the original string. </p>\n</blockquote>\n<p>this is an interesting idea...the validation for the first byte would be trivial: \"it's valid iff it's either less than 128 or else the start of a multibyte code point\"</p>",
+        "id": 432004074,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590717
+    },
+    {
+        "content": "<p>validating the end would be more work, because it would involve looking at up to 4 bytes</p>",
+        "id": 432004214,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590756
+    },
+    {
+        "content": "<p>I bet we could load all 4 as a u32 and do a smart super quick processing.</p>",
+        "id": 432004428,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712590810
+    },
+    {
+        "content": "<p>a nice thing about that design is that since we're always looking at the bytes from the original <code>Str</code>, you can walk over those bytes and then do <code>Str.subStrUtf8Bytes</code> (or whatever) as you go, while all that memory is in cache</p>",
+        "id": 432004779,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590914
+    },
+    {
+        "content": "<p>and then you never even need to build up an intermediate <code>List</code> of indices to split on later</p>",
+        "id": 432004871,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590925
+    },
+    {
+        "content": "<p>you just build up the final <code>List Str</code> as you go, and they're all slices</p>",
+        "id": 432004937,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712590935
+    }
+]

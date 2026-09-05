@@ -1,0 +1,305 @@
+<html>
+<head><meta charset="utf-8"><title>Rank-2 limitation? (and an error message) · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html">Rank-2 limitation? (and an error message)</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="619507584"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619507584" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619507584">(Aug 27 2026 at 10:48)</a>:</h4>
+<p>Apologies for the long post, my main questions are in some bullet points below if TL;DR :).<br>
+I was working on something I probably shouldn't have, and at some point the type-foo is a certain code smell, but I can't help but try because it's there. Anyhow, the problem distills to this example.</p>
+<div class="codehilite"><pre><span></span><code>Mod :: [].{
+    # Commented out type sig (for now)
+    # f1 : List(U32) -&gt; List(U64)
+    f1 = |l| {
+        l.map(|i| U32.to_u64(i))
+    }
+    f2 = |l| {
+        l.map(|i| U32.to_u128(i))
+    }
+
+    g = |l| {
+        a1 = f1(l)
+        a2 = f2(l)  # -- Error --
+
+        0 # (To give a return val)
+    }
+}
+</code></pre></div>
+<p>With this confusing error message about <code>a2 = f2(l)</code> that appears to show a failed unification between two ostensibly equal types:</p>
+<div class="codehilite"><pre><span></span><code>This argument has the type:
+
+    a where [a.map : a, (U32 -&gt; U64) -&gt; _ret]
+
+But main.Mod.f2 needs the first argument to be:
+
+    a where [a.map : a, (U32 -&gt; U64) -&gt; _ret]
+</code></pre></div>
+<p>That message isn't telling me what's wrong , but I can kind of see that we are passing the same <code>l</code> and using the same underlying <code>map</code> method, but using it in a different way (giving U128 or U64). As soon as there is the annotation that narrows it to, e.g., a list, the error disappears.</p>
+<p>I am guessing that this is something to do with both/either rank-2 polymorphism (I think it would need existential quantifiers? Universal?) or higher-kinded types (something that holds an <code>a</code> that can map it to a <code>b</code>).</p>
+<p>What surprised me though, is how such a simple example can trigger it. I know rank-2 is off the table, but this means that I can't pass a polymorphic method of a generic module down the call stack and use it with different types, at least without first explicitly narrowing it. The consequence is that any library that uses different instantiations of user provided types (e.g., custom containers) will be limited?</p>
+<p>I guess what I'm wondering is </p>
+<ul>
+<li>Could that error message be made more clear?</li>
+<li>Is this a rank-1 limitation as I have understood it (or something more interesting? I'm curious)</li>
+<li>Would it be possible to have slightly more flexibility by delaying the specialisation of a generic member function included in a where-constraint until its use cases separately? I.e., the first l.map(...) is a different specialisation to the second l.map(...). Specifically, can the general non-receiver type parameters be preserved, rather than pinned on first use?</li>
+</ul>
+<p>And also a thought that structural typing and static dispatch appears at first to be incredibly flexible, until you bounce against the underlying rank-1 HM inference.</p>
+<hr>
+<p>The concrete (if ill-advisable) use-case I have right now is a little utility library for some sqlite queries in a project database. I can define each query relative to 'the receiver whose associated module  defines query_many!', but I cannot use these helpers together without first providing the concrete basic-cli.Sqlite module, because the output type of query_many! varies with the decoder you provide, but the generic query_many! has already specialised to its first use.</p>
+<p>I should really change this to be a module of an application, and have the application be the entry point to the scripts, but I think the questions above still stand.</p>
+<div class="codehilite"><pre><span></span><code>## Planning stage of a reconciler. Determines the flow stages that need to
+## be executed next.
+# plan! : Query(sqlite, path) =&gt; List(a)
+    #   where [
+    # ...
+    #       sqlite.query_many! : { path : path, query : Str, bindings : List({ name : Str, value : [Null, Real(F64), Integer(I64), String(Str), Bytes(List(U8))] }), rows : (cols -&gt; (stmt =&gt; Try(row, derr))) } =&gt; Try(List(row), err),
+    #   ]
+plan! = |q| {
+  # jobs referred to by I64 ids
+  jobs = Query.Analyses.analyses_lacking_jobs_of_stage!(q, { experiment_id: 1, stage: &quot;A&quot;, replica: 0, deps: [] })
+
+  # batches referred to by string names
+  batches = Query.Batches.batches_to_poll!(q, 5) # &lt;-- Errors
+  # Error : same as above essentially (reported types that look the same can&#39;t unify)
+  # but I&#39;m guessing it&#39;s because the second underlying `query_many!` returns and uses
+  # decoders for Str not I64
+}
+
+# If I used this in application code not a library, it would be ok. The problem
+# is that the module handle `q` is used under-the-hood for `query_many!`, returning
+# different types, but is pinned after its first use to only work with I64.
+# If I specify a `sqlite.query_many!` for some *generic* output decoder type (paramaterised
+# by `row`) to a where constraint of plan!, I get an error saying ~
+# It has the type (... decoder: I64 ...) but you are trying to use it as type (... decoder: row ...)
+</code></pre></div>
+
+
+
+<a name="619680164"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619680164" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619680164">(Aug 28 2026 at 00:44)</a>:</h4>
+<p>I think the error message is just wrong <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="619680338"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619680338" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619680338">(Aug 28 2026 at 00:46)</a>:</h4>
+<p>it should say that <code>main.Mod.f2</code> needs the <code>map</code> to do <code>U32 -&gt; U128</code> because that function returns <code>U32.to_u128</code>, which means that <code>map</code> function's return type should be <code>U128</code> - but the error message claims it's <code>U64</code></p>
+
+
+
+<a name="619680386"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619680386" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619680386">(Aug 28 2026 at 00:47)</a>:</h4>
+<p>so maybe the error message is printing the same type twice - <span class="user-mention" data-user-id="820027">@Jonathan</span> would you mind opening a GitHub issue for this?</p>
+
+
+
+<a name="619736067"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619736067" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619736067">(Aug 28 2026 at 08:19)</a>:</h4>
+<p>Sure, can do - I think it's wrong too. But isn't the underlying reason for the message because <code>map</code> specialises on first use to something that accepts X, but then the second use of it tries it with Y?</p>
+
+
+
+<a name="619784690"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619784690" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619784690">(Aug 28 2026 at 12:29)</a>:</h4>
+<p>it's nothing special - just that it's saying "this type has a <code>map</code> function with shape A" and also "that same type has a <code>map</code> function with shape B" and A and B are incompatible, so it's a type mismatch <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="619784884"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619784884" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619784884">(Aug 28 2026 at 12:29)</a>:</h4>
+<p>the same type can't possibly have a <code>map</code> function with two different incompatible types, which is what this code is asking for</p>
+
+
+
+<a name="619786782"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619786782" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619786782">(Aug 28 2026 at 12:38)</a>:</h4>
+<p>But when it is annotated as a list, there is no error and it satisfies both. I.e., there is a type that can satisfy both, it just requires map to be polymorphic and have separate instantiations for different type parameters?</p>
+
+
+
+<a name="619787393"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619787393" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619787393">(Aug 28 2026 at 12:41)</a>:</h4>
+<p>if you add an annotation the type checker accepts it? What's the annotation? <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+
+
+
+<a name="619787565"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619787565" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619787565">(Aug 28 2026 at 12:42)</a>:</h4>
+<p>Yeh it's just the one I left commented out at the top of the first code block.</p>
+
+
+
+<a name="619787767"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619787767" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619787767">(Aug 28 2026 at 12:43)</a>:</h4>
+<p>It pins l to be a list of U32. Then both f1 and f2 can work. But I think they can't when l is "something with a map".</p>
+
+
+
+<a name="619790426"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619790426" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619790426">(Aug 28 2026 at 12:55)</a>:</h4>
+<p>oh I see, hm</p>
+
+
+
+<a name="619790596"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619790596" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619790596">(Aug 28 2026 at 12:56)</a>:</h4>
+<p>ok I think I misunderstood the original error</p>
+
+
+
+<a name="619824989"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619824989" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619824989">(Aug 28 2026 at 15:23)</a>:</h4>
+<p>ok, I may regret this later but I want to try it out <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span> </p>
+<p>I'm gonna try out having this infer as:</p>
+<div class="codehilite"><pre><span></span><code>g : a -&gt; U8 where [
+    a.map : a, (U32 -&gt; U64) -&gt; _b,
+    a.map : a, (U32 -&gt; U128) -&gt; _c,
+]
+</code></pre></div>
+<p>so basically, what this is saying is:</p>
+<p>"<code>a</code> must have a <code>map</code> method which is compatible with <strong>both</strong> of these types"</p>
+
+
+
+<a name="619825576"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619825576" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619825576">(Aug 28 2026 at 15:25)</a>:</h4>
+<p>in other words, "it's generic somehow but we don't know exactly how it's generic yet"</p>
+
+
+
+<a name="619842472"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619842472" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619842472">(Aug 28 2026 at 16:44)</a>:</h4>
+<p>so without this, we don't have principal type inference - because you can (as demonstrated at the top of this thread) add a type annotation which increases flexibility, which should not be possible if we are inferring principal types</p>
+
+
+
+<a name="619842482"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619842482" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619842482">(Aug 28 2026 at 16:44)</a>:</h4>
+<p>so this change means that the above should Just Work</p>
+
+
+
+<a name="619843199"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619843199" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619843199">(Aug 28 2026 at 16:47)</a>:</h4>
+<p>I think it could potentially also lead to nicer error messages, because if you infer multiple conflicting constraints, we can remember where both of the constraints came from, so we can say like "we have Constraint A from this usage over here, and we have Constraint B from this other usage over here, and one of these is incompatible with how you're using it in this place"</p>
+
+
+
+<a name="619843700"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619843700" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619843700">(Aug 28 2026 at 16:50)</a>:</h4>
+<p>downsides:</p>
+<ul>
+<li>it becomes possible to write a method constraint in a new way. I believe that in general, these offer less-nice ways to express your constraints than what's currently available; that is, I think there should always be a way to express a valid constraint more concisely than this, so I don't know why anyone would use this on purpose (as opposed to type inference inferring them because it doesn't know a better way to infer them, and then you can make it nicer with a more concise annotation)</li>
+<li>in theory it can lead to type constraints accumulating in un-annotated programs in a way that could make performance worse. I am not worried about this in practice, because it has taken this long to find a single example of <em>two</em> constraints on the same method coming up, so I suspect this will be one of those things where in theory it can be slow, but in practice nobody would use it in a way where it would be a problem in practice. (This is especially true because as soon as type annotations are in the mix, this no longer even comes up.)</li>
+</ul>
+
+
+
+<a name="619843921"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619843921" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619843921">(Aug 28 2026 at 16:51)</a>:</h4>
+<p>there's also arguably a "learning curve" downside - but again, I don't think this will come up much in practice, and I wouldn't be surprised if most Roc programmers never even run into this, and are eventually surprised the first time it comes up</p>
+
+
+
+<a name="619923455"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619923455" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619923455">(Aug 29 2026 at 01:54)</a>:</h4>
+<p>Yeh the way it came up was kind of cursed, but then it distilled to something that was actually quite simple. I imagined something that needed to be generic over a container, but I think it's uncommon to do multiple different things with the same generic variable.</p>
+<p>Anyhow, that seems like quite a clean solution and kind of a sneaky end-run around rank-2 I think by not having to say "this works for all <code>a</code>s" and instead "it needs to work for these specific <code>a</code>s". I'm sure there'll be downstream effects so it'll be interesting to see how it plays out.</p>
+
+
+
+<a name="619923505"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619923505" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619923505">(Aug 29 2026 at 01:55)</a>:</h4>
+<p>Thanks for taking a look and considering it <span aria-label="octopus" class="emoji emoji-1f419" role="img" title="octopus">:octopus:</span></p>
+
+
+
+<a name="619925657"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/619925657" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#619925657">(Aug 29 2026 at 02:12)</a>:</h4>
+<p>thanks for the detailed report! <span aria-label="smiley" class="emoji emoji-1f603" role="img" title="smiley">:smiley:</span></p>
+
+
+
+<a name="620053080"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/620053080" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#620053080">(Aug 30 2026 at 02:02)</a>:</h4>
+<p><span class="user-mention" data-user-id="820027">@Jonathan</span> can you try on current <code>main</code>? <a href="https://github.com/roc-lang/roc/pull/10984">This pr</a> implemented the fix I described above, so the original program should work now!</p>
+
+
+
+<a name="620094270"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/620094270" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#620094270">(Aug 30 2026 at 10:14)</a>:</h4>
+<p>Will do! It might be a day or so until I'm back at the 'puter though. Quite excited!</p>
+
+
+
+<a name="620593686"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/620593686" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#620593686">(Sep 01 2026 at 09:28)</a>:</h4>
+<p>Ok! Seems to work for the simple case with two different uses of map on a generic argument and inferred types, or with the function annotated as (<code>f1 : a, (U32 -&gt; U64) -&gt; b</code> etc.).</p>
+<p>Outside of something more hairy that I haven't yet managed to minimise, I have two problems so far with variations of simple example above:</p>
+<p>&lt;removed here because I made a mistake and it was getting confusing&gt;</p>
+<p>Second problem is you can't annotate the inferred type conjunction manually. The following errors:</p>
+<div class="codehilite"><pre><span></span><code>    # The below type was copied from the LSP hover
+    g : a -&gt; b where [a.map : a, (U32 -&gt; U128) -&gt; b, a.map : a, (U32 -&gt; U64) -&gt; _ret]
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    g = |l| {
+        a1 = f1(l)
+        a2 = f2(l)
+        a2
+    }
+</code></pre></div>
+<p>The error highlights the second map constraint in g's signature:</p>
+<div class="codehilite"><pre><span></span><code>It has the type:
+a, (U32 -&gt; U64) -&gt; _ret where [a.map : a, (U32 -&gt; U128) -&gt; _ret]
+But you are trying to use it as:
+a, (U32 -&gt; U128) -&gt; _ret where [a.map : a, (U32 -&gt; U128) -&gt; _ret2]
+</code></pre></div>
+
+
+
+<a name="620642759"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Rank-2%20limitation%3F%20%28and%20an%20error%20message%29/near/620642759" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Rank-2.20limitation.3F.20.28and.20an.20error.20message.29.html#620642759">(Sep 01 2026 at 12:31)</a>:</h4>
+<p>Sorry Richard, I was editing the prior comment because I thought I'd made a mistake, and indirectly made a new mistake. I've removed it for clarity from before and I'll add it below.</p>
+<ul>
+<li>You can't manually annotate the function with the  separate uses (<code>g</code>) with the same conjunction type as is now inferred by the compiler (see prior message)</li>
+<li>Annotating the separate uses (<code>f1</code> or <code>f2</code>) with the same type as inferred by the compiler leads to the following error</li>
+</ul>
+<div class="codehilite"><pre><span></span><code>    f1 : a -&gt; b where [a.map : a, (U32 -&gt; U64) -&gt; b]
+    f1 = |l| {
+        l.map(|i| U32.to_u64(i))
+    }
+
+    f2 : c -&gt; d where [c.map : c, (U32 -&gt; U128) -&gt; d]
+    f2 = |l| {
+        l.map(|i| U32.to_u128(i))
+    }
+
+    g = |l| {
+        a1 = f1(l)
+        a2 = f2(l)
+        a2
+    }
+</code></pre></div>
+<p>Error</p>
+<div class="codehilite"><pre><span></span><code>The first argument being passed to this function has the wrong type.
+
+a2 = f2(l)
+        ^
+
+The type involved is:
+
+    a where [a.map : a, (U32 -&gt; U64) -&gt; b]
+
+The difference is inside this type, but it is not visible in this display.
+</code></pre></div>
+
+
+
+<hr><p>Last updated: Sep 05 2026 at 14:09 UTC</p>
+</html>

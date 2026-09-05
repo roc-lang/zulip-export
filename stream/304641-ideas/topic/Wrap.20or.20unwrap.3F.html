@@ -1,0 +1,411 @@
+<html>
+<head><meta charset="utf-8"><title>Wrap or unwrap? · ideas · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/index.html">ideas</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html">Wrap or unwrap?</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="615412797"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615412797" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615412797">(Aug 09 2026 at 00:50)</a>:</h4>
+<p>Consider this code from the <a href="https://github.com/kili-ilo/roc-random"><code>roc-random</code> library</a>:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>bounded_u8 : U8, U8 -&gt; Generator(U8)
+bounded_u8 = |x, y| bounded_u32_helper(x, y) |&gt; map(U32.to_u8_wrap)
+</code></pre></div>
+<p>In this case, a <code>U32</code> is being converted to a <code>U8</code>, but we know it's safe to do so because the value must be between 0 and 255, which is why we use <code>U32.to_u8_wrap</code> instead of <code>U32.to_u8_try</code>.</p>
+<p>But the truth is, we never <em>actually</em> want to <code>wrap</code> the <code>U32</code>, we're really using <code>wrap</code> to... <code>unwrap</code>.</p>
+<p>I don't mean to single out this library, it's awesome and I just wanted to show a real-life example in production (plus I've written a lot of code like this too). I think it highlights a limitation of the language: it's just too inconvenient to unwrap a value when we know that it's safe to do so, and as a result we often use various tricks that are more convenient but semantically incorrect. The most common are:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>U32.to_u8_wrap()  # wrap to unwrap
+
+U32.to_u8_try() ?? 0  # use a default value that we don't really intend to use
+
+U32.to_u8_try() ?? { crash "Unreachable" } # correct but painful to write
+</code></pre></div>
+<p>There are three issues with the first two solutions:</p>
+<ol>
+<li>They can be confusing because they seem to be doing something that they're not. The first one never actually wraps, and the second never actually uses the default value.</li>
+<li>If a bug is introduced in the future, the "unreachable" branch may be reached silently and cause problems downstream that may be hard to debug.</li>
+<li>They are not discoverable: there's no way to search in the code to find all the places where we're effectively unwrapping a value.</li>
+</ol>
+<p>I understand the original motivation for _not_ including an <code>unwrap</code> function, as it is tempting to overuse it and end up with code that doesn't do proper error management. However, I fear that the absence of <code>unwrap</code> may cause worse issues in the long run.</p>
+
+
+
+<a name="615414399"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615414399" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615414399">(Aug 09 2026 at 01:17)</a>:</h4>
+<p>I feel like adding the explicit <code>crash</code> is the best option here if you need the library to model correctness at such a high level. </p>
+<p>Is your concern that this is not ergonomic and you would prefer we introduce an <code>.unwrap()</code> as opposed to adding one locally?</p>
+<p>I think when we discussed this previously the general consensus was to add a local unwrap helper and use that.</p>
+
+
+
+<a name="615415174"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615415174" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615415174">(Aug 09 2026 at 01:32)</a>:</h4>
+<p>Ah, I knew there must have been a prior discussion, but I couldn't find it. <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span> </p>
+<p>Yes, I feel like the language itself should have an <code>unwrap()</code> method because it makes it unlikely that people will use potentially dangerous workarounds such as <code>wrap</code> or <code>?? 0</code>, and it makes unwrapping more discoverable: if everyone defines their own <code>unwrap</code> method, they might not name it like that.</p>
+<p>I feel like the use case I've shown is a completely legitimate use for <code>unwrap</code>, it shouldn't be discouraged at all.<br>
+The use case that should perhaps be discouraged (at least in production) is when it replaces proper error handling.</p>
+<p>So I just thought of something: perhaps we could have two variants such as <code>assert_ok()</code> and <code>todo_ok()</code>.<br>
+This makes unwrapping easy in both use cases, but it's trivial to find all the To-Dos. Moreover, the <code>todo_ok()</code> could be forbidden in release code (although this might encourage people to replace <code>todo_ok</code> with <code>assert_ok</code>, so maybe a warning is preferable).</p>
+
+
+
+<a name="615415349"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615415349" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615415349">(Aug 09 2026 at 01:36)</a>:</h4>
+<p>Here's what it would look like:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>bounded_u8 : U8, U8 -&gt; Generator(U8)
+bounded_u8 = |x, y| bounded_u32_helper(x, y) |&gt; map(|x| x.to_u8_try().assert_ok())
+</code></pre></div>
+<p>For the second use-case, where someone is writing a quick script or a first draft of their code:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>main! = |args| {
+    arg1 = args.get(1).todo_ok()
+    ...
+}
+</code></pre></div>
+
+
+
+<a name="615415590"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615415590" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615415590">(Aug 09 2026 at 01:42)</a>:</h4>
+<p>Previous discussion here <a class="message-link" href="/#narrow/channel/231634-beginners/topic/result.20unwrap.3F/near/345918724">#beginners &gt; result unwrap? @ 💬</a></p>
+
+
+
+<a name="615415694"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615415694" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615415694">(Aug 09 2026 at 01:44)</a>:</h4>
+<p>I dont have a strong opinion here, just linking to the discussion I found from searching the history</p>
+
+
+
+<a name="615416139"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615416139" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615416139">(Aug 09 2026 at 01:53)</a>:</h4>
+<p>so I've seen what it looks like to have a convenient "assume no errors and crash if I'm wrong" <a href="https://doc.rust-lang.org/rust-by-example/error/option_unwrap.html">method</a>, and it is lots more crashes in production <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="615416188"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615416188" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615416188">(Aug 09 2026 at 01:54)</a>:</h4>
+<p>I think making <code>crash</code> more convenient is a situation where the cure is astronomically worse than the disease, unfortunately</p>
+
+
+
+<a name="615416241"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615416241" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615416241">(Aug 09 2026 at 01:55)</a>:</h4>
+<p>because it ends up being used in situations where it's both convenient and reachable in production, and the convenience leads to end users experiencing crashes</p>
+
+
+
+<a name="615417062"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615417062" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615417062">(Aug 09 2026 at 02:08)</a>:</h4>
+<p>my point isn't that it's convenient, but rather that in this case inconvenience is much better than crashiness, which in practice is the alternative <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="615419624"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615419624" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615419624">(Aug 09 2026 at 02:47)</a>:</h4>
+<p>I understand the motivation, really. My point is that there are alternative convenient options that are wrong (e.g., <code>wrap</code> and <code>?? 0</code>), so we're not really getting rid of the problem, just hiding it under the rug where it might be harder to find. In other words, we're replacing crashes with weird bugs.</p>
+
+
+
+<a name="615421225"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615421225" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615421225">(Aug 09 2026 at 03:11)</a>:</h4>
+<p>I'll grant you that I have no idea how frequently <code>wrap</code>, <code>?? unused_default</code>, and other "mock" unwraps are actually used. I'll run an agent on a few Roc libraries (old and new) and see how many it can find. It might be a negligible problem.</p>
+
+
+
+<a name="615425196"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615425196" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Austin Clements <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615425196">(Aug 09 2026 at 04:02)</a>:</h4>
+<p>Yeah I’ve wondered about this. If the “fail fast and crash” approach is undesirable is it a middle ground to have something that crashes in debug mode but uses a default value in release? I agree that the current convenient options probably lead to more silent bugs. Coming from the person who wrote the code in the first example sorry about that lol, in hindsight my gut would be to go with the crash approach I think? Definitely understand not wanting to take down the entire program unnecessarily, I’ve seen some people say they prefer unexpected failures to lead to some kind of graceful no-op ideally, maybe with a crash in debug builds</p>
+
+
+
+<a name="615425964"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615425964" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Austin Clements <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615425964">(Aug 09 2026 at 04:14)</a>:</h4>
+<p>I wonder if easy to use property tests would reduce the damage of the crashy approach. Looking into it it seemed like it would have to be pretty intertwined with the compiler to handle seeding and reporting failing seeds, might be over my head but I’m definitely interested in it</p>
+
+
+
+<a name="615436643"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615436643" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615436643">(Aug 09 2026 at 06:32)</a>:</h4>
+<p>I asked the agent to search across 9 different libraries, both old and new (<code>roc-random</code>, <code>roc-ray</code>, <code>roc-parser</code>, <code>roc-isodate</code>, <code>roc-ansi</code>, <code>roc-base64</code>, <code>roc-crc32</code>, <code>roc-url</code>, and <code>roc-http</code>). It found:</p>
+<ul>
+<li>60+ uses of <code>_wrap</code> that actually serve as <code>unwrap</code>. That's by far the worst offender.</li>
+<li>30+ explicit <code>match</code> with <code>Err(_) =&gt; { crash "..." }</code>.</li>
+<li>40+ <code>?? { crash "..." }</code></li>
+<li>3 uses of <code>Str.from_utf8_lossy</code> for purely ASCII code (arguably, the more correct code would be <code>from_utf8</code> followed by <code>unwrap</code>.</li>
+</ul>
+
+
+
+<a name="615438002"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615438002" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615438002">(Aug 09 2026 at 06:57)</a>:</h4>
+<p>I understand the point, but I think there's some bias here to be aware of: right now we're seeing mostly instances of places where people should have used a crash but didn't, because it's not super ergonomic to crash.</p>
+<p>If it becomes more ergonomic to crash there'll be many cases of <code>crash</code> where non-crashing error handling would be more appropriate. This could be a much bigger problem because these types of cases are not limited to integer conversions, <code>unwrap</code> is convenient everywhere.</p>
+<p>I wonder what in those 60+ case's of <code>_wrap</code> used as <code>unwrap</code> is the source of the confidence that the integer conversion ought to be safe. If there's common patterns here, maybe API could be changed to provide safe conversions that account for these?</p>
+
+
+
+<a name="615439812"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615439812" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615439812">(Aug 09 2026 at 07:29)</a>:</h4>
+<p>Yes, that makes sense.</p>
+
+
+
+<a name="615447139"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615447139" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615447139">(Aug 09 2026 at 09:40)</a>:</h4>
+<p>I looked at why the developers of the Roc libraries listed above were confident that they could safely unwrap. Here are the main reasons:</p>
+<ol>
+<li>
+<p>Mathematical guarantees: e.g., in <code>roc-isodate</code>, we compute <code>hours_saturated % 24</code>. We know with 100% certainty that the result fits inside an <code>I8</code>. Also, in <code>roc-crc32</code>, we calculate an array index using <code>.bitwise_and(0xFF)</code>, so we're sure to get a number between 0 and 255, and we can safely convert it to an <code>U8</code>.</p>
+</li>
+<li>
+<p>Precomputed bounds: e.g., in <code>roc-random</code>, the <code>Random.choice</code> function first generates a random number strictly between 0 and <code>list.len() - 1</code>. So when calling <code>list.get(index)</code>, we're confident that this cannot fail.</p>
+</li>
+<li>
+<p>Restricted parsing: in <code>roc-parser</code>, when we parse a specific restricted grammar (like a<br>
+1-digit XML version number), we can be confident that the result fits in an <code>U8</code>.</p>
+</li>
+<li>
+<p>ASCII text: in <code>roc-random</code>, we convert a list of ASCII characters to a <code>Str</code>. Since ASCII text is also valid UTF-8, we know that <code>Str.from_utf8</code> cannot fail. In Exercism, we call <code>Str.to_utf8</code>, we shuffle the ASCII letters (using various ciphers depending on the exercise), and we go back to <code>Str</code>. There's no way <code>Str.from_utf8</code> can ever fail since we started with valid UTF-8 and we only changed the ASCII chars.</p>
+</li>
+</ol>
+
+
+
+<a name="615448135"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615448135" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615448135">(Aug 09 2026 at 09:59)</a>:</h4>
+<p>In my case (<code>roc-crc32</code>) I kind of like that the <code>crash</code> is very loud (rather than a harder to spot <code>.unwrap()</code>):</p>
+<div class="codehilite" data-code-language="Elm"><pre><span></span><code><span class="err">#</span><span class="w"> </span><span class="nv">index</span><span class="w"> </span><span class="nv">is</span><span class="w"> </span><span class="nv">guaranteed</span><span class="w"> </span><span class="nv">to</span><span class="w"> </span><span class="nv">be</span><span class="w"> </span><span class="mi">0</span><span class="nf">-</span><span class="mi">255</span><span class="w"> </span><span class="nv">due</span><span class="w"> </span><span class="nv">to</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="mi">0</span><span class="nv">xFF</span><span class="w"> </span><span class="nv">mask</span><span class="p">,</span><span class="w"> </span><span class="nv">so</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">lookup</span>
+<span class="err">#</span><span class="w"> </span><span class="nv">can</span><span class="w"> </span><span class="nv">never</span><span class="w"> </span><span class="nv">fail</span><span class="nf">.</span><span class="w"> </span><span class="kt">If</span><span class="w"> </span><span class="nv">it</span><span class="w"> </span><span class="nv">does</span><span class="p">,</span><span class="w"> </span><span class="nv">the</span><span class="w"> </span><span class="nv">algorithm</span><span class="w"> </span><span class="nv">is</span><span class="w"> </span><span class="nv">broken</span><span class="nf">.</span>
+<span class="nv">table_value</span><span class="w"> </span><span class="nf">=</span>
+<span class="w">    </span><span class="nv">match</span><span class="w"> </span><span class="nv">crc32_table</span><span class="nf">.</span><span class="nv">get</span><span class="p">(</span><span class="nv">index</span><span class="nf">.</span><span class="nv">to_u64</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kt">Ok</span><span class="p">(</span><span class="nv">value</span><span class="p">)</span><span class="w"> </span><span class="nf">=&gt;</span><span class="w"> </span><span class="nv">value</span>
+<span class="w">        </span><span class="kt">Err</span><span class="p">(</span><span class="nv">_</span><span class="p">)</span><span class="w"> </span><span class="nf">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nv">crash</span><span class="w"> </span><span class="s">"CRC32 table lookup failed: index ${index.to_str()} out of bounds"</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+</code></pre></div>
+<p>I felt uncomfortable writing this, because I don't like to <code>crash</code>, but it's the only way out to provide a nice API and the <code>crash</code> really made me consider if it was necessary. I find that <code>unwrap()</code> and <code>expect()</code> in Rust are often used with less rigor, more for convenience.</p>
+
+
+
+<a name="615448502"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615448502" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615448502">(Aug 09 2026 at 10:05)</a>:</h4>
+<p>I think the fact that you can chain on an <code>unwrap()</code> or <code>expect()</code> in Rust makes me more willing to use them. <code>crash</code> feels very definitive and dead-end.</p>
+
+
+
+<a name="615448541"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615448541" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615448541">(Aug 09 2026 at 10:05)</a>:</h4>
+<p>Yes, I'm totally fine with crashes (when they can't happen!), especially with a clear comment and a clear crash message.</p>
+<p>I'm more worried by <code>to_u8_wrap</code> or <code>from_lossy_utf8</code> being used as substitutes for proper error handling.</p>
+
+
+
+<a name="615449251"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615449251" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615449251">(Aug 09 2026 at 10:18)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="734214">Aurélien Geron</span> <a href="#narrow/channel/304641-ideas/topic/Wrap.20or.20unwrap.3F/near/615448541">said</a>:</p>
+<blockquote>
+<p>Yes, I'm totally fine with crashes (when they can't happen!), especially with a clear comment and a clear crash message.</p>
+</blockquote>
+<p>Me too, I'm just trying to say that <em>when</em> it's necessary I prefer <code>crash</code> over <code>unwrap</code> (or <code>expect</code>), so I wouldn't be in favor of a general <code>unwrap</code> or <code>expect</code> as Rust offers.</p>
+<blockquote>
+<p>I'm more worried by <code>to_u8_wrap</code> or <code>from_lossy_utf8</code> being used as substitutes for proper error handling.</p>
+</blockquote>
+<p>Would this be solved with a specific <code>to_u8_unwrap</code> (or any <code>to_u8_crashy</code> variant)? I would still prefer <code>?? { crash "..." }</code> but if it's hard to guide users there then perhaps a crashy variant for common transformations makes sense? Actually, writing that out, I'm not even sure I like it <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span>  I hope we can guide users toward <code>crash</code> somehow <span aria-label="shrug" class="emoji emoji-1f937" role="img" title="shrug">:shrug:</span></p>
+
+
+
+<a name="615449713"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615449713" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615449713">(Aug 09 2026 at 10:25)</a>:</h4>
+<p>From what I can tell, the <code>_wrap</code> functions are by far the biggest offenders, so I would argue that we either need <code>to_u8_crashy</code> (love the name, it sounds scary), or we need to discourage using <code>_wrap</code> as a way to unwrap.</p>
+
+
+
+<a name="615450534"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615450534" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Niclas Ahden <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615450534">(Aug 09 2026 at 10:37)</a>:</h4>
+<p>Can we guide them to <code>?? { crash "..." }</code> using warnings? </p>
+<blockquote>
+<p>Not so fast bucko! It seems you're wrapping to unwrap. How about a proper <code>?? { crash "..." }</code>? I dare ya.</p>
+</blockquote>
+
+
+
+<a name="615453302"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615453302" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615453302">(Aug 09 2026 at 11:23)</a>:</h4>
+<p>without getting btw I think <code>?? crash "..."</code> works now (you used to need the <code>{ ... }</code> around it, but I think I already landed the fix for that)</p>
+
+
+
+<a name="615453367"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615453367" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615453367">(Aug 09 2026 at 11:24)</a>:</h4>
+<p>unfortunately I think a warning wouldn't work, even if we could reliably detect when it would apply - there are some cases I've found where "out-of-bounds can't happen, so do a wrapping instruction because that's just 1 CPU instruction" optimizes better, and other cases where "out-of-bounds can't happen, so do <code>crash</code> because LLVM uses that information to optimize surrounding things better" optimizes better <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="615453664"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615453664" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615453664">(Aug 09 2026 at 11:29)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="734214">Aurélien Geron</span> <a href="#narrow/channel/304641-ideas/topic/Wrap.20or.20unwrap.3F/near/615447139">said</a>:</p>
+<blockquote>
+<p>Mathematical guarantees: e.g., in <code>roc-isodate</code>, we compute <code>hours_saturated % 24</code>. We know with 100% certainty that the result fits inside an <code>I8</code>. Also, in <code>roc-crc32</code>, we calculate an array index using <code>.bitwise_and(0xFF)</code>, so we're sure to get a number between 0 and 255, and we can safely convert it to an <code>U8</code>.</p>
+</blockquote>
+<p>an idea that seems intuitively like a mistake to me, but which would be cool if somehow it worked: if the compiler can tell (by tracking additional numeric range information behind the scenes - we're already doing some of this for optimizations) that a conversion or bounds check couldn't possibly fail based on the operations being done, then we could let you do <code>Ok(answer) = index.bitwise_and(0xFF).to_u8_try()</code> and have the exhaustiveness checker permit it because the compiler knows the <code>Err</code> branch would be unreachable</p>
+
+
+
+<a name="615453789"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615453789" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615453789">(Aug 09 2026 at 11:31)</a>:</h4>
+<p>Oh that would be nifty!</p>
+
+
+
+<a name="615453848"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615453848" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615453848">(Aug 09 2026 at 11:32)</a>:</h4>
+<p>one reason it seems intuitively like a mistake is that it could be brittle and wouldn't always be possible to apply, but also I can imagine situations where crossing package boundaries with that behind-the-scenes range information would lead to things being breaking changes due to exhaustiveness changes even though all you changed was the internal implementation of a package <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="615453858"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615453858" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615453858">(Aug 09 2026 at 11:32)</a>:</h4>
+<p>there might be a way to make that ok though, I'm not sure</p>
+
+
+
+<a name="615453882"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615453882" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615453882">(Aug 09 2026 at 11:33)</a>:</h4>
+<p>I <em>think</em> the performance would be ok if we moved that from the optimization stage to earlier in the pipeline</p>
+
+
+
+<a name="615453934"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615453934" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Aurélien Geron <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615453934">(Aug 09 2026 at 11:33)</a>:</h4>
+<p>Yeah, it would need to work consistently, or else it might be frustrating. Maybe not worth it.</p>
+
+
+
+<a name="615453935"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615453935" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615453935">(Aug 09 2026 at 11:33)</a>:</h4>
+<p>I guess a reason in favor of it might be that if you intuitively reach for <code>Ok(answer) = ... # call a _try method</code> and it gives you an exhaustiveness error, then from that point adding <code>Err(_) =&gt; crash "..."</code> is kinda the shortest distance</p>
+
+
+
+<a name="615454077"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615454077" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615454077">(Aug 09 2026 at 11:35)</a>:</h4>
+<p>it might be worth trying just on the grounds that we're pre-0.1.0 and if it doesn't work out, now's the easiest time to back out the experiment <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="615455498"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615455498" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615455498">(Aug 09 2026 at 11:59)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Wrap.20or.20unwrap.3F/near/615453664">said</a>:</p>
+<blockquote>
+<p><code>Ok(answer) = index.bitwise_and(0xFF).to_u8_try()</code> and have the exhaustiveness checker permit it because the compiler knows the <code>Err</code> branch would be unreachable</p>
+</blockquote>
+<p>Is this kind of thing really any different from using <code>_wrap</code> though? Addressing two of Aurélien's first three points</p>
+<ol start="2">
+<li>If <code>index : U32</code> grows outside the <code>0xFF</code> mask bounds, the behaviour is incorrect, even if the "unwrapping" part is safe in the eyes of the compiler. The compiler proving that it is safe to unwrap <em>after</em> masking is imo no different to using <code>_wrap()</code>. The problem is the domain before the mask, no?</li>
+<li>I don't feel it's any more discoverable to check for cases of mask then pattern match on try, than it is to see <code>_wrap()</code> or <code>_try() ?? ...</code> etc</li>
+</ol>
+
+
+
+<a name="615456059"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615456059" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615456059">(Aug 09 2026 at 12:07)</a>:</h4>
+<p>Of course if you never needed to write the bitwise_and bit because of other implicitly tracked information it would be different <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+<p>Edit - I had the feeling I'd missed something. I guess these are cases where you do already do the extra step and it doesn't correspond to wrapping along clean integer size boundaries, like <code>hours_saturated % 24</code>, but nevertheless provably fit within a size.</p>
+
+
+
+<a name="615458249"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615458249" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615458249">(Aug 09 2026 at 12:41)</a>:</h4>
+<p>I looked into this a bit and I think it would have more downsides than upsides, nm <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="615459216"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615459216" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615459216">(Aug 09 2026 at 13:00)</a>:</h4>
+<p>Maybe compile-time evaluation of constants could be used to generate safe <code>mod_by_X</code> functions?</p>
+<div class="codehilite"><pre><span></span><code>Ok(mod_by_24) = U32.mod_by_I8(24)
+expect 2.I8 == mod_by_24(26.U32)
+</code></pre></div>
+<p>Dunno, seems complicated though.</p>
+
+
+
+<a name="615459502"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615459502" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615459502">(Aug 09 2026 at 13:03)</a>:</h4>
+<p>Wait, couldn't <code>mod_by</code> have a signature <code>mod_by : U32, num -&gt; num</code>? (example for <code>U32</code>, but the same could exist for other integer types)</p>
+<blockquote>
+<p>in <code>roc-isodate</code>, we compute <code>hours_saturated % 24</code>. We know with 100% certainty that the result fits inside an <code>I8</code>.</p>
+</blockquote>
+<div class="codehilite"><pre><span></span><code>hours_saturated.mod_by(24.I8)
+</code></pre></div>
+<blockquote>
+<p>in <code>roc-crc32</code>, we calculate an array index using <code>.bitwise_and(0xFF)</code>, so we're sure to get a number between 0 and 255, and we can safely convert it to an <code>U8</code>.</p>
+</blockquote>
+<div class="codehilite"><pre><span></span><code>bits.mod_by(U8.highest)
+</code></pre></div>
+<p><span aria-label="point up" class="emoji emoji-1f446" role="img" title="point up">:point_up:</span> makes me realize it doesn't work. You'd have to mod by 256 which is just out of range of the <code>U8</code>. That's such a shame.</p>
+
+
+
+<a name="615460114"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615460114" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615460114">(Aug 09 2026 at 13:13)</a>:</h4>
+<p>I was just testing this too. I think it's possible though - you can change it to be a mask and check that the mask fits in U8.</p>
+
+
+
+<a name="615461185"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615461185" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615461185">(Aug 09 2026 at 13:31)</a>:</h4>
+<p>Or it could be addressed with naming: instead of replacing <code>mod_by</code> this could be a separate function called <code>wrap_at</code>. Maybe it could replace <code>to_X_wrap</code> functions.</p>
+
+
+
+<a name="615471495"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615471495" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615471495">(Aug 09 2026 at 14:45)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="477725">Jasper Woudenberg</span> <a href="#narrow/channel/304641-ideas/topic/Wrap.20or.20unwrap.3F/near/615459502">said</a>:</p>
+<blockquote>
+<p>Wait, couldn't <code>mod_by</code> have a signature <code>mod_by : U32, num -&gt; num</code>? (example for <code>U32</code>, but the same could exist for other integer types)</p>
+<blockquote>
+<p>in <code>roc-isodate</code>, we compute <code>hours_saturated % 24</code>. We know with 100% certainty that the result fits inside an <code>I8</code>.</p>
+</blockquote>
+<div class="codehilite"><pre><span></span><code>hours_saturated.mod_by(24.I8)
+</code></pre></div>
+<blockquote>
+<p>in <code>roc-crc32</code>, we calculate an array index using <code>.bitwise_and(0xFF)</code>, so we're sure to get a number between 0 and 255, and we can safely convert it to an <code>U8</code>.</p>
+</blockquote>
+<div class="codehilite"><pre><span></span><code>bits.mod_by(U8.highest)
+</code></pre></div>
+<p><span aria-label="point up" class="emoji emoji-1f446" role="img" title="point up">:point_up:</span> makes me realize it doesn't work. You'd have to mod by 256 which is just out of range of the <code>U8</code>. That's such a shame.</p>
+</blockquote>
+<p>it could return a <code>Try</code> which you could exhaustively match when calling it at compile time</p>
+
+
+
+<a name="615473377"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615473377" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615473377">(Aug 09 2026 at 15:10)</a>:</h4>
+<p>there may be some potential "parse, don't validate" opportunities for some of these</p>
+
+
+
+<a name="615473869"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615473869" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615473869">(Aug 09 2026 at 15:18)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="281383">Richard Feldman</span> <a href="#narrow/channel/304641-ideas/topic/Wrap.20or.20unwrap.3F/near/615471495">said</a>:</p>
+<blockquote>
+<p>it could return a <code>Try</code> which you could exhaustively match when calling it at compile time</p>
+</blockquote>
+<p>But that would require knowing both operands of the <code>mod_by</code> at compile-time, right? Would be nice if you could pass the number being modulo'd in at runtime.</p>
+
+
+
+<a name="615507391"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304641-ideas/topic/Wrap%20or%20unwrap%3F/near/615507391" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Matthieu Pizenberg <a href="https://roc-lang.github.io/zulip-export/stream/304641-ideas/topic/Wrap.20or.20unwrap.3F.html#615507391">(Aug 09 2026 at 23:03)</a>:</h4>
+<p>If a pure function is modeled as a graph of computation, I suppose any part of the graph that is static at compilation time could be reduced? That would be exciting, but probably way too ambitious/complex?</p>
+
+
+
+<hr><p>Last updated: Sep 05 2026 at 14:09 UTC</p>
+</html>

@@ -1,0 +1,74 @@
+[
+    {
+        "content": "<p>Hi! :D</p>\n<p>I'm trying to setup a sqlite inside my basic-webserver based application but i'm getting a segfault at runtime with no extra information. I'm pretty sure i'm doing something bad in the init:</p>\n<div class=\"codehilite\"><pre><span></span><code>init! : {} =&gt; Result Model _\ninit! = |_|\n    db_path = Env.var!(&quot;DB_PATH&quot;) ? |err| ServerErr(&quot;DB_PATH not set: ${Inspect.to_str(err)}&quot;)\n\n    create_command = &quot;CREATE TABLE responses (id INTEGER PRIMARY KEY AUTOINCREMENT, time INTEGER, ip TEXT, lat DOUBLE, lng DOUBLE, type INTEGER, comment TEXT)&quot;\n\n    existing_create_command =\n        Sqlite.query!(\n            {\n                path: db_path,\n                query: &quot;SELECT sql FROM sqlite_schema WHERE type=&#39;table&#39; AND name=&#39;responses&#39;;&quot;,\n                bindings: [],\n                row: Sqlite.str(&quot;sql&quot;),\n            },\n        )\n        ? |err| ServerErr(&quot;Failed to select from sqlite schemas: ${Inspect.to_str(err)}&quot;)\n\n    if existing_create_command != create_command then\n        Err(ServerErr(&quot;DB already contains responses table and it has a bad shape&quot;))\n    else\n        select_stmt =\n            Sqlite.prepare!(\n                {\n                    path: db_path,\n                    query: &quot;SELECT * FROM responses;&quot;,\n                },\n            )\n            ? |err| ServerErr(&quot;Failed to prepare sqlite statement: ${Inspect.to_str(err)}&quot;)\n\n        insert_stmt =\n            Sqlite.prepare!(\n                {\n                    path: db_path,\n                    query: &quot;INSERT INTO responses (time, ip, lat, long, type, comment) VALUES (:time, :ip, :lat, :long, :type, :comment);&quot;,\n                },\n            )\n            ? |err| ServerErr(&quot;Failed to prepare sqlite statement: ${Inspect.to_str(err)}&quot;)\n\n        Ok({ select_stmt, insert_stmt })\n</code></pre></div>\n<p>I'm trying to check that there is a table that I expect and then prepare two statements that I want to use later. I was going to add creating the new table if it is not there yet but I got stuck on this.</p>\n<p>Is there something obvious i'm missing? Thanks for any help! :D</p>\n<p>Full code is here: <a href=\"https://git.sr.ht/~prokop/mapform/tree/f773abdd1e52650e2565bdf29c3cc2089a2a52d7/item/main.roc\">https://git.sr.ht/~prokop/mapform/tree/f773abdd1e52650e2565bdf29c3cc2089a2a52d7/item/main.roc</a></p>",
+        "id": 518920865,
+        "sender_full_name": "Prokop Randacek",
+        "timestamp": 1747573778
+    },
+    {
+        "content": "<p>Hmm. Definitely a basic webserver bug:</p>\n<div class=\"codehilite\"><pre><span></span><code>main(4165,0x1ecdfc840) malloc: *** error for object 0x1009d4000: pointer being freed was not allocated\nmain(4165,0x1ecdfc840) malloc: *** set a breakpoint in malloc_error_break to debug\nProcess 4165 stopped\n* thread #1, queue = &#39;com.apple.main-thread&#39;, stop reason = signal SIGABRT\n    frame #0: 0x0000000183453720 libsystem_kernel.dylib`__pthread_kill + 8\nlibsystem_kernel.dylib`__pthread_kill:\n-&gt;  0x183453720 &lt;+8&gt;:  b.lo   0x183453740    ; &lt;+40&gt;\n    0x183453724 &lt;+12&gt;: pacibsp\n    0x183453728 &lt;+16&gt;: stp    x29, x30, [sp, #-0x10]!\n    0x18345372c &lt;+20&gt;: mov    x29, sp\n(lldb) bt\n* thread #1, queue = &#39;com.apple.main-thread&#39;, stop reason = signal SIGABRT\n  * frame #0: 0x0000000183453720 libsystem_kernel.dylib`__pthread_kill + 8\n    frame #1: 0x000000018348bf70 libsystem_pthread.dylib`pthread_kill + 288\n    frame #2: 0x0000000183398908 libsystem_c.dylib`abort + 128\n    frame #3: 0x00000001832a1e38 libsystem_malloc.dylib`malloc_vreport + 896\n    frame #4: 0x00000001832a59bc libsystem_malloc.dylib`malloc_report + 64\n    frame #5: 0x00000001832c4144 libsystem_malloc.dylib`find_zone_and_free + 528\n    frame #6: 0x0000000100007494 main`___lldb_unnamed_symbol21408 + 16\n    frame #7: 0x0000000100061f0c main`___lldb_unnamed_symbol21642 + 584\n    frame #8: 0x000000010004694c main`Host_sqlite_reset!_a45290bef5734ad62afcaea912ebb28a88fcce6265e83e5ce118554fa9b23df6 + 48\n    frame #9: 0x000000010004a760 main`Sqlite_reset!_7caba61bebab67ae1a3d5e6f4932f5086371aaa834774ba7fe45103dc45036 + 28\n    frame #10: 0x000000010005e79c main`Sqlite_query_prepared!_3ef0be3dc434ba1162e39580a72ad0387348f7e2ac5c485921af9f85a731eea + 388\n    frame #11: 0x0000000100047040 main`Sqlite_query!_7b73be30696c7fe3ed242ca4629f76c2f696011d9271def91eeffdd89e9134d + 492\n    frame #12: 0x000000010005a20c main`#UserApp_init!_8ea48f352d7289114fe202e56461de528fa632d8a6cda9163cba5554b08a8b + 564\n    frame #13: 0x000000010005d6f4 main`_init_for_host!_e95211bde2283defe545e72d738137b8d7082e1cb419ffde6603c1dfde96f + 32\n    frame #14: 0x000000010005d9f4 main`roc__init_for_host_1_exposed + 16\n    frame #15: 0x000000010011c26c main`rust_main + 44\n    frame #16: 0x000000018310c274 dyld`start + 2840\n</code></pre></div>",
+        "id": 518933565,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747583620
+    },
+    {
+        "content": "<p>I just tested with basic-webserver built from source and everything works as expected</p>",
+        "id": 518934373,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747584229
+    },
+    {
+        "content": "<p>I wonder if we have a fix that just hasn't been released yet</p>",
+        "id": 518934420,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747584244
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/basic-webserver/issues/106\">https://github.com/roc-lang/basic-webserver/issues/106</a></p>",
+        "id": 518934497,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747584341
+    },
+    {
+        "content": "<p>hasn't been released</p>",
+        "id": 518934501,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747584346
+    },
+    {
+        "content": "<p>Or, this fix: <a href=\"https://github.com/roc-lang/basic-webserver/issues/104\">https://github.com/roc-lang/basic-webserver/issues/104</a></p>",
+        "id": 518934768,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747584575
+    },
+    {
+        "content": "<p>But yeah, we need a new release of basic webserver</p>",
+        "id": 518934782,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747584586
+    },
+    {
+        "content": "<p>Alright. I will be looking forward for the next releaste then :D</p>",
+        "id": 518956578,
+        "sender_full_name": "Prokop Randacek",
+        "timestamp": 1747600874
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"917605\">Prokop Randacek</span> has marked this topic as resolved.</p>",
+        "id": 518956582,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1747600878
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/231634-beginners/topic/.E2.9C.94.20webserver.20sqlite.20segfault/near/518934782\">said</a>:</p>\n<blockquote>\n<p>But yeah, we need a new release of basic webserver</p>\n</blockquote>\n<p>It's a high priority TODO for me, there are a bunch of exposed functions without tests, so I want to add tests for those before releasing.</p>",
+        "id": 519043818,
+        "sender_full_name": "Anton",
+        "timestamp": 1747645581
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"917605\">@Prokop Randacek</span> if you want, you can build the latest version from source with:</p>\n<div class=\"codehilite\"><pre><span></span><code>git clone https://github.com/roc-lang/basic-webserver.git\ncd basic-webserver\nnix develop\nroc build.roc\nroc examples/hello-web.roc --linker=legacy\n</code></pre></div>",
+        "id": 519045242,
+        "sender_full_name": "Anton",
+        "timestamp": 1747645890
+    }
+]

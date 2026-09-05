@@ -1,0 +1,620 @@
+<html>
+<head><meta charset="utf-8"><title>Money VO Domain model · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html">Money VO Domain model</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="620018593"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620018593" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> BearCarpenter <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620018593">(Aug 29 2026 at 19:26)</a>:</h4>
+<p>Hi everyone! <span aria-label="wave" class="emoji emoji-1f44b" role="img" title="wave">:wave:</span></p>
+<p>I'm trying to implement a type-safe <code>Money</code> value object in Roc. The goal is to catch currency mismatches at compile time when calling <code>add</code>, similar to TypeScript generics (<code>Money&lt;"USD"&gt;</code>) or C# phantom types (<code>Money&lt;TCurrency&gt; where TCurrency : ICurrency</code>).</p>
+<p>Ideally, <code>add : Money(c), Money(c) -&gt; Money(c)</code> should prevent adding <code>EUR</code> to <code>USD</code> at compile time/or lsp.</p>
+<p>However, if I use a single generic <code>make : Dec, currency -&gt; Try(Money(currency), [NegativeAmount])</code>, passing <code>EUR</code> or <code>USD</code> as tags creates open tag unions (<code>[EUR, ..]</code>), causing type widening. As a result, <code>eur.add(usd)</code> unifies the types to <code>Money([EUR, USD, ..])</code> and compiles successfully.</p>
+<p>The only way I’ve managed to strictly enforce compile-time separation is by defining separate constructor functions for every single currency (e.g., <code>makeEUR</code>, <code>makeUSD</code>):</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>Money(currency) := { amount : Dec, currency : currency }.{
+
+    makeEUR : Dec -&gt; Try((Money([EUR])), [NegativeAmount])
+    makeEUR = |amount| {
+        make(amount, EUR)
+    }
+
+    makeUSD : Dec -&gt; Try((Money([USD])), [NegativeAmount])
+    makeUSD = |amount| {
+        make(amount, USD)
+    }
+
+    amount : Money(currency) -&gt; Dec
+    amount = |Money.(m)| m.amount
+
+    currency : Money(currency) -&gt; currency
+    currency = |Money.(m)| m.currency
+
+    add : Money(c), Money(c) -&gt; Money(c)
+    add = |Money.(m1), Money.(m2)| {
+        Money.(
+            { amount: m1.amount + m2.amount, currency: m2.currency },
+        )
+    }
+
+    to_inspect : Money(currency) -&gt; Str
+    to_inspect = |Money.(m)| {
+        "${Dec.to_str(m.amount)} ${Str.inspect(m.currency)}"
+    }
+}
+
+make : Dec, currency -&gt; Try((Money(currency)), [NegativeAmount])
+make = |amount, currency| {
+    if amount &lt; 0 {
+        Err(NegativeAmount)
+    } else {
+        Ok(Money.({ amount: amount, currency: currency }))
+    }
+}
+
+expect {
+    m = Money.makeEUR(1)?
+    m.currency == EUR
+}
+
+expect {
+    m = Money.makeEUR(1)?
+    Str.inspect(m.currency) == "EUR"
+}
+
+expect {
+    m1 = Money.makeEUR(1)?
+    m2 = Money.makeEUR(1)?
+    total_EUR = m1.add(m2)
+    Str.inspect(total_EUR) == "2.0 EUR"
+}
+
+expect {
+    m1 = Money.makeUSD(1)?
+    m2 = Money.makeUSD(1)?
+    total_usd = m1.add(m2)
+    Str.inspect(total_usd) == "2.0 USD"
+}
+
+# correctly - not working with other currency
+# expect {
+#   m1 = Money.makeEUR(1)?
+#   m2 = Money.makeUSD(1)?
+#   total_EUR = m1.add(m2)
+#   Str.inspect(total_EUR) == "2.0 USD"
+# }
+</code></pre></div>
+<p>This works as expected (<code>m1 = Money.makeEUR(1)?</code> and <code>m2 = Money.makeUSD(1)?</code> will fail on <code>m1.add(m2)</code> at compile time), but it forces me to duplicate <code>makeXYZ</code> methods for every supported currency.</p>
+<p>Is there an idiomatic way in Roc to constrain or pin <code>currency</code> to a single closed tag/type in a generic <code>make</code> function, so we don't have to duplicate constructor methods?</p>
+<p>Thanks for any insights!</p>
+
+
+
+<a name="620019351"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620019351" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620019351">(Aug 29 2026 at 19:35)</a>:</h4>
+<p>can you share the version with a single make function that does not work as expected?</p>
+<p>edit: oh i see it now</p>
+
+
+
+<a name="620020458"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620020458" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620020458">(Aug 29 2026 at 19:47)</a>:</h4>
+<p>i think you can constrain the input type:</p>
+<div class="codehilite"><pre><span></span><code>Currency :  [USD, EUR]
+
+make : Dec, Currency -&gt; Try((Money, Currency), [Negative])
+</code></pre></div>
+<p>since its unbound, just passing eg USD infers it as open, for it to be closed it must be explicitly closed via type sig</p>
+
+
+
+<a name="620020521"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620020521" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620020521">(Aug 29 2026 at 19:48)</a>:</h4>
+<p>you could also consider using a phantom type as well here, <code>make</code> would be the same but you would not need to store Currency at runtime</p>
+
+
+
+<a name="620020655"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620020655" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> BearCarpenter <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620020655">(Aug 29 2026 at 19:50)</a>:</h4>
+<p>I tried with phantom. Generally I started with:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>Money(c) := Dec.{
+    make : Dec, c -&gt; Try((Money(c)), [NegativeAmount])
+    make = |val, _tag| {
+        if val &lt; 0 {
+            Err(NegativeAmount)
+        } else {
+            Ok(Money.(val))
+        }
+    }
+
+    amount : Money(c) -&gt; Dec
+    amount = |Money.(amount)| amount
+
+    add : Money(c), Money(c) -&gt; Money(c)
+    add = |Money.(v1), Money.(v2)| {
+        Money.({ v1 + v2 })
+    }
+}
+
+clientExampleUsage = || {
+    my_money1 = Money.make(100.50, EUR)?
+    my_money2 = Money.make(20.00, EUR)?
+    _legal = my_money1.add(my_money2) # correct
+    usd_money = Money.make(50.00, USD)?
+    _illegal = my_money1.add(usd_money) # incorrect - it is possible
+    Ok({})
+}
+</code></pre></div>
+<p>but next I thought - what if library define each possible currency?</p>
+
+
+
+<a name="620024559"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620024559" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> BearCarpenter <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620024559">(Aug 29 2026 at 20:38)</a>:</h4>
+<p>and this. i have no idea... Require invariance </p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>Money(c) := { amount : Dec, currency : c }.{
+    Currency : [USD, EUR]
+    make : Dec, Currency -&gt; Try((Money(Currency)), [NegativeAmount])
+    make = |amount, currency| {
+        if amount &lt; 0 {
+            Err(NegativeAmount)
+        } else {
+            m = Money.({ amount, currency })
+            Ok(m)
+        }
+    }
+
+    amount : Money(currency) -&gt; Dec
+    amount = |Money.(m)| m.amount
+
+    add : Money(currency), Money(currency) -&gt; Money(currency)
+    add = |Money.(m1), Money.(m2)| {
+        Money.(
+            {
+                amount: m1.amount + m2.amount,
+                currency: m1.currency,
+            },
+        )
+    }
+}
+
+clientExampleUsage = || {
+    # my_money0 = Money.make(100.50, GBP)? # not working - so this is correctly
+    my_money1 = Money.make(100.50, EUR)?
+    my_money2 = Money.make(20.00, EUR)?
+    _legal = my_money1.add(my_money2) # correct
+    usd_money = Money.make(50.00, USD)?
+    _illegal = my_money1.add(usd_money) # incorrect - it is possible
+    Ok({})
+}
+</code></pre></div>
+
+
+
+<a name="620071652"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620071652" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> BearCarpenter <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620071652">(Aug 30 2026 at 06:00)</a>:</h4>
+<p><span class="user-mention" data-user-id="281383">@Richard Feldman</span> <span class="user-mention" data-user-id="515757">@Luke Boswell</span> <span class="user-mention" data-user-id="341568">@Jared Ramirez</span> <span class="user-mention" data-user-id="361169">@Anton</span>  <br>
+how would you implement it?<br>
+Library should define huge closed set.</p>
+
+
+
+<a name="620075432"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620075432" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jasper Woudenberg <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620075432">(Aug 30 2026 at 06:53)</a>:</h4>
+<p>One approach would be to use separate types instead of tags for currencies, like so:</p>
+<div class="codehilite"><pre><span></span><code>Currencies := {
+    EUR :: {}
+    USD :: {}
+    # ...
+}
+</code></pre></div>
+<p>You could use these as phantom types in your Money constructor - they won't unify with each other.</p>
+
+
+
+<a name="620076960"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620076960" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620076960">(Aug 30 2026 at 07:10)</a>:</h4>
+<p>I would probably start top-down and do some broader research to understand the domain model a bit more, gather the requirements and define a scope or boundary for my package. I'd look for prior-art and relevant research on the topic etc -- and then go from there.</p>
+
+
+
+<a name="620077003"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620077003" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620077003">(Aug 30 2026 at 07:10)</a>:</h4>
+<p>I would also try out lots of different shapes and experiments etc. Basically like you are here.</p>
+
+
+
+<a name="620078482"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620078482" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620078482">(Aug 30 2026 at 07:29)</a>:</h4>
+<p>This works, I don't know if it's a good way to do it <span aria-label="shrug" class="emoji emoji-1f937" role="img" title="shrug">:shrug:</span> </p>
+<div class="codehilite"><pre><span></span><code>$ roc money.roc
+EUR total: 120.5
+USD total: 50.0
+</code></pre></div>
+<div class="codehilite"><pre><span></span><code>EUR := {}.{
+    value = EUR.({})
+}
+
+USD := {}.{
+    value = USD.({})
+}
+
+Money(currency) := { amount : Dec, currency : currency }.{
+    make : Dec, currency -&gt; Try(Money(currency), [NegativeAmount])
+    make = |amount, currency| {
+        if amount &lt; 0 {
+            Err(NegativeAmount)
+        } else {
+            Ok(Money.({ amount, currency }))
+        }
+    }
+
+    amount : Money(currency) -&gt; Dec
+    amount = |Money.(money)| money.amount
+
+    add : Money(currency), Money(currency) -&gt; Money(currency)
+    add = |Money.(m1), Money.(m2)| {
+        Money.({
+            amount: m1.amount + m2.amount,
+            currency: m1.currency,
+        })
+    }
+}
+
+main! = |_| {
+    # Money.make(100.50, GBP.value) does not work: GBP is not declared.
+    my_money1 = Money.make(100.50, EUR.value) ? |_| Exit(1)
+    my_money2 = Money.make(20.00, EUR.value) ? |_| Exit(1)
+    legal = my_money1.add(my_money2)
+
+    usd_money = Money.make(50.00, USD.value) ? |_| Exit(1)
+
+    echo!(&quot;EUR total: ${legal.amount().to_str()}\n&quot;)
+    echo!(&quot;USD total: ${usd_money.amount().to_str()}\n&quot;)
+
+    # Uncommenting this is illegal: Money([EUR]) and Money([USD]) differ.
+    # illegal = my_money1.add(usd_money)
+
+    Ok({})
+}
+</code></pre></div>
+
+
+
+<a name="620078655"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620078655" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620078655">(Aug 30 2026 at 07:31)</a>:</h4>
+<p>The reason is doesn't work for <code>Currency : [USD, EUR]</code> is because both <code>USD</code> and <code>EUR</code> are both tags and have the same type <code>Currency</code></p>
+
+
+
+<a name="620078949"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620078949" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620078949">(Aug 30 2026 at 07:34)</a>:</h4>
+<p>oh duh <span aria-label="face palm" class="emoji emoji-1f926" role="img" title="face palm">:face_palm:</span>, my example of course has the same problem. apologies, i was tired when i responded last night haha</p>
+
+
+
+<a name="620078971"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620078971" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620078971">(Aug 30 2026 at 07:35)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="477725">Jasper Woudenberg</span> <a href="#narrow/channel/231634-beginners/topic/Money.20VO.20Domain.20model/near/620075432">said</a>:</p>
+<blockquote>
+<p>One approach would be to use separate types instead of tags for currencies, like so:</p>
+<div class="codehilite"><pre><span></span><code>Currencies := {
+    EUR :: {}
+    USD :: {}
+    # ...
+}
+</code></pre></div>
+<p>You could use these as phantom types in your Money constructor - they won't unify with each other.</p>
+</blockquote>
+<p>this is how i would do it!</p>
+
+
+
+<a name="620079430"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620079430" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> BearCarpenter <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620079430">(Aug 30 2026 at 07:40)</a>:</h4>
+<p>yeah, but what if library define closed set? it shouldnt work:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>    # Money([Unkonwn, ..])
+    unkonwn_money = Money.make(50.00, Unkonwn)?
+    unkonwn2_money = Money.make(50.00, Unkonwn2)?
+    # Money([Unkonwn, Unkonwn2, ..])
+    incorrect_legal = unkonwn_money.add(unkonwn2_money)
+</code></pre></div>
+<p>only lib set. is makeXYZ is only one correct way?</p>
+
+
+
+<a name="620082171"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620082171" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620082171">(Aug 30 2026 at 08:07)</a>:</h4>
+<p>yes, for constructing values you would need explicit functions, but for all other functions they just need to take and return the same <code>currency</code> type vars!</p>
+
+
+
+<a name="620082206"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620082206" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620082206">(Aug 30 2026 at 08:07)</a>:</h4>
+<p>then USD and EUR must be opaque nominal types</p>
+
+
+
+<a name="620083313"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620083313" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> BearCarpenter <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620083313">(Aug 30 2026 at 08:19)</a>:</h4>
+<p>Ok, I thought about something like this is possible:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>#pseudocode
+clientUsageExampleCheck = || {
+    # same is legal check
+    correct_legal_usd1 = Money.make(50.00, Lib.USD)?
+    correct_legal_usd2 = Money.make(50.00, Lib.USD)?
+    _correct_legal_sum = correct_legal_usd1 .add(correct_legal_usd2)
+
+    # mixed is illegal check
+    _correct_legal_eur = Money.make(50.00, Lib.EUR)?
+    # _illegal_mixed_currencies_sum = _correct_legal_eur.add(correct_legal_usd1)
+
+    # own is illegal check
+    # _illegal_unknown1 = Money.make(50.00, My.QWERTY)?
+    # _illegal_unknown2 = Money.make(50.00, QWERTY)?
+    Ok({})
+}
+</code></pre></div>
+
+
+
+<a name="620102168"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620102168" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620102168">(Aug 30 2026 at 11:44)</a>:</h4>
+<p>yeah, the main limitation here is that there’s not a way in roc to create a “closed” catergory of types</p>
+<p>you could make <code>Money.make</code> generic over the currency type, but then any type you pass in would be valid. you could constrain it with a static dispatch method (eg is_currency : currency -&gt; ? or something), then define that for USD and EUR, but nothing is stopping anyone from implementing that method on their own custom type</p>
+
+
+
+<a name="620102252"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620102252" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620102252">(Aug 30 2026 at 11:45)</a>:</h4>
+<p>you could actually make is_currency (or whatever) return an opaque type only available in the Money module, so users could not define their own instance of the method and that may work!</p>
+
+
+
+<a name="620107355"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620107355" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620107355">(Aug 30 2026 at 12:37)</a>:</h4>
+<p>I think it would actually need to both accept and return different opaque types that can't be constructed outside the package - otherwise you could just call one of the existing ones to get one of those values <span aria-label="smile" class="emoji emoji-1f604" role="img" title="smile">:smile:</span></p>
+
+
+
+<a name="620107425"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620107425" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620107425">(Aug 30 2026 at 12:38)</a>:</h4>
+<p>and you'd probably need to actually call those methods to prevent implementing those methods using <code>crash</code></p>
+
+
+
+<a name="620107702"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620107702" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620107702">(Aug 30 2026 at 12:40)</a>:</h4>
+<p>that said, I haven't read the whole thread - just looking at the type questions from the end of the thread haha</p>
+
+
+
+<a name="620112542"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620112542" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> BearCarpenter <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620112542">(Aug 30 2026 at 13:39)</a>:</h4>
+<p>Am I seeing this correctly that it’s working properly? Could you check it and look for the error?</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code># Money.roc
+
+Money(c) := Dec.{
+    make : Dec, BrandedCurrency(c) -&gt; Try(Money(c), [NegativeAmount])
+    make = |amount, _currency| {
+        if amount &lt; 0 {
+            Err(NegativeAmount)
+        } else {
+            Ok(Money.({ amount }))
+        }
+    }
+
+    amount : Money(c) -&gt; Dec
+    amount = |Money.(amount)| amount
+
+    add : Money(c), Money(c) -&gt; Money(c)
+    add = |Money.(amount1), Money.(amount2)| {
+        Money.({ amount1 + amount2 })
+    }
+
+    usd : BrandedCurrency([USD])
+    usd = BrandedCurrency.({ currency: USD })
+
+    eur : BrandedCurrency([EUR])
+    eur = BrandedCurrency.({ currency: EUR })
+}
+
+BrandedCurrency(c) := { currency : c }.{}
+</code></pre></div>
+<p>and</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code># checkMoney.roc
+
+import Money
+
+main! = |_arg| {
+    # same is legal check
+    correct_legal_usd1 = Money.make(50.00, Money.usd)?
+    correct_legal_usd2 = Money.make(50.00, Money.usd)?
+    _correct_legal_sum = correct_legal_usd1.add(correct_legal_usd2)
+
+    # mixed is illegal check
+    correct_legal_eur = Money.make(50.00, Money.eur)?
+    _illegal_mixed_currencies_sum = correct_legal_eur.add(correct_legal_usd1)
+
+    # own is illegal check
+    # _illegal_unknown1 = Money.make(50.00, My.QWERTY)?
+    _illegal_unknown2 = Money.make(50.00, QWERTY)?
+    Ok({})
+}
+</code></pre></div>
+<p>is it posible to hack/break this? client (checkMoney.roc) does not have access to create BrandedCurrency from Money.roc?</p>
+
+
+
+<a name="620123516"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620123516" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> BearCarpenter <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620123516">(Aug 30 2026 at 15:49)</a>:</h4>
+<p>oh. this will be incorrectly legal </p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code># checkMoney.roc - client
+# ...
+    m1 = Money.({ amount: 1, currency: QWERTY })
+    m2 = Money.({ amount: 1, currency: USD })
+    sum = m1.add(m2)
+
+    Ok({})
+}
+</code></pre></div>
+<p>I thought := gives private constructor.</p>
+
+
+
+<a name="620124052"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620124052" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> BearCarpenter <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620124052">(Aug 30 2026 at 15:55)</a>:</h4>
+<p>it works:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code># Money.roc
+
+Money(c) :: { amount : Dec, currency : c }.{
+    make : Dec, BrandedCurrency(c) -&gt; Try(Money(c), [NegativeAmount])
+    make = |amount, currency| {
+        if amount &lt; 0 {
+            Err(NegativeAmount)
+        } else {
+            Ok(Money.({ amount, currency: currency.currency }))
+        }
+    }
+
+    amount : Money(c) -&gt; Dec
+    amount = |Money.(m)| m.amount
+
+    add : Money(c), Money(c) -&gt; Money(c)
+    add = |Money.(m1), Money.(m2)| {
+        Money.({ amount: m1.amount + m2.amount, currency: m1.currency })
+    }
+
+    to_inspect : Money(c) -&gt; Str
+    to_inspect = |Money.(m)| {
+        "${Dec.to_str(m.amount)} ${Str.inspect(m.currency)}"
+    }
+
+    usd : BrandedCurrency([USD])
+    usd = BrandedCurrency.({ currency: USD })
+
+    eur : BrandedCurrency([EUR])
+    eur = BrandedCurrency.({ currency: EUR })
+}
+
+BrandedCurrency(c) := { currency : c }.{}
+
+expect {
+    usd : Money([USD])
+    usd = Money.make(1, Money.usd)?
+    Str.inspect(usd) == "1.0 USD"
+}
+
+expect {
+    usd = Money.({ amount: 1, currency: Money.usd })
+    Str.inspect(usd) == "1.0 USD"
+}
+
+expect {
+    m = Money.make(1, Money.usd)?
+    m.amount == 1
+}
+
+expect {
+    m = Money.make(1, Money.usd)?
+    m.currency == USD
+}
+
+expect {
+    m = Money.make(1, Money.usd)?
+    Str.inspect(m.currency) == "USD"
+}
+
+expect {
+    m1 = Money.make(1, Money.usd)?
+    m2 = Money.make(1, Money.usd)?
+    total_usd = m1.add(m2)
+    Str.inspect(total_usd) == "2.0 USD"
+}
+
+expect {
+    m1 = Money.make(1, Money.eur)?
+    m2 = Money.make(1, Money.eur)?
+    total_EUR = m1.add(m2)
+    Str.inspect(total_EUR) == "2.0 EUR"
+}
+
+expect {
+    x = 1 |&gt; Money.make(Money.usd)?
+    Str.inspect(x) == "1.0 USD"
+}
+
+# correctly - not working with other currency
+# expect {
+#   m1 = Money.make(1, Money.usd)?
+#   m2 = Money.make(1, Money.eur)?
+#   total_EUR = m1.add(m2) # illegal
+#   True
+# }
+
+# correctly - not working with own currencies
+# expect {
+#   m1 = Money.make(1, QWERTY)?
+#   True
+# }
+</code></pre></div>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code># checkMoney.roc - client
+
+import Money
+
+main! = |_arg| {
+    # same is legal check
+    correct_legal_usd1 = Money.make(50.00, Money.usd)?
+    correct_legal_usd2 = Money.make(50.00, Money.usd)?
+    _correct_legal_sum = correct_legal_usd1.add(correct_legal_usd2)
+
+    # mixed is illegal check
+    correct_legal_eur = Money.make(50.00, Money.eur)?
+    _illegal_mixed_currencies_sum = correct_legal_eur.add(correct_legal_usd1) # error as expected
+
+    # own is illegal check
+    # _illegal_unknown1 = Money.make(50.00, My.QWERTY)?
+    _illegal_unknown2 = Money.make(50.00, QWERTY)? # error as expected
+
+    # client cant create own Money
+    m1 = Money.({ amount: 1, currency: QWERTY }) # error as expected
+    m2 = Money.({ amount: 1, currency: USD }) # error as expected
+
+    Ok({})
+}
+</code></pre></div>
+<p>I need read modules docs... <span aria-label="rolling eyes" class="emoji emoji-1f644" role="img" title="rolling eyes">:rolling_eyes:</span></p>
+
+
+
+<a name="620129846"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Money%20VO%20Domain%20model/near/620129846" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jared Ramirez <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Money.20VO.20Domain.20model.html#620129846">(Aug 30 2026 at 16:59)</a>:</h4>
+<p>nice! <span aria-label="grinning" class="emoji emoji-1f600" role="img" title="grinning">:grinning:</span></p>
+<p>unless you want to do runtime things with <code>currency</code>, can can do:</p>
+<div class="codehilite"><pre><span></span><code>Money :: { amount : Dec }.{
+
+  # no negative check to keep example simple
+  make : Dec, BrandedCurrency(c) -&gt; Money(c)
+  make = |a, _| { amount: a }
+
+  usd : BrandedCurrency([USD])
+  usd = {}
+
+  eur : BrandedCurrency([EUR])
+  eur = {}
+
+  …
+}
+
+BrandedCurrency :: {}
+</code></pre></div>
+<p>this is equivalent as far as the types are concerned, without having to carry the currency as a runtime value! if you ever need an fn to operate on just eg EUR, you just constrain it in the type signature. (this is called a phantom type)</p>
+
+
+
+<hr><p>Last updated: Sep 05 2026 at 14:09 UTC</p>
+</html>
