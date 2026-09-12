@@ -1,0 +1,170 @@
+[
+    {
+        "content": "<p>Do we have any plans around persistent connections and in general persistent data in basic-webserver?</p>\n<p>For example, as I am thinking about improving the sqlite api, one thing that would be nice is being able to initialize a prepared statement once and then reload the same prepared statement on every request. That removes the need to repeatedly pass around and parse strings.</p>\n<p>The same could be wanted from roc-pg with tcp connections.</p>\n<hr>\n<p>Do we already have a plan of how we want to support things like this?</p>",
+        "id": 449412919,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720222360
+    },
+    {
+        "content": "<p>vaguely yeah</p>",
+        "id": 449420844,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228409
+    },
+    {
+        "content": "<p>it's the same idea as what I think we should do for \"streams\" (aka wrappers around file descriptors)</p>",
+        "id": 449420853,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228425
+    },
+    {
+        "content": "<p>basic idea is that in Roc it's represented as an opaque wrapper around a <code>Box {}</code></p>",
+        "id": 449420862,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228441
+    },
+    {
+        "content": "<p>but the critical aspect is that you can only get one of those things from the host</p>",
+        "id": 449420908,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228453
+    },
+    {
+        "content": "<p>and the host allocates that box in a separate arena from the rest of the heap</p>",
+        "id": 449420919,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228476
+    },
+    {
+        "content": "<p>so that when it gets passed to <code>roc_dealloc</code> you can check its address range and see if it's in the special arena, and if so, go look up its address in a hash to figure out what cleanup to do</p>",
+        "id": 449420953,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228521
+    },
+    {
+        "content": "<p>so the general theme in both cases is \"platform gives you a value that is associated in the host with some persistent state that needs to be cleaned up when there are no more references to it\"</p>",
+        "id": 449421016,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228581
+    },
+    {
+        "content": "<p>such as an open file or an open tcp connection</p>",
+        "id": 449421025,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228594
+    },
+    {
+        "content": "<p>separately, if we want to have basic-webserver support a concept of \"run this initialization thing once, and then that gives you a value that can be handed off to every request\" - unfortunately I think that requires passing records of functions to the host, which <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> and I have not succeeded in getting working yet, even when <code>Box</code>ing the functions</p>",
+        "id": 449421095,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228666
+    },
+    {
+        "content": "<p>because I think we'd need to do something like giving the host separate <code>init</code> and <code>handleRequest</code> functions in the same record, so they can share type variables</p>",
+        "id": 449421176,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228700
+    },
+    {
+        "content": "<p>e.g.</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"nv\">init</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"p\">[],</span>\n<span class=\"w\">    </span><span class=\"nv\">handleReq</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Request</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"kt\">Response</span><span class=\"w\"> </span><span class=\"p\">[],</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 449421214,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228756
+    },
+    {
+        "content": "<p>So I understand the platform side of the lifetimes, but how can something be kept alive across many requests.</p>\n<p>Ex. <code>examples/sqlite3.roc</code> has a query <code>\"SELECT id, task FROM todos WHERE status = :status;\"</code>.<br>\nFor best performance, the goal would be to prepare that query once per thread.<br>\nThen on every request have roc be able to get the <code>Box {}</code> for the prepared query (preferably without using the string at all).</p>",
+        "id": 449421217,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720228767
+    },
+    {
+        "content": "<p>oh I guess maybe it could work if you did something like <code>Model</code></p>",
+        "id": 449421218,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228768
+    },
+    {
+        "content": "<p>So it is more a connection pool question than a connection lifetime question.</p>",
+        "id": 449421310,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720228854
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/383402-API-Design/topic/Persistent.20Connections/near/449421217\">said</a>:</p>\n<blockquote>\n<p>how can something be kept alive across many requests<br>\n[...]<br>\nFor best performance, the goal would be to prepare that query once per thread.<br>\nThen on every request have roc be able to get the <code>Box {}</code> for the prepared query (preferably without using the string at all).</p>\n</blockquote>\n<p>yeah I think that's where the <code>init</code> concept comes in</p>",
+        "id": 449421329,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228869
+    },
+    {
+        "content": "<p>well, that wouldn't understand pooling I guess</p>",
+        "id": 449421343,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228882
+    },
+    {
+        "content": "<p>I guess we could introduce a generic \"pooling\" concept</p>",
+        "id": 449421366,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228908
+    },
+    {
+        "content": "<p>(that is, basic-webserver could)</p>",
+        "id": 449421369,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228916
+    },
+    {
+        "content": "<blockquote>\n<p>well, that wouldn't understand pooling I guess</p>\n</blockquote>\n<p>You could init per thread and it would at least be decent. Maybe a tad wasteful, but functional.</p>",
+        "id": 449421412,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720228928
+    },
+    {
+        "content": "<p>where you can define a <code>Pool a</code> that knows how to hand things out</p>",
+        "id": 449421428,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720228948
+    },
+    {
+        "content": "<p>Quick aside: I don't think <code>Box {}</code> works in roc currently.  At least not fully. I was originally using it for some of my ffi stuff instead of <code>U64</code>. Was hitting weird unification errors.</p>",
+        "id": 449423441,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720230732
+    },
+    {
+        "content": "<p>Need to try and build minimal repros at some point.</p>",
+        "id": 449423449,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720230748
+    },
+    {
+        "content": "<p>For <code>Box {}</code>. Is the thought that I would actually have <code>Box SomePlatformType</code>? So you have to throw whatever connection/prepared stmt/etc type into a box. Just don't tell roc about the type inside.</p>\n<p>That said, I would assume that roc shouldn't actually refcount a box of a zero sized type like <code>{}</code>. Like it should just never allocate it or anything. But maybe this is useful in practice, so we just <code>Box {}</code> to be a box of something unknown to roc and still have it refcount and attempt to free the thing.</p>",
+        "id": 449425247,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720232198
+    },
+    {
+        "content": "<p>hm maybe!</p>",
+        "id": 449475283,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720262600
+    },
+    {
+        "content": "<p>the thought was that for a file descriptor, <code>Box I32</code> would be worse than <code>(I32, Box {})</code> because now you have to chase a pointer to access the fd</p>",
+        "id": 449475379,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720262636
+    },
+    {
+        "content": "<p>That's fair. With <code>(I32, Box {})</code>, there is still 8 bytes randomly on the heap, but it is only accessed for refcounting.</p>",
+        "id": 449523987,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720283851
+    },
+    {
+        "content": "<p>yeah and I assume if you ask for this it’s because you’re planning to pass it multiple times to things</p>",
+        "id": 449543332,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720291496
+    }
+]

@@ -1,0 +1,92 @@
+[
+    {
+        "content": "<p>Hi there. I have a problem, which looks like a bug to me, but I'd rather post it here to make sure I don't miss anything. Below is a code, which doesn't make much sense yet, but should demonstrate the problem.</p>\n<p>Imagine I have a function definition in a record:</p>\n<div class=\"codehilite\"><pre><span></span><code>Matcher : List U8 -&gt; Result (List U8) [DoesNotMatch]\n\nSpec : {\n    field_name : Str,\n    length : U64,\n    matcher : Matcher,\n}\n</code></pre></div>\n<p>When I try to use it like this I get an error:</p>\n<div class=\"codehilite\"><pre><span></span><code>match_spec1 : List U8, Spec -&gt; Result (Dict Str Str) [DoesNotMatch, ListWasEmpty]\nmatch_spec1 = |string, spec|\n    field_value =\n        string\n        |&gt; spec.matcher?\n        |&gt; Str.from_utf8_lossy\n\n    Dict.single(spec.field_name, field_value) |&gt; Ok\n</code></pre></div>\n<p>Error:</p>\n<div class=\"codehilite\"><pre><span></span><code>TYPE MISMATCH\nSomething is off with the body of the\n`match_spec1` definition:\n11│   match_spec1 : List U8, Spec -&gt; Result (Dict Str Str) [DoesNotMatch, ListWasEmpty]\n12│   match_spec1 = |string, spec|\n13│       field_value =\n14│&gt;          string\n15│&gt;          |&gt; spec.matcher?\nThis returns an `Err` of type:\n    [\n        Err [DoesNotMatch],\n        Ok (Dict Str Str),\n    ]\nBut the type annotation on `match_spec1` says it should be:\n    Result (Dict Str Str) [\n        DoesNotMatch,\n        ListWasEmpty,\n    ]a\n</code></pre></div>\n<p>What makes me think it's a bug is the fact, that following code, where I use a function <code>t</code> of a type <code>Matcher</code>, doesn't cause any type mismatches:</p>\n<div class=\"codehilite\"><pre><span></span><code>t : Matcher\nt = |list|\n    when list is\n        [] -&gt; Err(DoesNotMatch)\n        [.. as xs] -&gt; Ok(xs)\n\nmatch_spec2 : List U8, Spec -&gt; Result (Dict Str Str) [DoesNotMatch, ListWasEmpty]\nmatch_spec2 = |string, spec|\n    field_value =\n        string\n        |&gt; t?\n        |&gt; Str.from_utf8_lossy\n\n    Dict.single(spec.field_name, field_value) |&gt; Ok\n</code></pre></div>\n<p>Could it be something wrong with <code>Spec.matcher</code> being a function?</p>",
+        "id": 512042527,
+        "sender_full_name": "Ilya Shmygol",
+        "timestamp": 1744626404
+    },
+    {
+        "content": "<p>Ok, maybe I was too fast. It has nothing to do with the record, but arguments definition. The following code causes type mismatch too:</p>\n<div class=\"codehilite\"><pre><span></span><code>match_spec3 : List U8, Matcher -&gt; Result (Dict Str Str) [DoesNotMatch, ListWasEmpty]\nmatch_spec3 = |string, matcher|\n    field_value =\n        string\n        |&gt; matcher?\n        |&gt; Str.from_utf8_lossy\n\n    Dict.single(&quot;result&quot;, field_value) |&gt; Ok\n</code></pre></div>\n<p>So it's rather something to do with the definition of <code>Matcher</code>. Maybe I indeed miss something, so I'll be grateful for help.</p>",
+        "id": 512048846,
+        "sender_full_name": "Ilya Shmygol",
+        "timestamp": 1744628572
+    },
+    {
+        "content": "<p>Folks, sorry for spamming you and sorry I didn't spend more time on it before posting here. I think I found the problem. The problem is, <code>Matcher</code> may return only one error tag: <code>DoesNotMatch</code>, but the closure function <code>match_spec</code> can return 2 types of errors: <code>DoesNotMatch</code> and <code>ListWasEmpty</code>. If I add <code>DoesNotMatch</code> to the list of possible errors in <code>Matcher</code> no type mismatch is raised, i.e. <code>Matcher : List U8 -&gt; Result (List U8) [DoesNotMatch, ListWasEmpty]</code>.</p>\n<p><strong>Still, doesn't look like expected behaviour to me.</strong></p>",
+        "id": 512051308,
+        "sender_full_name": "Ilya Shmygol",
+        "timestamp": 1744629326
+    },
+    {
+        "content": "<p>And just to make it clear. Even if I call another function (<code>List.first</code> in the example below), which could return <code>Err ListWasEmpty</code>, I still get type mismatch caused by calling <code>matcher</code>:</p>\n<div class=\"codehilite\"><pre><span></span><code>match_spec4 : List U8, Matcher -&gt; Result (Dict Str Str) [DoesNotMatch, ListWasEmpty]\nmatch_spec4 = |string, matcher|\n    _ = List.first(string)?\n    field_value =\n        string\n        |&gt; matcher?\n        |&gt; Str.from_utf8_lossy\n\n    Dict.single(&quot;result&quot;, field_value) |&gt; Ok\n</code></pre></div>",
+        "id": 512052219,
+        "sender_full_name": "Ilya Shmygol",
+        "timestamp": 1744629598
+    },
+    {
+        "content": "<blockquote>\n<p>Folks, sorry for spamming you and sorry I didn't spend more time on it before posting here. I think I found the problem.</p>\n</blockquote>\n<p>All good, no problem :)</p>",
+        "id": 512059978,
+        "sender_full_name": "Anton",
+        "timestamp": 1744631833
+    },
+    {
+        "content": "<p>I will dig deeper on the error union issue later today.</p>",
+        "id": 512061973,
+        "sender_full_name": "Anton",
+        "timestamp": 1744632352
+    },
+    {
+        "content": "<p>Alright, this is the fix:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">app</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nv\">main</span><span class=\"err\">!</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">cli</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">platform</span><span class=\"w\"> </span><span class=\"s\">\"https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br\"</span><span class=\"w\"> </span><span class=\"p\">}</span>\n\n<span class=\"kn\">import</span><span class=\"w\"> </span><span class=\"nc\">cli.Stdout</span>\n\n<span class=\"nv\">main</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">|</span><span class=\"nv\">_args</span><span class=\"nf\">|</span>\n<span class=\"w\">    </span><span class=\"nv\">bytes</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"nf\">.</span><span class=\"nv\">to_utf8</span><span class=\"p\">(</span><span class=\"s\">\"hey\"</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"kt\">Stdout</span><span class=\"nf\">.</span><span class=\"nv\">line</span><span class=\"err\">!</span><span class=\"p\">(</span><span class=\"kt\">Inspect</span><span class=\"nf\">.</span><span class=\"nv\">to_str</span><span class=\"p\">(</span><span class=\"nv\">match_spec4</span><span class=\"p\">(</span><span class=\"nv\">bytes</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">my_matcher</span><span class=\"p\">)))</span>\n\n<span class=\"kt\">Matcher</span><span class=\"w\"> </span><span class=\"nv\">a</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Result</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">DoesNotMatch</span><span class=\"p\">]</span><span class=\"nv\">a</span>\n\n<span class=\"nv\">my_matcher</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Matcher</span><span class=\"w\"> </span><span class=\"nv\">a</span>\n<span class=\"nv\">my_matcher</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">|</span><span class=\"nv\">string</span><span class=\"nf\">|</span>\n<span class=\"w\">    </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"nv\">string</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">        </span><span class=\"err\">#</span><span class=\"w\"> </span><span class=\"nv\">froms</span><span class=\"w\"> </span><span class=\"nf\">'</span><span class=\"nv\">hey'</span>\n<span class=\"w\">        </span><span class=\"p\">[</span><span class=\"mi\">104</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">101</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">121</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Ok</span><span class=\"p\">(</span><span class=\"nv\">string</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Err</span><span class=\"p\">(</span><span class=\"kt\">DoesNotMatch</span><span class=\"p\">)</span>\n\n<span class=\"nv\">match_spec4</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Matcher</span><span class=\"w\"> </span><span class=\"nv\">_</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Result</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Dict</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">DoesNotMatch</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ListWasEmpty</span><span class=\"p\">]</span>\n<span class=\"nv\">match_spec4</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">|</span><span class=\"nv\">string</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">matcher</span><span class=\"nf\">|</span>\n<span class=\"w\">    </span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"kt\">List</span><span class=\"nf\">.</span><span class=\"nv\">first</span><span class=\"p\">(</span><span class=\"nv\">string</span><span class=\"p\">)</span><span class=\"err\">?</span>\n<span class=\"w\">    </span><span class=\"nv\">field_value</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">        </span><span class=\"nv\">string</span>\n<span class=\"w\">        </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"nv\">matcher</span><span class=\"err\">?</span>\n<span class=\"w\">        </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"nf\">.</span><span class=\"nv\">from_utf8_lossy</span>\n\n<span class=\"w\">    </span><span class=\"kt\">Dict</span><span class=\"nf\">.</span><span class=\"nv\">single</span><span class=\"p\">(</span><span class=\"s\">\"result\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">field_value</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Ok</span>\n</code></pre></div>\n<p>Note the type var a in:</p>\n<div class=\"codehilite\"><pre><span></span><code>Matcher a : List U8 -&gt; Result (List U8) [DoesNotMatch]a\n</code></pre></div>\n<p>And the <code>_</code> in:</p>\n<div class=\"codehilite\"><pre><span></span><code>match_spec4 : List U8, (Matcher _) -&gt; Result (Dict Str Str) [DoesNotMatch, ListWasEmpty]\n</code></pre></div>\n<p>I'll write up an explanation next.</p>",
+        "id": 512117920,
+        "sender_full_name": "Anton",
+        "timestamp": 1744646539
+    },
+    {
+        "content": "<p>It's useful to think of it as if the compiler uses the full error union <code>[DoesNotMatch, ListWasEmpty]</code> everywhere. So if you use <code>Result (List U8) [DoesNotMatch]</code> (without a type alias) the compiler patches it up later as <code>Result (List U8) [DoesNotMatch, ListWasEmpty]</code>. If you use a type alias without a type variable you \"lock up\" the error union. If your type alias has a type variable (<code>a</code> in our case) you leave it open for additional things (e.g. <code>ListWasEmpty</code>).</p>\n<p>I don't think this lines up with what is truly happening in the compiler but this may just be the simplest way to reason about it.</p>\n<p>Feel free to ask more questions.</p>",
+        "id": 512130044,
+        "sender_full_name": "Anton",
+        "timestamp": 1744649696
+    },
+    {
+        "content": "<p>Thanks for detailed explanation. I think it makes sense so far. I’ll try it out later. Looks a bit hacky to be frank. Can’t be done something like <code>[DoesNotMatch]*</code> instead?</p>",
+        "id": 512133233,
+        "sender_full_name": "Ilya Shmygol",
+        "timestamp": 1744650520
+    },
+    {
+        "content": "<blockquote>\n<p>Can’t be done something like <code>[DoesNotMatch]*</code> instead?</p>\n</blockquote>\n<p>It can not, <span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> can probably explain why.</p>",
+        "id": 512137122,
+        "sender_full_name": "Anton",
+        "timestamp": 1744651749
+    },
+    {
+        "content": "<blockquote>\n<p>Looks a bit hacky to be frank.</p>\n</blockquote>\n<p>Uhu, I get it, I don't know why type aliases require special treatment in this case but I suspect there's no easy way around this. I will make an issue for a better error message though, that  would already improve the user experience a lot.</p>",
+        "id": 512137857,
+        "sender_full_name": "Anton",
+        "timestamp": 1744651994
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/issues/7742\">#7742</a></p>",
+        "id": 512139075,
+        "sender_full_name": "Anton",
+        "timestamp": 1744652401
+    },
+    {
+        "content": "<p>It is best to just pretend <code>*</code> doesn't exist. I think we plan to remove it actually. It means different things than people expect. It is not really a wild card.</p>",
+        "id": 512214245,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1744687673
+    },
+    {
+        "content": "<p>And we could make this work if we automatically allowed for casting tags in the case it is just expansion (not sure if we plan to support this, but I know it was discussed in the past)</p>",
+        "id": 512214348,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1744687728
+    },
+    {
+        "content": "<p>Oh actually, another fix may be related to open tags that are the return types of lambdas. I think that could also be made open and just work....but I'm not fully sure.</p>",
+        "id": 512214414,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1744687778
+    }
+]

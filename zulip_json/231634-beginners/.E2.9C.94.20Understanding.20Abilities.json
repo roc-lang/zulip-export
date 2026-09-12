@@ -1,0 +1,62 @@
+[
+    {
+        "content": "<p>Hello,</p>\n<p>I'm trying to grok Abilities at the moment by looking at the Json example and trying to follow through the code in the stdlib, particularly the <code>Decode</code> parts, but I'm getting stuck trying to understand where <code>decoder</code> comes from in the <code>from_bytes_partial</code> function.</p>\n<p>Just to have all the context in one place, let's start from this part in the <a href=\"https://www.roc-lang.org/examples/Json/README.html\">Json</a> example:</p>\n<div class=\"codehilite\"><pre><span></span><code>decoder = Json.utf8_with({ field_name_mapping: PascalCase })\n</code></pre></div>\n<p>where the type of <code>utf8_with</code> is:</p>\n<div class=\"codehilite\"><pre><span></span><code>utf8_with : { ... } -&gt; Json\n</code></pre></div>\n<p><code>Json</code> is an opaque type that implements the <code>DecoderFormatting</code> abilities. This means that anywhere in the code we can call the functions [u8, u16, ..., record, tuple] from <code>DecoderFormatting</code> ability on a value of this type (is this understanding correct?), which will then be translated to the <code>decode_*</code> equivalents from the <a href=\"https://github.com/lukewilliamboswell/roc-json/blob/9cbfe2ac1ba77371369709599adf713d533138d0/package/Json.roc#L68-L85\">Json</a> type.</p>\n<p>Next in the example comes:</p>\n<div class=\"codehilite\"><pre><span></span><code>decoded = Decode.from_bytes_partial(request_body, decoder)\n</code></pre></div>\n<p>for which the underlying code is:</p>\n<div class=\"codehilite\"><pre><span></span><code>from_bytes_partial : List U8, fmt -&gt; DecodeResult val where val implements Decoding, fmt implements DecoderFormatting\nfrom_bytes_partial = |bytes, fmt| decode_with(bytes, decoder, fmt)\n</code></pre></div>\n<p>and</p>\n<div class=\"codehilite\"><pre><span></span><code>decode_with : List U8, Decoder val fmt, fmt -&gt; DecodeResult val where fmt implements DecoderFormatting\ndecode_with = |bytes, @Decoder(decode), fmt| decode(bytes, fmt)\n</code></pre></div>\n<p>Now in <code>from_bytes_partial</code> this <code>decoder</code> argument has come out of the blue. It didn't come from the parameters, and there's no standalone <code>decoder</code> function in <code>Decode.roc</code> that I can see. The only place I can image it comes from is the <code>Decoding</code> ability:</p>\n<div class=\"codehilite\"><pre><span></span><code>Decoding implements\n    decoder : Decoder val fmt where val implements Decoding, fmt implements DecoderFormatting\n</code></pre></div>\n<p>But this <code>decoder</code> is being used as a value which is directly passed into <code>decode_with</code>, and then somehow destructured by <code>decode_with</code>. I'm having issues understanding where this <code>decoder</code> came from. I'm confused because this <code>decoder</code> is not being applied on a value of some type that implements <code>Decoding</code> and <em>then</em> the result of that (which would be of type <code>Decoder val fmt</code>) is what gets passed into <code>decode_with</code>, instead this ability function is just passed directly, which is then also somehow being destructured (how is it destructuring an ability function that's not concrete?).</p>\n<p>Apologies if it's something obvious I'm missing. Hopefully the answer for this also helps any other newcomers who happen to be stuck understanding how this works, like myself.</p>\n<p>Thanks.</p>",
+        "id": 503383192,
+        "sender_full_name": "hchac",
+        "timestamp": 1741129985
+    },
+    {
+        "content": "<p>I agree, this is a definitely a bit magical. In fact, in the eventual replacement to abilities, this is much more explicit.</p>",
+        "id": 503392521,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741134447
+    },
+    {
+        "content": "<p>All functions within an ability are directly callable</p>",
+        "id": 503392648,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741134496
+    },
+    {
+        "content": "<p>So for example, if you need to decode a u8 as part of another decoder, you would write:<br>\n<code>Decode.u8(...)</code></p>",
+        "id": 503392709,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741134527
+    },
+    {
+        "content": "<p>If that function was being called within the <code>Decode</code> module itself, you wouldn't need the prefix, so it would just be <code>u8(...)</code></p>",
+        "id": 503392761,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741134565
+    },
+    {
+        "content": "<p>This is what is being seen with <code>decoder</code></p>",
+        "id": 503392777,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741134573
+    },
+    {
+        "content": "<p>We are referencing <code>Decode.decoder</code> which is referencing the abstract ability function here:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kt\">Decoding</span><span class=\"w\"> </span><span class=\"nv\">implements</span>\n<span class=\"w\">    </span><span class=\"nv\">decoder</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Decoder</span><span class=\"w\"> </span><span class=\"nv\">val</span><span class=\"w\"> </span><span class=\"nv\">fmt</span><span class=\"w\"> </span><span class=\"kr\">where</span><span class=\"w\"> </span><span class=\"nv\">val</span><span class=\"w\"> </span><span class=\"nv\">implements</span><span class=\"w\"> </span><span class=\"kt\">Decoding</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">fmt</span><span class=\"w\"> </span><span class=\"nv\">implements</span><span class=\"w\"> </span><span class=\"kt\">DecoderFormatting</span>\n</code></pre></div>",
+        "id": 503392930,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741134647
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/231634-beginners/topic/Understanding.20Abilities/near/503392930\">said</a>:</p>\n<blockquote>\n<p>We are referencing <code>Decode.decoder</code> which is referencing the abstract ability function here:</p>\n<p><div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kt\">Decoding</span><span class=\"w\"> </span><span class=\"nv\">implements</span>\n<span class=\"w\">    </span><span class=\"nv\">decoder</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Decoder</span><span class=\"w\"> </span><span class=\"nv\">val</span><span class=\"w\"> </span><span class=\"nv\">fmt</span><span class=\"w\"> </span><span class=\"kr\">where</span><span class=\"w\"> </span><span class=\"nv\">val</span><span class=\"w\"> </span><span class=\"nv\">implements</span><span class=\"w\"> </span><span class=\"kt\">Decoding</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">fmt</span><span class=\"w\"> </span><span class=\"nv\">implements</span><span class=\"w\"> </span><span class=\"kt\">DecoderFormatting</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>Ah interesting that you can pass an abstract ability function around like a value <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> , yeah that's definitely what trips me up. I'm not seeing a direct path to how it turns into a concrete implementation by looking at the code. Not gonna keep pestering with questions though since you mentioned this will be replaced with something more explicit (hopefully I can grok the next impl easier <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span> ).</p>\n<p>Thanks!</p>",
+        "id": 503394967,
+        "sender_full_name": "hchac",
+        "timestamp": 1741135776
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"881564\">hchac</span> has marked this topic as resolved.</p>",
+        "id": 503394982,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1741135788
+    },
+    {
+        "content": "<p>The new tool will always link back to a specific module with implementation.</p>\n<p><code>foo.encode(...)</code> would look at the type of <code>foo</code> and call the function <code>encode</code> from that module. It would pass <code>foo</code> as the first arg of the function.</p>\n<p>The other option is <code>module(foo).decode(...)</code> which is dispatching on the module of the type variable <code>foo</code>. Needed for when <code>foo</code> is the output type instead of an arg.</p>",
+        "id": 503402695,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741139604
+    }
+]

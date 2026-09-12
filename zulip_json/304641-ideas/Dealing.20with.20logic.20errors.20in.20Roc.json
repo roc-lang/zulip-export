@@ -1,0 +1,926 @@
+[
+    {
+        "content": "<p>In the world of software, I think it's fair to divide the kinds of errors we need to deal with into two camps:</p>\n<ul>\n<li>Predictable errors</li>\n<li>Unpredictable errors</li>\n</ul>\n<p>Predictable errors are where we model things with <code>Result</code> primarily, because we know all the error conditions ahead of time, roughly.</p>\n<p>But unpredictable errors are the things where we don't know what's going to happen. Strictly speaking, that also includes things like segfaults, but I primarily want to view the unpredictable errors as being logic errors here. Cases where Roc encourages using <code>crash</code> today if you ever reach an impossible branch for example.</p>\n<p>There are a couple of important facets of logic errors as they are handled, not only in Roc, but in other languages too:</p>\n<ul>\n<li>Their handling generally doesn't appear in the type system</li>\n<li>The user usually can't do much about them anyway</li>\n<li>It is very important that the developer is made aware of them</li>\n</ul>\n<p><code>crash</code> and <code>expect</code> provide this experience in Roc, because they allow developers to be quickly notified that something is wrong during development, and we don't have to bend the type system to model something that shouldn't actually be happening in the first place.</p>\n<p>However, I think there's a couple of issues that would be useful to address:</p>\n<ul>\n<li>Recovery is still important, even when users can't do much about the original error. And Roc doesn't offer any way to \"catch\" the crash and stop it today.</li>\n<li>Both <code>crash</code> and <code>expect</code> feel very much like evolutions of what other languages have done. This makes them fell like a case of \"developers want to be able to express this\" rather than a holistic look at how to actually handle logic errors.</li>\n</ul>\n<p>To be clear, I think there is a real need for something like <code>crash</code> and <code>expect</code>. They are important for making it easy to spot logic errors during development, because they are very loud. But if I'm developing some web service, I might be serving many REST endpoints from the same service. If one of those endpoints call a function that happens to crash, then I don't want it to bring down my entire service. At the very least, I just want to make the single endpoint unavailable while I investigate, so the rest of the service can remain live. So even I can't do anything useful with the logic error itself, I can still offer a degraded service that remains useful.</p>\n<p>So my first question is: should there be a way to catch a crash, a la <code>catch_unwind</code> in Rust?</p>\n<p>One of my problems with <code>catch_unwind</code> is that it's very general, and you can really put it anywhere. But for logic errors specifically, I think there's usually a clear boundary of where you want it:</p>\n<ul>\n<li>Third party code</li>\n<li>Between different services/features/endpoints, so even if they live in the same running software, they won't bring each other down.</li>\n</ul>\n<p>Maybe there's a way to (optionally) lint that you are remembering to call <code>catch</code> in only these places?</p>\n<p>My next question though, is whether the behaviors in <code>crash</code> and <code>expect</code> are even the right primitives to begin with? Maybe there are better tools waiting to be found here?</p>\n<p>One small evolution might be to make <code>crash</code> and <code>expect</code> parametrized over the behavior we expect them to trigger. For example, what if module params was used to pass in a \"crasher\", that could specialise how they would crash and define any guards where the crash would be caught? I don't really know if this would be feasible or even sensible, but I want to float the idea at least.</p>\n<p>Or maybe we could define something more targeted at dealing with logic errors, e.g. <code>LogicErrors.detectedError : Severity, Str -&gt; ...</code>. This function would allow you to report that you hit an impossible error case to the platform, and then the platform could decide what to do. For example, if you pass in a severity of <code>Fatal</code>, it might crash as today. Or it might decide to block access to the specific REST endpoint where this error was detected, and automatically return a 503 error on it, until it can be manually unblocked.</p>",
+        "id": 474273888,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1727869934
+    },
+    {
+        "content": "<p>One thing to keep in mind, I'm pretty sure platforms can choose how to handle crashes, e.g. a web server can choose to let each request crash separately</p>",
+        "id": 474280977,
+        "sender_full_name": "Hannes",
+        "timestamp": 1727871378
+    },
+    {
+        "content": "<p>yeah I think this is the answer!</p>",
+        "id": 474301692,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1727876679
+    },
+    {
+        "content": "<p>I definitely think we should never add anything to the language that applications or packages could use to recover from <code>crash</code></p>",
+        "id": 474303407,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1727877138
+    },
+    {
+        "content": "<p>but platform authors already can, and absolutely should!</p>",
+        "id": 474303472,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1727877160
+    },
+    {
+        "content": "<p>To be clear, let’s not get hung up on web servers. But you’re saying that the platform is responsible for insulating the software from crashes?</p>\n<p>As another example, let’s say I’m building a game, and there’s a crash in my animation subsystem. If the platform is running animations isolated from the rest of the code, then it can recover by just disabling animations for example. But if the animation is just running with the rest of the game loop, can the platform do that?</p>",
+        "id": 474309588,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1727878452
+    },
+    {
+        "content": "<p>I think the best way to think about this is in terms of errors, e.g. mistakes</p>",
+        "id": 474317194,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1727880258
+    },
+    {
+        "content": "<p>\"if there is a mistake in this part of the code, what's the worst that can happen? how can we insulate against that to make it less bad if it happens? what's the cost of that insulation?\"</p>",
+        "id": 474317370,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1727880308
+    },
+    {
+        "content": "<p>forget about <code>crash</code></p>",
+        "id": 474317383,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1727880316
+    },
+    {
+        "content": "<p>Sure, and nobody sets out to overflow the stack or run out of memory. Before I go on, I would like to better understand why you don’t want developers to write this insulation code in Roc though?</p>",
+        "id": 474353039,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1727889096
+    },
+    {
+        "content": "<p>if you can recover from <code>crash</code> in Roc code, then it has become <code>throw</code> and we have added <code>try</code>/<code>catch</code>, and it will become used for recoverable error handling</p>",
+        "id": 474356551,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1727890187
+    },
+    {
+        "content": "<p>Is that a problem in Rust, since it has that exact setup? It's also something that can be designed in a few different ways in my mind, to discourage such use if that's really a worry.</p>\n<p>To better motivate why I think it makes sense, I think software in general has really awful user-facing errors. Part of that I think, is that programming languages and frameworks make it very easy to \"create\" an error (<code>crash</code>, <code>Err</code>, etc.), but then leaves it up to developers to make it good for users.</p>\n<p>The reason I wanted to single out logic errors, is because Roc has effectively given the tooling to create errors, with no chance for developers to create a good recovery story for users, outside of modifying the platform directly.</p>\n<p>It's of course alright to say that these logic errors <strong>should</strong> be rare enough that it's not something Roc developers are actually exposed to dealing with. But having a way to trigger errors without a way of creating a user friendly recovery story just makes me uneasy.</p>",
+        "id": 475088853,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728212657
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475088853\">said</a>:</p>\n<blockquote>\n<p>Is that a problem in Rust, since it has that exact setup?</p>\n</blockquote>\n<p>I wouldn't say Rust has that exact setup - if you look at <a href=\"https://doc.rust-lang.org/std/panic/fn.catch_unwind.html\">the docs for panic recovery</a> they say things like \"this doesn't actually catch all panics, and also here are a bunch of things to be careful of if you use this with other language features\"</p>",
+        "id": 475089443,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728213332
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475088853\">said</a>:</p>\n<blockquote>\n<p>The reason I wanted to single out logic errors, is because Roc has effectively given the tooling to create errors, with no chance for developers to create a good recovery story for users</p>\n</blockquote>\n<p>right, but if you read \"logic error\" as \"logic mistake\" then the feature request becomes \"Roc needs a way to correct arbitrary mistakes in other people's code without modifying that code\"</p>",
+        "id": 475089793,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728213577
+    },
+    {
+        "content": "<p>Roc originally did not have a <code>crash</code> keyword; if you made a mistake that crashed the program, it was probably because you ran it out of memory or tried to do integer division by zero</p>",
+        "id": 475090179,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728213709
+    },
+    {
+        "content": "<p>and actually we tried having division return <code>Result</code>, but that didn't go well</p>",
+        "id": 475090304,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728213749
+    },
+    {
+        "content": "<p>so I think if there's a case to be made for a feature like this, it has to be made without reference to <code>crash</code></p>",
+        "id": 475090626,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728213867
+    },
+    {
+        "content": "<p>for example, something like \"if I call library code and it overflows the stack, or the heap, or goes into an infinite loop, or does integer division by zero, I want my application code to be able to defensively write code which recovers from that possibility, and spawning a new process to run that code is not a sufficient solution\"</p>",
+        "id": 475090970,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728214001
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475089793\">sagde</a>:</p>\n<blockquote>\n<p>right, but if you read \"logic error\" as \"logic mistake\" then the feature request becomes \"Roc needs a way to correct arbitrary mistakes in other people's code without modifying that code\"</p>\n</blockquote>\n<p>I think there's a gap between the two that doesn't need to be crossed though. I'm not interested in \"fixing\" the error, but it's still quite important that:</p>\n<ul>\n<li>The user is presented with the most useful error message they can get, which is usually context specific</li>\n<li>The offending code is potentially disabled, such that the software can continue running in a degraded state.</li>\n</ul>\n<p>Going back to the example of a game where the animation system crashes, you probably want something like the following to happen:</p>\n<ul>\n<li>The user is prompted to report the crash to the game developer, with automatic attaching of relevant logs</li>\n<li>The game keeps running without animations enabled. This is a terrible state to be in of course, but it does allow the player to save their progress before quitting the game for real.</li>\n</ul>\n<p>Those are the kinds of scenarios I think are worth being able to deal with, which right now, I would need to fork the platform to do (as I understand it).</p>",
+        "id": 475093309,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728215454
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475093309\">said</a>:</p>\n<blockquote>\n<p>Going back to the example of a game where the animation system crashes</p>\n</blockquote>\n<p>why did it crash?</p>",
+        "id": 475095093,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728217192
+    },
+    {
+        "content": "<p>(e.g. did it run out of stack space? heap space? integer division by zero?)</p>",
+        "id": 475095164,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728217219
+    },
+    {
+        "content": "<p>I think maybe another way to frame this is: for the purposes of this discussion, let's assume that <code>crash</code> has been removed from the language. There is no longer a keyword for that, or any equivalent of it.</p>",
+        "id": 475095247,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728217310
+    },
+    {
+        "content": "<p>in that world, what's the specific scenario we're trying to address?</p>",
+        "id": 475095300,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728217328
+    },
+    {
+        "content": "<p>the animation system did not do a <code>crash</code> because that doesn't exist. So what did it do that we're trying to recover from?</p>",
+        "id": 475095312,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728217342
+    },
+    {
+        "content": "<p>I guess it doesn’t actually matter. What’s important to me is the experience of recovering from something deemed unrecoverable. I would expect it to be the same in all those cases.</p>",
+        "id": 475103403,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728224512
+    },
+    {
+        "content": "<blockquote>\n<p>with no chance for developers to create a good recovery story for users, outside of modifying the platform directly.</p>\n</blockquote>\n<p>I think it is important to remember that platforms are not set in stone. If you are working on a game, you definitely own the platform. So you can modify it to crash however you like. Even if you are working on basic-cli, you can fork it and change how panics are handled.</p>",
+        "id": 475108377,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728228755
+    },
+    {
+        "content": "<p>I do agree that <code>crash</code> is scary. There is a reason that I push for essentially no one ever using it (especially in libraries) unless they somehow hit an unreachable state. I think the world before <code>crash</code> was much worse than the world we have now with crash. At some point there are going to be:</p>\n<ol>\n<li>libraries with unreachable states (like a dictionary loading from the underlying list which will never fail)</li>\n<li>application authors writing quick scripts that just want to throw away error cause they don't care.</li>\n</ol>\n<p>Without crash, hacks have to be used that generate terrible error messages in order to cause a crash in a unreachable state: <code>255u8 + 1</code>.</p>",
+        "id": 475108519,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728228899
+    },
+    {
+        "content": "<p>All this said, I think crash should be used as sparingly as possible. If crash becomes common in libraries, and actually gets hit semi often. I would hope the community as a whole would put pressure on those libraries to remove crash or switch to different libraries. If that fails, I think that Roc has a major issue. That would be proof to me that adding <code>crash</code> to Roc was probably a mistake.</p>\n<p>In other words, in my view (as one of the main people that pushed for <code>crash</code> existing), feeling like you need to catch crashes would mean adding <code>crash</code> was a mistake. It would not be a reason to add some form of <code>catch</code>.</p>",
+        "id": 475108696,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728229079
+    },
+    {
+        "content": "<p>As a point of comparison, <code>catch_unwind</code> in rust.</p>\n<p>The general advice is to only use it at the ffi (eg rust plugins for godot) or stability boundary (eg stop web request from killing webserver). Both of these exist in the platform layer for roc.</p>",
+        "id": 475109436,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728229734
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475103403\">said</a>:</p>\n<blockquote>\n<p>I guess it doesn’t actually matter. What’s important to me is the experience of recovering from something deemed unrecoverable. I would expect it to be the same in all those cases.</p>\n</blockquote>\n<p>interesting - so in other languages, do you use things like try/catch around library calls in case they stack overflow, or heap overflow?</p>",
+        "id": 475112366,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232589
+    },
+    {
+        "content": "<p>I don't, but maybe others do! <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 475112381,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728232600
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475108377\">sagde</a>:</p>\n<blockquote>\n<p>I think it is important to remember that platforms are not set in stone. If you are working on a game, you definitely own the platform. So you can modify it to crash however you like. Even if you are working on basic-cli, you can fork it and change how panics are handled.</p>\n</blockquote>\n<p>This may also just be somewhere where my mental model is off. With what I know about platforms today, it seems like they are responsible for a whole heap of things that I don't want to take responsibility for necessarily (like building good stack traces). So my intuition around forking a platform, is that it's analoguos to forking the JVM because you want different crash handling in your Java code. I know the JVM is a much bigger beast than a Roc platform, but in my mind, they fill a similar space.</p>",
+        "id": 475123040,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728238148
+    },
+    {
+        "content": "<p>I think the term \"stability boundary\" describes well what I feel is kind of missing. </p>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475112366\">sagde</a>:</p>\n<blockquote>\n<p>interesting - so in other languages, do you use things like try/catch around library calls in case they stack overflow, or heap overflow?</p>\n</blockquote>\n<p>Not for those kinds of crashes, but I've definitely seen Scala and Java code with extra <code>catch</code>es in it to catch various runtime exceptions (which are basically the Java equivalents of <code>crash</code>). Part of that is also just Java having poor standards around what kinds of exceptions should actually be runtime exceptions rather than checked exceptions though.</p>\n<p>As <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> was saying, if <code>crash</code> becomes a common thing in libraries, it can potentially make for a poor experience of using Roc libraries. But the way to minimize the problem is to encourage people to model their code in such a way that explicit crashing is not needed. But I'm not confident that people can be relied on enough to do so. Going back to Rust, it's basically the argument for social pressure on libraries to avoid <code>unsafe</code> code. This has <strong>kind of</strong> worked, but also had times where people came under a lot of pressure to get rid of their <code>unsafe</code> usage (i.e. the <a href=\"https://www.reddit.com/r/rust/comments/eq11t3/a_sad_day_for_rust/\">Actix debacle</a>).</p>\n<p>The thing that came to a front there was that:</p>\n<ul>\n<li>A lot of people were nervous about <code>unsafe</code> being something that can impact you a lot, but you have little to no control over whether your dependency tree contains any <code>unsafe</code> (and whether it's been audited, etc.)</li>\n<li>For this reason, a lot of people had internalized that there was something of a social contract to not using <code>unsafe</code> when not needed, which the Actix maintainer went against, and a lot of people were unhappy about that.</li>\n</ul>\n<p>So I guess my position is that I really want to keep <code>crash</code> around, but I'm also looking for tooling to help me define and maintain my stability boundaries. Even in a web server where a request causes a crash, what if that means I've written some data into the database but not completed the rest of the required work? Is all the work being done for that request being seen as one atomic transaction that will get rolled back, or do I need to do something myself in case of a crash?</p>",
+        "id": 475128221,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728241414
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475128221\">said</a>:</p>\n<blockquote>\n<p>As <span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> was saying, if <code>crash</code> becomes a common thing in libraries, it can potentially make for a poor experience of using Roc libraries. But the way to minimize the problem is to encourage people to model their code in such a way that explicit crashing is not needed. But I'm not confident that people can be relied on enough to do so.</p>\n</blockquote>\n<p>just to be totally honest, I think if we get to the point where <code>crash</code> is overused in libraries because library don't want to handle errors via <code>Result</code> (or otherwise), my ordering of preferences would put \"go back to not having <code>crash</code> again\" as preferable to \"add a way to recover from <code>crash</code>\"</p>",
+        "id": 475129931,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728241927
+    },
+    {
+        "content": "<p>basically, there is always going to be some point where library authors can make mistakes</p>",
+        "id": 475130363,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242047
+    },
+    {
+        "content": "<p>and I don't think we should try to have a language feature that corrects arbitrary mistakes</p>",
+        "id": 475130421,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242064
+    },
+    {
+        "content": "<p>in third-party code</p>",
+        "id": 475130442,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242070
+    },
+    {
+        "content": "<p>a mistake in third-party code is going to cause a degraded user experience no matter what</p>",
+        "id": 475130599,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242116
+    },
+    {
+        "content": "<p>maybe that's because a calculation is incorrect</p>",
+        "id": 475130631,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242128
+    },
+    {
+        "content": "<p>for some category of mistakes, it's possible to recover from them gracefully</p>",
+        "id": 475131091,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242273
+    },
+    {
+        "content": "<p>for example, you can recover from an accidental infinite loop by running that code on a different thread, timing it, and killing the thread if it runs longer than some configured timeout</p>",
+        "id": 475131309,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242328
+    },
+    {
+        "content": "<p>this has downsides such as performance and code complexity, but it can result in a less bad user experience (an error message) than an infinite loop</p>",
+        "id": 475131396,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242354
+    },
+    {
+        "content": "<p>so we could totally do that, but I don't think it's worth it</p>",
+        "id": 475131458,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242369
+    },
+    {
+        "content": "<p>I do think there is an important point brought up in terms of stability boundary.</p>\n<p>If in basic webserver I start a transaction then a crash happens, I believe it will completely clog up sqlite. So a user that starts a transaction then runs 3rd party code would be left in a fundamentally broken state if a crash happens. They have no way to fix this but avoid calling any code that might crash after a transaction is stated on a thread.</p>",
+        "id": 475131482,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728242377
+    },
+    {
+        "content": "<p>the platform can already solve that</p>",
+        "id": 475131670,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242441
+    },
+    {
+        "content": "<p>because it knows about transactions</p>",
+        "id": 475131673,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728242445
+    },
+    {
+        "content": "<p>No it doesnt</p>",
+        "id": 475131678,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728242451
+    },
+    {
+        "content": "<p>It just knows about statements (which would all clean up but that transaction would still be open)</p>",
+        "id": 475131699,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728242464
+    },
+    {
+        "content": "<p>It also definitely wouldn't know about a transaction to something like postgres over TCP.</p>",
+        "id": 475131718,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728242482
+    },
+    {
+        "content": "<p>In sqlite, one statement requests beginning the transaction. Then you run n statements in the transaction. Then you run a final statement to close the transaction.</p>",
+        "id": 475131814,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728242542
+    },
+    {
+        "content": "<p>So even if you clean up all statements you may still be in the middle of a transaction.</p>",
+        "id": 475131839,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728242566
+    },
+    {
+        "content": "<p>oh you're assuming the platform isn't aware of SQLite and is instead just offering a socket primitive</p>",
+        "id": 475132494,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243004
+    },
+    {
+        "content": "<p>I see</p>",
+        "id": 475132508,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243011
+    },
+    {
+        "content": "<p>So for sqlite, I am just noting the state today in basic webserver. For postgres, I am trying to point out the general issue.</p>",
+        "id": 475132538,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728243042
+    },
+    {
+        "content": "<p>so for that issue, let's frame it in terms of a stack overflow</p>",
+        "id": 475132570,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243065
+    },
+    {
+        "content": "<p>so an individual request handler overflows the stack and we want to close its SQLite transactions, right?</p>",
+        "id": 475132692,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243135
+    },
+    {
+        "content": "<p>I don't think that is reasonable cause it many systems, stack overflows always crash the program. Like completely crash it.</p>\n<p>So I would prefer to keep it in terms of something that might happen but would generally recover with a 500. So numeric overflow or any sort of exception otherwise.</p>",
+        "id": 475132730,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728243168
+    },
+    {
+        "content": "<p>Or division by zero</p>",
+        "id": 475132774,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728243209
+    },
+    {
+        "content": "<p>division by zero we can choose to handle in other ways, e.g. by having it return 0 like pony does</p>",
+        "id": 475132860,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243262
+    },
+    {
+        "content": "<p>I'd specifically like to focus on stack overflow because it is unquestionably unrecoverable</p>",
+        "id": 475132891,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243288
+    },
+    {
+        "content": "<p>That's exactly why it isn't useful to talk about</p>",
+        "id": 475132909,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728243300
+    },
+    {
+        "content": "<p>You want something in the grey area. How about integer overflow which we want to have crash due to all of the correctness implications</p>",
+        "id": 475132964,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728243346
+    },
+    {
+        "content": "<p>Like on stack overflow, we aren't even going to 500, the entire webserver is probably going to crash.</p>",
+        "id": 475133032,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728243381
+    },
+    {
+        "content": "<p>ok so I think this actually gets to the fundamental difference in perspective here</p>",
+        "id": 475133052,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243396
+    },
+    {
+        "content": "<p>to me, <em>the only cases we are talking about</em> are situations like stack overflows where if it happens, we have decided it should be game over and there's no recovering from it</p>",
+        "id": 475133136,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243442
+    },
+    {
+        "content": "<p>Stack overflow doesn't even call <code>roc_panic</code> though. It literally doesn't hit the path we are discussing</p>",
+        "id": 475133287,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728243501
+    },
+    {
+        "content": "<p>I cannot overstate how important that distinction is to me in this discussion</p>",
+        "id": 475133290,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243502
+    },
+    {
+        "content": "<p>yes, exactly!</p>",
+        "id": 475133403,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243561
+    },
+    {
+        "content": "<p>that is exactly why I want to focus on it</p>",
+        "id": 475133423,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243569
+    },
+    {
+        "content": "<p>I don't follow.</p>",
+        "id": 475133561,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728243605
+    },
+    {
+        "content": "<p>if people are misusing <code>crash</code>, then to me the default best response to that is to try to educate people about what it's for.</p>\n<p>if that doesn't work, then the next best response is to remove <code>crash</code> from the language so that if you're writing a library and hit a \"this should never happen\" situation, then your only option is to use one of the hacks we used to use (e.g. inducing a stack overflow) to address it, at which point it at least becomes obvious that you should never use that technique for error handling</p>",
+        "id": 475133917,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243782
+    },
+    {
+        "content": "<p>the reason I think it's useful to talk about how to handle SQLite transactions in the presence of a stack overflow is that it's <em>not</em> a situation where either of those solutions would help</p>",
+        "id": 475134094,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243865
+    },
+    {
+        "content": "<p>because the problem isn't that people have misused <code>crash</code></p>",
+        "id": 475134124,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243884
+    },
+    {
+        "content": "<p>and we also couldn't fix it by changing how integer overflow or division by zero works</p>",
+        "id": 475134198,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728243916
+    },
+    {
+        "content": "<p>I think there are 3 states:</p>\n<ol>\n<li>returns result: user can do cleanup</li>\n<li>completely crashes the app (oom, stack overflow): due to full reset and all connections getting killed, everything gets cleaned up. This should get reported, but the service will be auto restarted and load balancing will send to other servers, so this is all fine.</li>\n<li>we crash through <code>roc_panic</code> and partially recover. If we can't do cleanup this may leave the app in a continually partially failing state.</li>\n</ol>",
+        "id": 475134561,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728244128
+    },
+    {
+        "content": "<p>So personally, I don't care much about 1 or 2. 3 is the important problematic case.</p>",
+        "id": 475134599,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728244150
+    },
+    {
+        "content": "<p>As a concrete case of what could happen in basic webserver. We can even pretend <code>crash</code> is gone:</p>\n<ol>\n<li>I get a request that turns out to be invalid, but I miss that</li>\n<li>I start an sqlite transaction</li>\n<li>I get an integer overflow when calculate something due to missed validation on the initial request.</li>\n<li><code>roc_panic</code> on overflow which cleans up all statements but doesn't know anything about the open transaction.</li>\n<li>From that point forward all threads are blocked waiting on the still open transaction to finish. So we either get a hang, or more likely, all threads fail anytime they interact with sqlite and the user keeps returning 500s.</li>\n</ol>",
+        "id": 475134989,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728244446
+    },
+    {
+        "content": "<p>well state 2 doesn't have to kill the entire root process - the host can install a signal handler, unwind, and return 500</p>",
+        "id": 475135034,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728244498
+    },
+    {
+        "content": "<p>and that's true for both stack overflow and running out of heap memory</p>",
+        "id": 475135055,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728244512
+    },
+    {
+        "content": "<p>Sure, then 2 falls into 3 and it matters, but it specifically only matters if the host might recover in a potentially invalid state.</p>",
+        "id": 475135112,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728244547
+    },
+    {
+        "content": "<p>yeah exactly</p>",
+        "id": 475135210,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728244588
+    },
+    {
+        "content": "<p>Personally. I would like to pin to the concrete example. I think it is what would lead to users wanting some form of catch</p>",
+        "id": 475135311,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728244626
+    },
+    {
+        "content": "<p>Or at least some form of <code>errdefer</code> or <code>finally</code> to clean up in the case of an exception.</p>",
+        "id": 475135368,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728244654
+    },
+    {
+        "content": "<p>so how would this specific case be implemented in the compiler?</p>",
+        "id": 475135628,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728244791
+    },
+    {
+        "content": "<p>C++ exception style?</p>",
+        "id": 475135681,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728244807
+    },
+    {
+        "content": "<p>I'm just trying to point it out as a motivating example. One solution would be c++ style exceptions then enable finally to clean up.</p>",
+        "id": 475136132,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728245068
+    },
+    {
+        "content": "<p>this specific case being (just to make sure we're on the same page):</p>\n<ul>\n<li>webserver platform that is unaware of SQLite but provides a socket primitive</li>\n<li>a request handler in app code opens a SQLite transaction and then stack overflows</li>\n<li>we want the outcome to be that the request handler unwinds, responds with a 500, and the transaction is closed and nothing is leaked</li>\n</ul>",
+        "id": 475136180,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245113
+    },
+    {
+        "content": "<p>that's the scenario, right?</p>",
+        "id": 475136195,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245134
+    },
+    {
+        "content": "<p>Or even could be done without c++ exceptions before calling roc_panic. Like register functions to call to clean up before calling <code>roc_panic</code>. I just assume a platform won't be able to deal with all of these cases, but maybe that is wrong. It at least is worth thinking about critically</p>",
+        "id": 475136197,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728245135
+    },
+    {
+        "content": "<blockquote>\n<p>we want the outcome to be that the request handler unwinds, responds with a 500, and the transaction is closed and nothing is leaked</p>\n</blockquote>\n<p>That would be optimal. Also, the platform may know about sqlite, but sqlite transactions are built into standard statements. So the platform may have zero control over transactions (state of current basic webserver)</p>",
+        "id": 475136270,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728245200
+    },
+    {
+        "content": "<p>ok so the way I'm approaching this is \"I want to avoid having exception handling semantics in Roc applications, so how can we solve this in a way that gets to a good outcome in this scenario without doing that?\"</p>",
+        "id": 475136507,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245341
+    },
+    {
+        "content": "<p>one thing that comes to mind is that it seems like the best experience if the author of the SQLite library can solve this</p>",
+        "id": 475136564,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245380
+    },
+    {
+        "content": "<p>so application authors don't need to code defensively for this scenario</p>",
+        "id": 475136644,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245412
+    },
+    {
+        "content": "<p>Yep</p>",
+        "id": 475136654,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728245419
+    },
+    {
+        "content": "<p>one idea for how that could work: have the platform expose a function that accepts a boxed \"cleanup function\" and returns a token value that works like a file descriptor</p>",
+        "id": 475137404,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245621
+    },
+    {
+        "content": "<p>in terms of how the host tracks it</p>",
+        "id": 475137559,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245656
+    },
+    {
+        "content": "<p>We could even make <code>roc_panic</code> take a list of cleanup closures that the platform can use if they want. Add some sort of <code>Task.finally</code> that just adds onto the list. Not sure when exactly it would be cleared out though. But yeah. Something like that which gives platform cleanup control should work</p>",
+        "id": 475137892,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728245755
+    },
+    {
+        "content": "<p>so then the SQLite author can make sure that token has the same lifetime as the transaction normally, so when it gets deallocated it closes the transaction</p>",
+        "id": 475137972,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245768
+    },
+    {
+        "content": "<p>and if the request handler stack overflows, the host has a list of tokens that never got resolved, and can run them all before 500ing</p>",
+        "id": 475138320,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245863
+    },
+    {
+        "content": "<p>I think that can be implemented today with no implementation changes needed</p>",
+        "id": 475138481,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245891
+    },
+    {
+        "content": "<p>in the same way that file descriptors can be</p>",
+        "id": 475138574,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728245914
+    },
+    {
+        "content": "<p>Ah, I see. Yeah. I think that works.</p>",
+        "id": 475138709,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728245949
+    },
+    {
+        "content": "<p>Through all this, I’ve had a hard time figuring out what users are expected to do with their platforms. It feels like there’s two different ways of looking at platforms, which I find hard to reconcile:</p>\n<ol>\n<li>Platforms are sort of complicated, handling a lot of general Roc logic (like unwinding, creating stack traces, etc.)</li>\n<li>Platforms can also handle logic which is very application specific, like defining your stability boundaries. Users are encouraged to own their platform for this if they want it changed. </li>\n</ol>\n<p>To me, this sounds like there will be an explosion of very specific, and not necessarily well maintained, platforms a la <code>basic-webserver-mssql-windowsserver2022</code>,  <code>basic-webserver-postgres-ubuntu</code>, etc.<br>\nThis doesn’t feel like a healthy place to end up in though. It feels like any single platform consists of a number of choices, but an application author can’t easily compose those choices without forking a complete platform, and handling the full responsibility this entails.</p>\n<p>I think a healthier position would be for some “base” platforms to be incredibly small and stable, to provide the raw primitives that a full platform needs (reusable Roc setup, IO, etc), and then have another layer on top where you define the interface and behavior that you want to work against. In other words, you may have a “base” <code>ubuntu</code> platform, which exposes the capabilities you get in Ubuntu, and then someone would build a <code>basic-cli</code> API on top of that. Does that make sense, or am I misunderstanding platforms here?</p>",
+        "id": 475141612,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728247910
+    },
+    {
+        "content": "<blockquote>\n<p>you may have a “base” <code>ubuntu</code> platform</p>\n</blockquote>\n<p>This could be done but would probably a terrible experience and wouldn't be worth trying to do. If we need an <code>ubuntu</code> platform, the platform concept has probably failed. That sounds like a generic standard library with all of the io primitives.</p>\n<blockquote>\n<p>platforms a la <code>basic-webserver-mssql-windowsserver2022</code></p>\n</blockquote>\n<p>These probably will exist for certain power users, but not for the average user. That said, forking an existing platform and slightly modifying it may be reasonably common. Not some super fork like integrating an entire <code>mssql</code> library into the platform, but a tiny fork that may modify the panic handler to send requests to your logging server.</p>\n<hr>\n<p>I think that long term, most platforms will be in the vein of basic-webserver in terms of complexity. They won't be trying to own the world, but they be trying to have a robust set of primitives (for a webserver, these primitives are most likely for file io and for socket io). Once you have those two, you can do essentially everything a webserver would want to do. The postgres library can be built right in roc.</p>",
+        "id": 475149976,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728252866
+    },
+    {
+        "content": "<p>The last part of what richard and I were talking about is how a platform like basic-webserver could offer the ability to run cleanup code after a panic. This would enable a postgres library to hook in and request for transactions to be rolled back on panic. It would enable more control from the end user in terms of adding a <code>finally</code> to any <code>crash</code>. This is all within a single platform.</p>",
+        "id": 475150129,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728252978
+    },
+    {
+        "content": "<p>yeah, to elaborate, here are some scenarios I imagine happening long-term:</p>\n<ul>\n<li>domain-specific \"framework\" platforms (e.g. like Rails, Django, game engines, Electron) that are specific to a particular domain, such as webservers, games, or native desktop GUIs, but which expect you to bring your own libraries for use cases like which database you want. <code>basic-webserver</code> and <code>basic-cli</code> would be examples of this.</li>\n<li>power-user forks of \"framework\" platforms - huge companies very commonly end up using forks of frameworks, game engines, etc. because even small low-level customizations can have a big impact across their gigantic code bases.</li>\n<li>\"Roc apps are extensions\" platforms where there's a big application code base in another language that just wants to add a bit of Roc for scripting, plugins, etc.</li>\n</ul>",
+        "id": 475153853,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728254402
+    },
+    {
+        "content": "<p>I wouldn't expect many platforms to be operating system specific (although it's always possible) outside of maybe embedded systems</p>",
+        "id": 475153931,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728254471
+    },
+    {
+        "content": "<p>so I don't think it would be <code>basic-webserver-postgres-ubuntu</code>, but I could imagine a <code>postgres-webserver</code> platform existing</p>",
+        "id": 475153942,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728254484
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475141612\">said</a>:</p>\n<blockquote>\n<p>Platforms can also handle logic which is very application specific, like defining your stability boundaries. Users are encouraged to own their platform for this if they want it changed. </p>\n</blockquote>\n<p>just to clarify on this part, I don't actually think this is the right way to think about it</p>",
+        "id": 475156835,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728256946
+    },
+    {
+        "content": "<p>for example, let's say I am an application author and I spawn an OS subprocess and run some logic in there</p>",
+        "id": 475156859,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728256977
+    },
+    {
+        "content": "<p>that's an example of creating a very hard boundary where anything can go wrong and I can definitely recover from it, and the platform doesn't need to be customized to do that</p>",
+        "id": 475156899,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728257029
+    },
+    {
+        "content": "<p>however, the platform is in charge of whether to offer primitives for spawning processes</p>",
+        "id": 475157596,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728257334
+    },
+    {
+        "content": "<p>maybe a bit of relevant context I should have started with: in Elm, you can't publish a package with Elm's equivalent of a <code>crash</code> in it</p>",
+        "id": 475159210,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728258745
+    },
+    {
+        "content": "<p>so in Elm, if you really want to publish a package that has an \"unreachable\" state in it, you really do have to do one of the hacks</p>",
+        "id": 475159230,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728258769
+    },
+    {
+        "content": "<p>Elm applications have a reputation for approximately never crashing in practice, and I think this is part of the reason why: aside from mistakes (e.g. of course libraries can still overflow the stack or get into an infinite loop) you <em>really</em> have to go out of your way to have a library crash</p>",
+        "id": 475159295,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728258841
+    },
+    {
+        "content": "<p>compare this to, for example, <code>unwrap</code> in Rust - which I think would be a mistake to include in Roc, precisely because it makes it so easy to introduce an unnecessary crash</p>",
+        "id": 475159353,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728258874
+    },
+    {
+        "content": "<p>the outcome Elm has seen from not having a <code>crash</code> equivalent is a major reason that Roc did not have <code>crash</code> at first, and why I was hesitant to introduce it (but I did find the argument compelling, and continue to, that if you think it's going to be unreachable, but it actually is reached in practice somehow, it's definitely best to be able to at least include some context on what happened that you thought couldn't happen)</p>",
+        "id": 475159456,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728258965
+    },
+    {
+        "content": "<p>it's also a reason that I am so strongly resistant to adding recovery mechanisms in userspace: it seems like every ecosystem that has these gets <em>more</em> crashes in practice than the Elm ecosystem does</p>",
+        "id": 475159477,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728259003
+    },
+    {
+        "content": "<p>and I think a contributing factor there is that culturally it's not only okay, but <em>expected</em> in many languages to <code>throw</code> for error handling</p>",
+        "id": 475159550,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728259062
+    },
+    {
+        "content": "<p>and if it doesn't end up being caught, shrug, not my problem; someone else should have handled it</p>",
+        "id": 475159560,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728259080
+    },
+    {
+        "content": "<p>whereas in Elm, there is only one way to say \"it's someone else's job to handle this,\" which is <code>Result</code> (or some equivalent)</p>",
+        "id": 475159609,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728259106
+    },
+    {
+        "content": "<p>and that's the way I want it to be in Roc</p>",
+        "id": 475159619,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728259115
+    },
+    {
+        "content": "<p>in order to get the same \"applications essentially never crash in practice\" outcome that Elm has gotten, and which systems with try/catch (and Rust too) are extremely far away from getting</p>",
+        "id": 475159643,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728259148
+    },
+    {
+        "content": "<p>so this is also why my ordering of preferences is:</p>\n<ol>\n<li>Have <code>crash</code>, so if the inconceivable happens, at least there's a helpful message to explain wha happened</li>\n<li>If it ends up being overused, try to solve that by changing the culture and emphasizing that it really should be used almost never in library code</li>\n<li>If that doesn't work, consider banning it in the package index</li>\n<li>If that still doesn't work (e.g. people just start using direct URLs, or make a competing index), remove <code>crash</code> from the language</li>\n<li>Add a way to recover from <code>crash</code> in applications</li>\n</ol>",
+        "id": 475159785,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728259256
+    },
+    {
+        "content": "<p>because based on the experience of Elm vs every other language, I can't possibly see how <code>#5</code> would do anything other than explode the number of crashes that actually happen to real end users</p>",
+        "id": 475159828,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728259285
+    },
+    {
+        "content": "<p>if it did anything other than that, Roc would be the first language where that turned out to be true, so I'd be really curious to see why we should expect it to be different from all the others <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 475159874,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728259311
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475159828\">said</a>:</p>\n<blockquote>\n<p>because based on the experience of Elm vs every other language, I can't possibly see how <code>#5</code> would do anything other than explode the number of crashes that actually happen to real end users</p>\n</blockquote>\n<p>I like, that an Roc application can not recover from a crash. But there is a counter example. Go has <a href=\"https://go.dev/ref/spec#Handling_panics\">panic and recover</a>. The normal way in Go to handle errors is by returning an error-value. Many people do not like the way you have to handle errors in Go. But still, (nearly) nobody is reaching for panic and recover.</p>\n<p>I think the only time <code>recover</code> is used in Go is, when you are writing a framework and you do not expect your users to write high quality code. So you have to expect runtime-panics like zero division, nil pointer dereference or out of bound checks. In a context of Roc, the framework is the platform. So only the platform should use <code>recover</code>. This is already possible.</p>",
+        "id": 475212243,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1728282767
+    },
+    {
+        "content": "<p>If the pressure to add <code>recover</code> gets two high, then a way to add it could be, that you can only clean up your own mess with it. What I mean is, that it can only recover crashes from your own module/application but never above the module boundary.</p>\n<p>So you would implement unwind, but internally check the stack trace. If the stack-trace only contains entries from builtins or the module calling <code>recover</code>, then it returns a Result. But if the stack contains other modules, it continues the crash.</p>\n<p>With a recover like this, it would be impossible for library authors to expect there users to recover. But it would be possible to use it for your own code. Like</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>doSomeCalculateion = \\a, b, c -&gt;\n  # This could overflow or divide by zero\n  a * b / c\n\nexportedFunction = \\a, b, c -&gt;\n  recover (doSomeCalculation a b c)\n  |&gt; Result.mapErr \\_-&gt; OverflowOrZeroDivision\n</code></pre></div>",
+        "id": 475214958,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1728283454
+    },
+    {
+        "content": "<p>that's an interesting idea, although it seems likely that with that restriction there wouldn't be any demand for it in practice anyway! <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 475273207,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728299768
+    },
+    {
+        "content": "<p>Okay, I wasn't sure if you were implying that the database driver had to be integrated into the platform to give a robust experience. And yeah, having a platform per OS probably doesn't make sense, but what I was really going for was just a way to have shared primitives that you don't need to take responsibility for when forking a platform. Like you could have a Rust crate that defines a lot of common Roc operations (IO, panic handling, etc.), and then it would be easy to write your own platform by just calling out to that library for anything where you just want the \"standard\" behavior. This way you also get all the usual benefits of version tracking, and you don't have to worry about keeping your fork up to date.</p>",
+        "id": 475317883,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728313274
+    },
+    {
+        "content": "<p>ahh gotcha!</p>",
+        "id": 475318668,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728313480
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475159477\">sagde</a>:</p>\n<blockquote>\n<p>it's also a reason that I am so strongly resistant to adding recovery mechanisms in userspace: it seems like every ecosystem that has these gets <em>more</em> crashes in practice than the Elm ecosystem does</p>\n</blockquote>\n<p>I do agree it's nice that Elm libraries tend to not crash, but it's actually also something that makes me a bit nervous. Having worked for a number of years on a big and complicated Elm codebase, I know there will be times when you just end up in these branches, and the best thing you can really do is return some default value when it happens, because Elm doesn't give you tools to do better. So I don't think people would use their own custom stack overflow in general when they have to handle such a branch, but instead, I think the most common behavior is to just eat the failure, and try to keep going anyway. Which is also something I don't think you can really measure how often it happens across the ecosystem, so that's something of a ghost that's bothering me there.</p>",
+        "id": 475318982,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728313571
+    },
+    {
+        "content": "<p>Also, fun side note: this morning I got into work and the first thing I see is someone with a PR doing handling of stack overflow exceptions <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 475319380,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728313685
+    },
+    {
+        "content": "<p>I'm not sure how much I can say, so I'll be light on details, but we have a runtime that is executing queries on the JVM, and those can blow the stack. And we'd rather give the queries access to as much stack memory as possible, and recover when they exceed it, rather than limit how much stack they can use in the first place and not let them use the hardware to its full potential.</p>",
+        "id": 475320612,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728314064
+    },
+    {
+        "content": "<p>But anyway, summing up the current state of affairs:</p>\n<ul>\n<li>Roc code is not supposed to be able to deal with runtime <del>errors</del> crashes</li>\n<li>If you want custom stability boundaries, you need to implement a platform that matches your requirements</li>\n</ul>",
+        "id": 475323442,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728314859
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475323442\">said</a>:</p>\n<blockquote>\n<p>Roc code is not supposed to be able to deal with runtime errors</p>\n</blockquote>\n<p>I'd say something more like \"runtime crashes\" (errors in general are for <code>Result</code>!) but yeah <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 475324044,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728314982
+    },
+    {
+        "content": "<p>Fair enough <span aria-label=\"stuck out tongue\" class=\"emoji emoji-1f61b\" role=\"img\" title=\"stuck out tongue\">:stuck_out_tongue:</span></p>",
+        "id": 475324799,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728315123
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc/near/475318982\">said</a>:</p>\n<blockquote>\n<p>Having worked for a number of years on a big and complicated Elm codebase, I know there will be times when you just end up in these branches, and the best thing you can really do is return some default value when it happens, because Elm doesn't give you tools to do better. So I don't think people would use their own custom stack overflow in general when they have to handle such a branch, but instead, I think the most common behavior is to just eat the failure, and try to keep going anyway. Which is also something I don't think you can really measure how often it happens across the ecosystem, so that's something of a ghost that's bothering me there.</p>\n</blockquote>\n<p>I do think graceful recovery (when possible) is beneficial to user experience, although ideally it would be accompanied by logging so someone can find out it happened!</p>\n<p>Silently giving an incorrect answer, on the other hand (e.g. division by zero silently returning a zero and continuing as if nothing wrong had happened) is definitely bad, and I'd say worse than crashing</p>",
+        "id": 475324881,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728315134
+    },
+    {
+        "content": "<p>Yup, and those are the ones I’m worried about, because they can be really hard to spot and I think many people may not be aware enough of them. But anyway, that’s all just good arguments for why Roc does as it does today. I just wanted to be sure it’s not about stability at all costs <span aria-label=\"blush\" class=\"emoji emoji-1f60a\" role=\"img\" title=\"blush\">:blush:</span></p>",
+        "id": 475327659,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728315637
+    },
+    {
+        "content": "<p>cool, thanks for talking through all that! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 475329763,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728316136
+    },
+    {
+        "content": "<p>I appreciate your patience with it <span aria-label=\"heart\" class=\"emoji emoji-2764\" role=\"img\" title=\"heart\">:heart:</span></p>",
+        "id": 475329799,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728316146
+    },
+    {
+        "content": "<p>Likewise! It’s always nice to get to go through a subject in a thorough manner, when everyone is gracious enough to talk through rookie understandings<span aria-label=\"smiling face\" class=\"emoji emoji-263a\" role=\"img\" title=\"smiling face\">:smiling_face:</span></p>",
+        "id": 475375820,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728329044
+    },
+    {
+        "content": "<p>One example of this becoming an awkward fit I think is with GraphQL. GraphQL is most often used over HTTP, but it doesn’t need to be. HTTP is just one of many potential transports you can use for GraphQL. Because GraphQL is transport agnostic, it includes its own error handling mechanism. So ideally, if you have a webserver serving a GraphQL API, the GraphQL layer is actually the stability boundary. To have that be the case in Roc, you need a platform that is specifically for serving a GraphQL API with a webserver, as opposed to using a webserver platform where you just plug in a GraphQL library.</p>\n<p>It’s still not a huge deal, because these errors should be quite rare of course. But I do think it works as an example of having a stability boundary above the platform.</p>",
+        "id": 475383627,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728331286
+    },
+    {
+        "content": "<p>I think as long as you abstract away the protocol you could have a <code>basic-webserver</code> type platform that is separate from a GraphQL library. The library just will accept primitives that are protocol generic to build it's requests.</p>",
+        "id": 475416839,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728342235
+    },
+    {
+        "content": "<p>That said, <code>basic-webserver</code> may not enable websockets. So you may still need to switch platforms if you want to server graphql over websockets. But you should still be able to use a protocol agnostic graphql library either way.</p>",
+        "id": 475416984,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728342293
+    },
+    {
+        "content": "<p>I could be wrong, but my understanding is that websockets can be implemented on top of a normal TCP socket</p>",
+        "id": 475424044,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1728345196
+    },
+    {
+        "content": "<p>I think so, but I have never looked into it. Just trying to point out that whatever graphql is implemented on top of can be decoupled from a graphql library in roc. A platform doesn't need to support all protocols. The library doesn't need to be specialized to the protocol. Should be able to make it generic and flexible.</p>",
+        "id": 475425975,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728346341
+    },
+    {
+        "content": "<p>My point related to the topic was that the GraphQL layer is where you want to catch a crash though <span aria-label=\"blush\" class=\"emoji emoji-1f60a\" role=\"img\" title=\"blush\">:blush:</span></p>",
+        "id": 475469743,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728363815
+    },
+    {
+        "content": "<p>I don't actually understand that part. Why would graphql be catching the crash?</p>\n<p>Oh... you want to send the graphql equivalent of an http 500 status code if there is a crash. And you want to send it over whatever protocol the platform supports (http, websocket, etc)</p>",
+        "id": 475470147,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728364090
+    },
+    {
+        "content": "<p>Precisely! A GraphQL response should encode the error in its own format. GraphQL over HTTP will generally send errors as a HTTP 200 status for that reason for example.</p>",
+        "id": 475471085,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728364776
+    },
+    {
+        "content": "<p>Yeah, so to support this case in a generic form, you would at least need to be able to register what the crash response should be. Graphql could register a 200 message with the text:</p>\n<div class=\"codehilite\"><pre><span></span><code>{ &quot;errors&quot;: [{ &quot;message&quot;: &quot;Server error&quot; }]}\n</code></pre></div>",
+        "id": 475472282,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728365502
+    },
+    {
+        "content": "<p>Any webserver can serve both GraphQL and REST endpoints at the same time, so the error handling would to differentiate on which kind of endpoint was reached</p>",
+        "id": 475472983,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728365918
+    },
+    {
+        "content": "<p>yeah, would need to be path aware.</p>",
+        "id": 475473166,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728366009
+    },
+    {
+        "content": "<p>While this error handling would work in this case, this also reflects what I was trying to get at with platforms not being composable enough. That is, if a user has an existing webserver (based on any general web server platform like<code>basic-webserver</code>, <code>nea</code>, or something else) which doesn’t offer this kind of error handling, and they now want to serve GraphQL, they’ll need to fork the platform to do so. It’s completely reasonable for a platform author to not have this error handling in their web server still though. So it feels to me like this error handling should be application code, and not something platform authors have the only say in.</p>\n<p>Again, not a huge deal for this particular example, but it just makes my spidey sense tingle none the less <span aria-label=\"blush\" class=\"emoji emoji-1f60a\" role=\"img\" title=\"blush\">:blush:</span></p>",
+        "id": 475491993,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1728371511
+    }
+]

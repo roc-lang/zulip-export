@@ -1,0 +1,50 @@
+[
+    {
+        "content": "<p>Hey, <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span>! I know this is going back a loooong way, all the way to <a href=\"https://podcasts.apple.com/us/podcast/database-apocalypse/id1602572955?i=1000552676741\">episode 6</a>, but I have questions!</p>\n<p>Something about the description of pulling functionality out into Haskell stuck with me. I think it was the \"do the queries at the start, then the business logic, then return the queries to make changes\". It seems like something people who were used to monadic or task-based I/O and pure functional languages would think about things.</p>\n<p>I have a few questions (due to a crazy database/object store design that's growing in my mind and won't leave me alone, but that's another story):</p>\n<ul>\n<li>Did you have to know all the queries you wanted to make up-front, or could there be a back-and-forth? Like, could you query a user, find out they're an admin, and then do a different set of queries. Or did you have to do the set of all queries that could be relevant no matter which path the Haskell business logic took?</li>\n<li>Did the side-effects returned by the Haskell business logic include both DB mutations as well as RPCs, Kafka writes, etc?</li>\n<li>Could the side-effects be marked as atomic? How was failure handled? What if the DB had been mutated by a parallel request and the side-effects were no longer valid?</li>\n<li>Am I completely wrong about how the scheme worked? Or was it a guiding pattern rather than a rigorous boundary?</li>\n</ul>\n<p>To briefly motivate this, my coworker and I were batting ideas back and forth about a data store where things are rigorously split into two phases: in phase 1, you can ask for data via RPCs, object fetches, etc. but the main object being operated on is read-only. (I <em>think</em> it makes sense to let you have a back-and-forth, letting the results of earlier queries influence the choices you make for later ones. I imagine it as using Roc Tasks, for example.)</p>\n<p>As you make the calls to fetch data, the results are recorded. (This is kinda how Temporal works, allowing you to replay half-done actions deterministically). (In the probably common case that what you're doing is fetching another object, we could record just the (type, ID, version) tuple and save space.)</p>\n<p>In phase two, you get to run a deterministic function on the main object, taking as input (a) the things you asked for in phase 1, (b) the parameters given to you by your caller, and (c) the current state of the main object being operated on. You return the new state…</p>\n<p>…plus some side effects. Which I'm very fuzzy on. I feel like if I had truly grokked Haskell I/O, I might have better mental models to reason about what is likely to be sufficient in terms of types of side-effects. But I haven't, so I'm asking questions here, since the <em>pattern</em> described in the podcast episode has a similar shape, at least in broad strokes. <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span></p>\n<p>Sorry to necro an ancient episode, but as I said, it really has stuck with me for months/years now!</p>",
+        "id": 450302108,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1720564345
+    },
+    {
+        "content": "<p>haha it's all good! <span class=\"user-mention\" data-user-id=\"477725\">@Jasper Woudenberg</span> want to chime in, since you were directly involved in building it? <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 450314825,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720570313
+    },
+    {
+        "content": "<p>Hiya! It's fun to hear back about this!</p>\n<p>We did know all the queries we wanted to make up front. Leading up to writing our first Haskell code, we spent quite a bit of time instrumenting our Rails code to let us know where in the code we were querying particular tables. Once we were confident we found all the spots, we made it so an exception would be thrown if those tables were queried anywhere else, to prevent changes from accidentally introducing new queries to these tables.</p>\n<p>We didn't really know upfront this would happen, but it turned out that the branching for these endpoints was such that with relatively little effort we could make the Rails code fit this broad pattern:</p>\n<ul>\n<li>First fetch of data *</li>\n<li>Some conditional logic - request might stop here</li>\n<li>Second fetch of data *</li>\n<li>Some processing</li>\n<li>Storing data *</li>\n</ul>\n<p>That was our starting point when we started adding Haskell. We then went ahead and modified the steps marked with a * above to be calls to Haskell instead.</p>\n<p>First we needed the Haskell code to reach parity with the Rails code it was replacing. This was the phase in which Haskell would return the side effects to run to Rails, so that Rails could run the database queries of the migrated-to-Haskell portion of the code in the same transaction as the queries of the still-in-Rails portion of the code. Kafka was not a part of the architecture yet at this point, I don't remember us doing any side-effects other than database queries in this phase.</p>\n<p>Once we had ported all the querying logic to Haskell, we built then flipped a switch to let Haskell run those queries directly, instead of passing side effects to run back to Rails. Then we started to build the replacement storage backend using Kafka, entirely in Haskell.</p>\n<p>I hope that clarifies some things, let me know if you've other questions!</p>\n<p>The database sounds cool too! Reading your description, my first thought is \"Elm Architecture - The Database\". I could imagine it might be useful as a persistence layer for elm-architecture-like applications. Is that a use you were thinking of as well?</p>",
+        "id": 450353376,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1720592124
+    },
+    {
+        "content": "<p>I <em>really</em> like \"Elm Architecture - The Database\". That makes it so clear. I'd already been thinking of the phase 1 queries as Tasks…</p>\n<p>One last question: once Ruby handed the side effects back to Haskell at the end, could they fail? Or did you ensure it was only things that could succeed?</p>",
+        "id": 450483066,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1720624774
+    },
+    {
+        "content": "<p>I think we probably passed back failures as well, but don't remember with 100% certainty. Reason why I think we did is that when we swapped from 'send queries to ruby for execution' to 'let Haskell do the queries', we didn't need to change our application logic, we could flip the switch inside our internal 'database query library'. So failures were something we definitely handle in Haskell after that switch, which means it must have been part of our query api already when we were doing side effects in Rails.</p>",
+        "id": 450500061,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1720628225
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"478939\">@Michael Glass</span> might know</p>",
+        "id": 450508475,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720630539
+    },
+    {
+        "content": "<p>I mean, there are two systems, the haskell system could always fail. </p>\n<p>We didn't model failure states so closely. I think just a couple of common expected failures  (not found, unauthorized). What we did do was catch and report all failures to ensure we didn't have to spend so much time worrying about that edge of things.</p>",
+        "id": 450549688,
+        "sender_full_name": "Michael Glass",
+        "timestamp": 1720641161
+    },
+    {
+        "content": "<p>(~similarly, in most systems that use, e.g. postgres, we don't spend a lot of time worrying if postgres is up or not. Failures at that edge mean the whole system is broken)</p>",
+        "id": 450549797,
+        "sender_full_name": "Michael Glass",
+        "timestamp": 1720641201
+    }
+]

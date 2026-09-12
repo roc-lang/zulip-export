@@ -1,0 +1,158 @@
+[
+    {
+        "content": "<p>for the dev backends (and the repl), I need to see the assembly of the setjmp and longjmp functions for all architectures that we support. I have this working on x86_64 linux, and a basic implementation for windows (untested). But I don't have an arm machine, so it would be helpful if someone on one of the newer macs could follow the instructions below and provide the output of the <code>disassemble --frame</code> calls. </p>\n<p>take this c file, save it as <code>setlongjmp.c</code> and run <code>zig build-exe setlongjmp.c -lc</code></p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"cp\">#include</span><span class=\"w\"> </span><span class=\"cpf\">&lt;stdlib.h&gt;</span>\n<span class=\"cp\">#include</span><span class=\"w\"> </span><span class=\"cpf\">&lt;stdio.h&gt;</span>\n<span class=\"cp\">#include</span><span class=\"w\"> </span><span class=\"cpf\">&lt;setjmp.h&gt;</span>\n\n<span class=\"kt\">jmp_buf</span><span class=\"w\"> </span><span class=\"n\">env</span><span class=\"p\">;</span>\n\n<span class=\"kt\">int</span><span class=\"w\"> </span><span class=\"nf\">foo</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"kt\">int</span><span class=\"w\"> </span><span class=\"n\">i</span><span class=\"p\">;</span>\n\n<span class=\"w\">  </span><span class=\"n\">i</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">setjmp</span><span class=\"p\">(</span><span class=\"n\">env</span><span class=\"p\">);</span>\n<span class=\"w\">  </span><span class=\"n\">printf</span><span class=\"p\">(</span><span class=\"s\">\"i = %d</span><span class=\"se\">\\n</span><span class=\"s\">\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">i</span><span class=\"p\">);</span>\n\n<span class=\"w\">  </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">i</span><span class=\"w\"> </span><span class=\"o\">!=</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"p\">;</span>\n\n<span class=\"w\">  </span><span class=\"n\">longjmp</span><span class=\"p\">(</span><span class=\"n\">env</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">2</span><span class=\"p\">);</span>\n\n<span class=\"w\">  </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n\n<span class=\"kt\">int</span><span class=\"w\"> </span><span class=\"nf\">main</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">foo</span><span class=\"p\">();</span>\n\n<span class=\"w\">    </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>This should give you a <code>setlongjmp</code> executable.</p>\n<p>next, run <code>lldb setlongjmp</code> and execute these commands</p>\n<div class=\"codehilite\"><pre><span></span><code>b foo\nr\ndisassemble --frame\n</code></pre></div>\n<p>so we set a breakpoint on the \"foo\" function, run (till we hit that breakpoint) and then disassemble the frame. Here is what that looks like on my machine.</p>\n<div class=\"codehilite\"><pre><span></span><code>&gt; lldb setlongjmp\n(lldb) target create &quot;setlongjmp&quot;\nCurrent executable set to &#39;/home/folkertdev/c/setlongjmp&#39; (x86_64).\n(lldb) b foo\nBreakpoint 1: where = setlongjmp`foo + 6 at setlongjmp.c:10:7, address = 0x0000000000201e26\n(lldb) r\nProcess 45115 launched: &#39;/home/folkertdev/c/setlongjmp&#39; (x86_64)\nProcess 45115 stopped\n* thread #1, name = &#39;setlongjmp&#39;, stop reason = breakpoint 1.1\n    frame #0: 0x0000000000201e26 setlongjmp`foo at setlongjmp.c:10:7\n   7    int foo() {\n   8      int i;\n   9\n-&gt; 10     i = setjmp(env);\n   11     printf(&quot;i = %d\\n&quot;, i);\n   12\n   13     if (i != 0) return 1;\n(lldb) disassemble --frame\nsetlongjmp`foo:\n    0x201e20 &lt;+0&gt;:  push   rbp\n    0x201e21 &lt;+1&gt;:  mov    rbp, rsp\n    0x201e24 &lt;+4&gt;:  push   rbx\n    0x201e25 &lt;+5&gt;:  push   rax\n-&gt;  0x201e26 &lt;+6&gt;:  lea    rdi, [rip + 0x5073]       ; env\n    0x201e2d &lt;+13&gt;: call   0x20238c                  ; setjmp\n    0x201e32 &lt;+18&gt;: mov    ebx, eax\n    0x201e34 &lt;+20&gt;: lea    rdi, [rip - 0x1c6b]\n    0x201e3b &lt;+27&gt;: xor    eax, eax\n    0x201e3d &lt;+29&gt;: mov    esi, ebx\n    0x201e3f &lt;+31&gt;: call   0x2023b7                  ; printf\n    0x201e44 &lt;+36&gt;: test   ebx, ebx\n    0x201e46 &lt;+38&gt;: je     0x201e54                  ; &lt;+52&gt; at setlongjmp.c:15:3\n    0x201e48 &lt;+40&gt;: mov    eax, 0x1\n    0x201e4d &lt;+45&gt;: add    rsp, 0x8\n    0x201e51 &lt;+49&gt;: pop    rbx\n    0x201e52 &lt;+50&gt;: pop    rbp\n    0x201e53 &lt;+51&gt;: ret\n    0x201e54 &lt;+52&gt;: lea    rdi, [rip + 0x5045]       ; env\n    0x201e5b &lt;+59&gt;: mov    esi, 0x2\n    0x201e60 &lt;+64&gt;: call   0x202364                  ; longjmp\n    0x201e65 &lt;+69&gt;: ud2b\n</code></pre></div>\n<p>next run</p>\n<div class=\"codehilite\"><pre><span></span><code>ni\nsi\ndisassemble --frame\n</code></pre></div>\n<p>next instruction to bring us to the <code>call</code> to setjmp, then step instruction to step into that call.<br>\nyou may need more/fewer <code>ni</code> calls, because the assembly format is different. here we need one to go from</p>\n<div class=\"codehilite\"><pre><span></span><code>-&gt;  0x201e26 &lt;+6&gt;:  lea    rdi, [rip + 0x5073]       ; env\n    0x201e2d &lt;+13&gt;: call   0x20238c                  ; setjmp\n</code></pre></div>\n<p>to</p>\n<div class=\"codehilite\"><pre><span></span><code>    0x201e26 &lt;+6&gt;:  lea    rdi, [rip + 0x5073]       ; env\n-&gt;  0x201e2d &lt;+13&gt;: call   0x20238c                  ; setjmp\n</code></pre></div>\n<p>so just keep using <code>ni</code> and <code>disassemble</code> until the arrow points at the call to setjmp</p>\n<p>now, the <code>disassemble --frame</code> should show the implementation of setjmp.</p>\n<div class=\"codehilite\"><pre><span></span><code>setlongjmp`setjmp:\n-&gt;  0x20238c &lt;+0&gt;:  mov    qword ptr [rdi], rbx\n    0x20238f &lt;+3&gt;:  mov    qword ptr [rdi + 0x8], rbp\n    0x202393 &lt;+7&gt;:  mov    qword ptr [rdi + 0x10], r12\n    0x202397 &lt;+11&gt;: mov    qword ptr [rdi + 0x18], r13\n    0x20239b &lt;+15&gt;: mov    qword ptr [rdi + 0x20], r14\n    0x20239f &lt;+19&gt;: mov    qword ptr [rdi + 0x28], r15\n    0x2023a3 &lt;+23&gt;: lea    rdx, [rsp + 0x8]\n    0x2023a8 &lt;+28&gt;: mov    qword ptr [rdi + 0x30], rdx\n    0x2023ac &lt;+32&gt;: mov    rdx, qword ptr [rsp]\n    0x2023b0 &lt;+36&gt;: mov    qword ptr [rdi + 0x38], rdx\n    0x2023b4 &lt;+40&gt;: xor    eax, eax\n    0x2023b6 &lt;+42&gt;: ret\n</code></pre></div>\n<p>now run</p>\n<div class=\"codehilite\"><pre><span></span><code>finish\n</code></pre></div>\n<p>to exit the setjmp function. Now we need to <code>ni</code> again until we get to the call to longjmp.</p>\n<div class=\"codehilite\"><pre><span></span><code>    0x201e4d &lt;+45&gt;: add    rsp, 0x8\n    0x201e51 &lt;+49&gt;: pop    rbx\n    0x201e52 &lt;+50&gt;: pop    rbp\n    0x201e53 &lt;+51&gt;: ret\n    0x201e54 &lt;+52&gt;: lea    rdi, [rip + 0x5045]       ; env\n    0x201e5b &lt;+59&gt;: mov    esi, 0x2\n-&gt;  0x201e60 &lt;+64&gt;: call   0x202364                  ; longjmp\n    0x201e65 &lt;+69&gt;: ud2b\n</code></pre></div>\n<p>then again </p>\n<div class=\"codehilite\"><pre><span></span><code>si\ndisassemble --frame\n</code></pre></div>\n<p>which gives the code for longjmp</p>\n<div class=\"codehilite\"><pre><span></span><code>(lldb) di --frame\nsetlongjmp`longjmp:\n-&gt;  0x202364 &lt;+0&gt;:  xor    eax, eax\n    0x202366 &lt;+2&gt;:  cmp    esi, 0x1\n    0x202369 &lt;+5&gt;:  adc    eax, esi\n    0x20236b &lt;+7&gt;:  mov    rbx, qword ptr [rdi]\n    0x20236e &lt;+10&gt;: mov    rbp, qword ptr [rdi + 0x8]\n    0x202372 &lt;+14&gt;: mov    r12, qword ptr [rdi + 0x10]\n    0x202376 &lt;+18&gt;: mov    r13, qword ptr [rdi + 0x18]\n    0x20237a &lt;+22&gt;: mov    r14, qword ptr [rdi + 0x20]\n    0x20237e &lt;+26&gt;: mov    r15, qword ptr [rdi + 0x28]\n    0x202382 &lt;+30&gt;: mov    rsp, qword ptr [rdi + 0x30]\n    0x202386 &lt;+34&gt;: jmp    qword ptr [rdi + 0x38]\n    0x202389 &lt;+37&gt;: int3\n    0x20238a &lt;+38&gt;: int3\n</code></pre></div>",
+        "id": 379813733,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690640326
+    },
+    {
+        "content": "<p>Cool, I'll have a look. I'm on an M2 mac.</p>",
+        "id": 379897019,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690668817
+    },
+    {
+        "content": "<p>First snag, just investigating now </p>\n<div class=\"codehilite\"><pre><span></span><code>% zig build-exe setlongjmp.c -lc\n\n\nthread 1025751 panic: Darwin is handled separately via std.zig.system.darwin module\nUnable to dump stack trace: debug info stripped\nzsh: abort      zig build-exe setlongjmp.c -lc\n</code></pre></div>",
+        "id": 379923337,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690683665
+    },
+    {
+        "content": "<p>Looks related to <a href=\"https://github.com/roc-lang/roc/issues/5590\">#5590</a> which <span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> added</p>",
+        "id": 379923489,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690683770
+    },
+    {
+        "content": "<p>Got it working with zig <code>0.10.1</code>.</p>\n<p>I get the following; which I don't think is what you want, </p>\n<div class=\"codehilite\"><pre><span></span><code>setlongjmp`setjmp:\n-&gt;  0x100000670 &lt;+0&gt;: adrp   x16, 8\n    0x100000674 &lt;+4&gt;: ldr    x16, [x16, #0x10]\n    0x100000678 &lt;+8&gt;: br     x16\n</code></pre></div>\n<p>ChatGPT tells me the following</p>\n<blockquote>\n<p>This code is an example of an indirect function call. Instead of calling setjmp directly, it computes the address of the function at runtime and then calls it. This is commonly used for function pointers and virtual methods, but in this case it's probably being used because the actual setjmp code is part of the system libraries, not the setlongjmp binary itself. The address of setjmp needs to be looked up at runtime, so the binary includes code to do that lookup and then branch to the correct location.</p>\n</blockquote>\n<p>I feel like I need zig to compile so that the assembly doesn't lookup or use a system library. I'm not sure but will continue investigating.</p>",
+        "id": 379927027,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690686173
+    },
+    {
+        "content": "<p>what if you follow the call to the indirect branch (i.e. where it goes after <code>0x100000678</code>)? you can do this by typing <code>step</code> a few times.</p>\n<p>on macos setjmp/longjmp is linked in at runtime so it might be visible until then.</p>",
+        "id": 379927630,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1690686503
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>(lldb) si\nProcess 98397 stopped\n* thread #1, stop reason = instruction step into\n    frame #0: 0x0000000100000678 setlongjmp`setjmp + 8\nsetlongjmp`setjmp:\n-&gt;  0x100000678 &lt;+8&gt;: br     x16\n    0x10000067c:      adrp   x17, 8\n    0x100000680:      add    x17, x17, #0x18           ; =0x18\n    0x100000684:      stp    x16, x17, [sp, #-0x10]!\n(lldb) si\nProcess 98397 stopped\n* thread #1, stop reason = instruction step into\n    frame #0: 0x00000001a2244b24\n-&gt;  0x1a2244b24: pacibsp\n    0x1a2244b28: stp    x21, x30, [x0]\n    0x1a2244b2c: mov    x21, x0\n    0x1a2244b30: orr    w0, wzr, #0x1\n(lldb) disassemble --frame\n-&gt;  0x1a2244b24: pacibsp\n    0x1a2244b28: stp    x21, x30, [x0]\n    0x1a2244b2c: mov    x21, x0\n    0x1a2244b30: orr    w0, wzr, #0x1\n    0x1a2244b34: mov    x1, #0x0\n    0x1a2244b38: add    x2, x21, #0xb0            ; =0xb0\n    0x1a2244b3c: bl     0x1a22495ec\n    0x1a2244b40: mov    x0, x21\n</code></pre></div>",
+        "id": 379927828,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690686650
+    },
+    {
+        "content": "<p>I'll try it on my pi</p>",
+        "id": 380012220,
+        "sender_full_name": "Anton",
+        "timestamp": 1690718382
+    },
+    {
+        "content": "<p>Is this the code for setjmp (at the end)?<br>\n<a href=\"/user_uploads/22008/hvabVnDpZErNh5WlVAU1NUKP/output.txt\">output.txt</a></p>",
+        "id": 380060196,
+        "sender_full_name": "Anton",
+        "timestamp": 1690729890
+    },
+    {
+        "content": "<p>not obviously, to me</p>",
+        "id": 380061616,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690730251
+    },
+    {
+        "content": "<p>maybe? but I don't really recognize the structure</p>",
+        "id": 380061663,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690730265
+    },
+    {
+        "content": "<p>the the pi, you should actually just have <code>objdump</code> right?</p>",
+        "id": 380061827,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690730297
+    },
+    {
+        "content": "<p>Yeah, I tried that, but I believe it just shows a reference to the dynamically linked code:<br>\n<a href=\"/user_uploads/22008/KgbLTM-THWx8IJYxHaeYuIko/disassem.s\">disassem.s</a></p>",
+        "id": 380067095,
+        "sender_full_name": "Anton",
+        "timestamp": 1690731391
+    },
+    {
+        "content": "<p>eh, does musl work on that platform?</p>",
+        "id": 380067188,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690731418
+    },
+    {
+        "content": "<p>zig has some options</p>\n<div class=\"codehilite\"><pre><span></span><code>  &quot;aarch64_be-linux-musl&quot;,\n  &quot;aarch64-linux-musl&quot;,\n  &quot;armeb-linux-musleabi&quot;,\n  &quot;armeb-linux-musleabihf&quot;,\n  &quot;arm-linux-musleabi&quot;,\n  &quot;arm-linux-musleabihf&quot;,\n</code></pre></div>",
+        "id": 380067359,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690731454
+    },
+    {
+        "content": "<p>not quite sure which one but <code>zig targets | grep \"musl\"</code> gives a bunch</p>",
+        "id": 380067409,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690731471
+    },
+    {
+        "content": "<p>I'll give those a try</p>",
+        "id": 380067603,
+        "sender_full_name": "Anton",
+        "timestamp": 1690731507
+    },
+    {
+        "content": "<p>aarch64-linux-musl worked, is this it?</p>\n<div class=\"codehilite\"><pre><span></span><code>0000000000211570 &lt;__setjmp&gt;:\n  211570:   a9005013    stp x19, x20, [x0]\n  211574:   a9015815    stp x21, x22, [x0, #16]\n  211578:   a9026017    stp x23, x24, [x0, #32]\n  21157c:   a9036819    stp x25, x26, [x0, #48]\n  211580:   a904701b    stp x27, x28, [x0, #64]\n  211584:   a905781d    stp x29, x30, [x0, #80]\n  211588:   910003e2    mov x2, sp\n  21158c:   f9003402    str x2, [x0, #104]\n  211590:   6d072408    stp d8, d9, [x0, #112]\n  211594:   6d082c0a    stp d10, d11, [x0, #128]\n  211598:   6d09340c    stp d12, d13, [x0, #144]\n  21159c:   6d0a3c0e    stp d14, d15, [x0, #160]\n  2115a0:   d2800000    mov x0, #0x0                    // #0\n  2115a4:   d65f03c0    ret\n</code></pre></div>",
+        "id": 380071406,
+        "sender_full_name": "Anton",
+        "timestamp": 1690732433
+    },
+    {
+        "content": "<p>that looks plausible</p>",
+        "id": 380071700,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690732502
+    },
+    {
+        "content": "<p>And <code>longjmp</code>:</p>\n<div class=\"codehilite\"><pre><span></span><code>0000000000211534 &lt;_longjmp&gt;:\n  211534:   a9405013    ldp x19, x20, [x0]\n  211538:   a9415815    ldp x21, x22, [x0, #16]\n  21153c:   a9426017    ldp x23, x24, [x0, #32]\n  211540:   a9436819    ldp x25, x26, [x0, #48]\n  211544:   a944701b    ldp x27, x28, [x0, #64]\n  211548:   a945781d    ldp x29, x30, [x0, #80]\n  21154c:   f9403402    ldr x2, [x0, #104]\n  211550:   9100005f    mov sp, x2\n  211554:   6d472408    ldp d8, d9, [x0, #112]\n  211558:   6d482c0a    ldp d10, d11, [x0, #128]\n  21155c:   6d49340c    ldp d12, d13, [x0, #144]\n  211560:   6d4a3c0e    ldp d14, d15, [x0, #160]\n  211564:   7100003f    cmp w1, #0x0\n  211568:   1a9f1420    csinc   w0, w1, wzr, ne  // ne = any\n  21156c:   d61f03c0    br  x30\n</code></pre></div>",
+        "id": 380071875,
+        "sender_full_name": "Anton",
+        "timestamp": 1690732543
+    },
+    {
+        "content": "<p>Arm with it's fancy instructions for storing/loading 2 registers at the same time</p>",
+        "id": 380071965,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1690732563
+    },
+    {
+        "content": "<p>well that is where I'm out of my depth</p>",
+        "id": 380072123,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690732600
+    },
+    {
+        "content": "<p>But yeah, those look right to me</p>",
+        "id": 380072195,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1690732624
+    },
+    {
+        "content": "<p>guess I'll have to get a 64-bit pi somehow (also useful for PTP, at work so I guess I can justify it)</p>",
+        "id": 380072333,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690732670
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> how likely is it that this would also work on mac. Is the calling convention (much) different?</p>",
+        "id": 380072472,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690732709
+    },
+    {
+        "content": "<p>Calling convention is mostly the same. May just work, but I think there is one register treated differently....would need to double check</p>",
+        "id": 380072748,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1690732796
+    }
+]

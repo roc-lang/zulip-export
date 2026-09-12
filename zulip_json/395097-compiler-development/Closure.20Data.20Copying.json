@@ -1,0 +1,176 @@
+[
+    {
+        "content": "<p>At some point we need to really investigate closure data copying in Roc. Especially to compare it to either a manual implementation in c/zig or to compare it to rust async (or similar).</p>\n<p>I am still kinda stunned that in an example like rocci-bird, essentially all of the code size seems to come from simply copying data from one closure to the next. Which probably also means that a significant portion of the runtime is just copying data between closures.</p>\n<p>It fundamentally feels off to me. Maybe we are simply generating in a way that llvm can't optimize. May we need to unify our closure captures different to reduce data movement. I'm really not sure, but this really feels off to me.</p>",
+        "id": 436573398,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714597788
+    },
+    {
+        "content": "<p>I wonder how hard it would be to start passing them around by reference if they're over a certain size</p>",
+        "id": 436582047,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714602171
+    },
+    {
+        "content": "<p>I don't think that's the issue.</p>\n<p>I think the issue is that essentially every new await captures slightly different data (cause new local variables). Instead of having space and just adding the single new variable to the closure capture, we create a totally new closure capture with a slightly different layout.</p>\n<p>So like</p>\n<div class=\"codehilite\"><pre><span></span><code>state = SomeBigRecord\n\n# captures {state}\nclickedMouse = getMouse!\n\n# captures {state, clickedMouse}\npressedW = getKey! &#39;w&#39;\n\nactivateAbility = calc state pressedW\n\nif clickedMouse &amp;&amp; activateAbility then\n    # captures {state, activateAbility}\n    changeColorPalette!\n\nnextState =\n    if activateAbility then\n        # something that uses state ...\n    else\n        # something that uses state ...\n\n# captures {nextState}\ndisplayState! nextState\n\nTask.ok nextState\n</code></pre></div>\n<p>Optimally, this would be one shared closure capture. It would have enough space for everything and state would never move around.</p>\n<p>Instead we make 4 unique closure captures:</p>\n<ol>\n<li>Store state into first</li>\n<li>Load state from first and store into second</li>\n<li>Store clickedMouse into second</li>\n<li>Load state from second store into third</li>\n<li>Store activateAbility into third</li>\n<li>Store nextState into forth</li>\n</ol>\n<hr>\n<p>Tons of copying and data movement</p>",
+        "id": 436584811,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714603692
+    },
+    {
+        "content": "<p>ahhhh interesting</p>",
+        "id": 436584895,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714603752
+    },
+    {
+        "content": "<p>not saying we should do this, but if we had nested closures capture strictly more as they got more and more nested, then: </p>\n<ul>\n<li>the capture itself would be bigger</li>\n<li>much less copying would happen</li>\n</ul>",
+        "id": 436585427,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714604050
+    },
+    {
+        "content": "<p>and that would mainly affect tasks, parsers, etc.</p>",
+        "id": 436585447,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714604063
+    },
+    {
+        "content": "<p>Due to each cluster capture being is own alloca and everything being nested, I think we also have all 4 closure captures alive for a really long time(so much more memory use than sharing even in the naive way).</p>",
+        "id": 436585710,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714604216
+    },
+    {
+        "content": "<p>sure</p>",
+        "id": 436589081,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714605921
+    },
+    {
+        "content": "<p>but some amount of this is inherent to async I/O</p>",
+        "id": 436589126,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714605959
+    },
+    {
+        "content": "<p>like the state in between operations has to be saved somewhere, and that either results in a big chunk of memory that lives a long time, or else copying between minimally-sized chunks of memory</p>",
+        "id": 436589245,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714606015
+    },
+    {
+        "content": "<p>I guess there could be some cleverness to try to reduce that, e.g. choosing layouts where values that refer to the same thing will be in the same place from one capture to the next, so if we're able to reuse that memory then we don't need to copy those particular fields because they're already in the right place</p>",
+        "id": 436589455,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714606111
+    },
+    {
+        "content": "<p>I don't know how hard of a problem that is to automate (seems like the type of thing where there's an off-the-shelf algorithm somewhere which optimizes it) but it could be a helpful exercise to try to find a manual organization of the rocci bird captures that would minimize copying and memory usage</p>",
+        "id": 436589883,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714606347
+    },
+    {
+        "content": "<p>like if you were doing all of it by hand in Zig or something, what's the most efficient layout and copying strategy you could come up with</p>",
+        "id": 436589913,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714606377
+    },
+    {
+        "content": "<p>For sure, some of this is inherent. That said, I think we currently use more memory overall and do a bunch of copying.</p>",
+        "id": 436591478,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714607296
+    },
+    {
+        "content": "<p>But yeah, let me try to port to zig while still using an async io style with capturing lambas. not sure when I will have time, but should be a really good exercise in what we could theoretically generate.</p>",
+        "id": 436591554,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714607354
+    },
+    {
+        "content": "<p>As a note, I think the <code>Layout variants</code> section of this post on rust async await is the optimization we are fundamentally missing:<br>\n<a href=\"https://docs.roblab.la/asyncawait/posts/optimizing-await-1/\">https://docs.roblab.la/asyncawait/posts/optimizing-await-1/</a></p>",
+        "id": 436918419,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714753614
+    },
+    {
+        "content": "<p>ahh yes!</p>",
+        "id": 436952484,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714767245
+    },
+    {
+        "content": "<p>that's exactly the optimization I was talking about</p>",
+        "id": 436952496,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714767252
+    },
+    {
+        "content": "<p>with this part:</p>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Closure.20Data.20Copying/near/436589455\">said</a>:</p>\n<blockquote>\n<p>I guess there could be some cleverness to try to reduce that, e.g. choosing layouts where values that refer to the same thing will be in the same place from one capture to the next, so if we're able to reuse that memory then we don't need to copy those particular fields because they're already in the right place</p>\n</blockquote>",
+        "id": 436952526,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714767273
+    },
+    {
+        "content": "<p>so I guess not only is it optimizable, but rustc already implemented it! <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 436952555,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714767292
+    },
+    {
+        "content": "<p>Yeah, in the roc context. It would mean collapsing the state of nested closures that tail call each other. Which is most often seen in Task.await. but also result.try and similar.</p>",
+        "id": 436961611,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714771807
+    },
+    {
+        "content": "<p>In current roc, llvm often manages to inline these chains, but still creates a state for every single closure and copies around tons of data.</p>",
+        "id": 436961742,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1714771872
+    },
+    {
+        "content": "<p>I learned some new things about this. First of all, the original post is <a href=\"https://tmandry.gitlab.io/blog/posts/optimizing-await-1/\">https://tmandry.gitlab.io/blog/posts/optimizing-await-1/</a> and it has some followup posts.</p>\n<p>Also, this problem is still not fully solved in the rust compiler. The latest attempt is <a href=\"https://github.com/rust-lang/rust/pull/120168\">https://github.com/rust-lang/rust/pull/120168</a> which seems like it's another step in the right direction, but notes that there are still cases that are not covered.</p>",
+        "id": 438184875,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1715520508
+    },
+    {
+        "content": "<p>what's upvar?</p>",
+        "id": 438190531,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715526112
+    },
+    {
+        "content": "<p>not much how bout u</p>",
+        "id": 438191346,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1715526877
+    },
+    {
+        "content": "<p>Upvar is a variable captured by a closure</p>",
+        "id": 438191709,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715527234
+    },
+    {
+        "content": "<p>There are a couple ideas to resolve this that would likely work well.<br>\nOne is to more aggressively specialize unique lambdas to the same type. Part of the issue is that lambda sets monomorphize very aggressively, so two closures may have similar (but not the same) layouts, and be forced into different types. This can be seen for example with nested <code>Task.await</code> calls, where each nested <code>Task.await</code> is a separate closure. It may be better to force all nested calls to be the same closure type.</p>",
+        "id": 438195054,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715530796
+    },
+    {
+        "content": "<p>Another is to store closures that are additive as a linked list. If you indicate in the closure type the name of a symbol that the closure references (which is already done, at least at the type-checking level), you can avoid unpacking and repacking closure sets by instead representing each closure set as a linked list of records. When you need to add new data, append to the linked list. This used to be an approach for closure compilation, though I don't know how popular it is today.</p>",
+        "id": 438195239,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715530928
+    },
+    {
+        "content": "<p>Yeah, I think the nested closures being the same type would be a huge win and fix this issue for the most part.</p>",
+        "id": 438197138,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715532788
+    }
+]

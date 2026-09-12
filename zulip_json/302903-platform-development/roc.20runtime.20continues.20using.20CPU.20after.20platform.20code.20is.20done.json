@@ -1,0 +1,80 @@
+[
+    {
+        "content": "<p>I'm working on a little platform in Zig for static site generation. After it generates the site it starts a webserver to serve it. What surprised me was that the webserving portion was using a significant amount of CPU, even when it was doing nothing while waiting for requests.</p>\n<p>At first I thought I was maybe doing something silly like an infinite loop in Zig, but I think it's some Roc internals using the CPU, even though the platform is not doing anything at that time. I was curious if anyone might know what's going on.</p>\n<p>I've used samply to get some information on what was happening (I think that was a tip from Brendan at one point? Great tool!). It shows that Roc is spending a lot of time in <code>roc_repl_expect::run::ExpectMemory::wait_for_child</code>(see screenshot below). My constant refreshing to excercise the fileserver doesn't even register, so I really think it's this function that's doing a lot of work for some reason, was wondering if anyone knew why.</p>\n<p><a href=\"/user_uploads/22008/miI4y0yDIKrYIx2AQV42MDqD/screenshot_2024-11-11T2020560100.png\">screenshot_2024-11-11T20:20:56+01:00.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/miI4y0yDIKrYIx2AQV42MDqD/screenshot_2024-11-11T2020560100.png\" title=\"screenshot_2024-11-11T20:20:56+01:00.png\"><img data-original-dimensions=\"1774x624\" src=\"/user_uploads/thumbnail/22008/miI4y0yDIKrYIx2AQV42MDqD/screenshot_2024-11-11T2020560100.png/840x560.webp\"></a></div><p>I also took a look at the compiler code. I think the <code>expect_child</code> bit it's running is here:<br>\n<a href=\"https://github.com/roc-lang/roc/blob/b7c2cb084e15a56320e652ad3c77fdb8262bc1a4/crates/repl_expect/src/run.rs#L540\">https://github.com/roc-lang/roc/blob/b7c2cb084e15a56320e652ad3c77fdb8262bc1a4/crates/repl_expect/src/run.rs#L540</a></p>\n<p>There is a <code>loop</code> there, so that might explain why I'm seeing a lot of CPU usage, but I'm not sure why I'd end up there. Any <code>expect</code>'s would have completed long ago.</p>\n<p>Note: I'm running my Roc code as a script using <code>roc run</code> (the platform is designed to work that way).</p>\n<p>I'd be grateful for any ideas!</p>",
+        "id": 481793175,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731353533
+    },
+    {
+        "content": "<p>Can you build roc from source and use a debug build of the compiler?</p>",
+        "id": 481797007,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731354172
+    },
+    {
+        "content": "<p>It seems strange that the repl is even involved at all. But hard to say withiut seeing your setup.</p>",
+        "id": 481797191,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731354244
+    },
+    {
+        "content": "<p>The stack trace is in the image</p>",
+        "id": 481797465,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731354362
+    },
+    {
+        "content": "<p>Apparently <code>roc_dev_native</code> calls into that</p>",
+        "id": 481797548,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731354381
+    },
+    {
+        "content": "<p>Probably a bug</p>",
+        "id": 481797557,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731354386
+    },
+    {
+        "content": "<p>Reading the code a bit, I think the call into repl code is intentional. My understanding now: because <code>roc run</code> runs Roc in dev mode we want <code>expect</code>s to trigger. We fork to have one process running the actual Roc code, another to do bookkeeping with relation to expects that the first encounters.</p>\n<p>This reuses some logic used by the repl, I imagine because the repl splits into a repl process and a compile+run process.</p>\n<p>My guess is that the logic that gets <code>expect</code> updates from the child polls the child process in a non-blocking loop, which runs one CPU core as fast as it can. I can take a look at maybe blocking that thread while waiting for child updates.</p>\n<p>Another thing I wonder is if it'd be possible/valuable to combine these in a single process in some way. The way I understand <code>roc run</code> it's not just for development, it's also what scripts run in by default (like ones with a shebang). I don't know if spawning multiple processes when you run a script might break expectations in some ways when using Roc as an alternative for, say, a bash script.</p>",
+        "id": 481818921,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731363520
+    },
+    {
+        "content": "<blockquote>\n<p>scripts run in by default (like ones with a shebang).</p>\n</blockquote>\n<p>I thought they just run <code>roc script.roc</code> not using the subcommand</p>",
+        "id": 481821658,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1731364710
+    },
+    {
+        "content": "<p>That's true, I thought those were the same thing but don't remember why I think that <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 481821747,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1731364769
+    },
+    {
+        "content": "<p>Probably this really is just the bug that expects are done in an outdated way today</p>",
+        "id": 481825724,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731366601
+    },
+    {
+        "content": "<p>They need to be updated to a platform function</p>",
+        "id": 481825787,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731366611
+    },
+    {
+        "content": "<p>So that whole system should get ripped out</p>",
+        "id": 481825859,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1731366637
+    },
+    {
+        "content": "<p>It's possible that <code>roc run</code> still tries to run the program even if there are compile errors, I recommend using <code>roc dev</code>. Not sure if that is affecting your issue but it's something to eliminate.</p>",
+        "id": 481903511,
+        "sender_full_name": "Anton",
+        "timestamp": 1731404536
+    }
+]

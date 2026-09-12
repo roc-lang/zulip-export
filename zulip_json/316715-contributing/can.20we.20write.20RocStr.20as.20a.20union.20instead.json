@@ -1,0 +1,44 @@
+[
+    {
+        "content": "<p>the RocStr in every platform example (e.g. examples/python-interop/demo.c) have the following definition:</p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">RocStr</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"kt\">uint8_t</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">bytes</span><span class=\"p\">;</span>\n<span class=\"w\">  </span><span class=\"kt\">size_t</span><span class=\"w\"> </span><span class=\"n\">len</span><span class=\"p\">;</span>\n<span class=\"w\">  </span><span class=\"kt\">size_t</span><span class=\"w\"> </span><span class=\"n\">capacity</span><span class=\"p\">;</span>\n<span class=\"p\">};</span>\n</code></pre></div>\n<p>this made reading the small string optimization stuff in the init function a bit confusing to read, would it be possible to write it as this instead:</p>\n<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">SmallStr</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"kt\">uint8_t</span><span class=\"w\"> </span><span class=\"n\">bytes</span><span class=\"p\">[</span><span class=\"k\">sizeof</span><span class=\"p\">(</span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">RocBytes</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">-</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"p\">];</span>\n<span class=\"w\">  </span><span class=\"kt\">uint8_t</span><span class=\"w\"> </span><span class=\"n\">len</span><span class=\"p\">;</span><span class=\"w\"> </span><span class=\"c1\">// maybe this should be size_t? idk</span>\n<span class=\"p\">};</span>\n\n<span class=\"k\">union</span><span class=\"w\"> </span><span class=\"nc\">RocStr</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">RocBytes</span><span class=\"w\"> </span><span class=\"n\">bytes</span><span class=\"p\">;</span>\n<span class=\"w\">  </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">SmallStr</span><span class=\"w\"> </span><span class=\"n\">smallStr</span><span class=\"p\">;</span>\n<span class=\"p\">};</span>\n</code></pre></div>\n<p>I'm not that familiar with C and unions, so I'm not even sure this would work but just wanted to ask if anyone know if it's doable</p>\n<p>also: where do these definitions come from? (RocStr, RocBytes etc.)</p>",
+        "id": 405665463,
+        "sender_full_name": "Pei Yang Ching",
+        "timestamp": 1701609602
+    },
+    {
+        "content": "<p>You're right that this would be a more accurate reflection of how RocStr works!</p>\n<p>Out of 30 <code>host.c</code> files, 3 of them define <code>RocStr</code>. But all they're doing is finding the length and the pointer to the characters. You could refactor that to use the more detailed type but it wouldn't be a huge benefit for such a tiny amount of code. I guess the people who wrote it just didn't bother. But if you want to improve it, go for it!</p>\n<p>These structures have to be defined separately in each of the languages we use.<br>\nThe Roc compiler understands them internally.<br>\nThe Rust definitions are in <code>crates/roc_std</code><br>\nThere is a Zig definition in <code>crates/compiler/builtins/bitcode/src</code></p>\n<p>Rust is the best-supported host language at the moment. We have the <code>roc_std</code> crate and also automatic glue code generation using <code>roc glue</code> and <code>crates/glue/src/RustGlue.roc</code>. So that's what \"full support\" looks like for a host language.</p>\n<p>We would like to have the same level of support for other host languages as we do for Rust. I've started working on C++ <a href=\"https://github.com/brian-carroll/roc-std-cpp/\">here</a>. Nobody is looking at C. It's quite hard once you get past RocStr because there are no generics.</p>\n<p>Also, we would like to move away from copying and pasting the same code over and over in host examples, and centralise it instead. That has been discussed somewhere in another Zulip thread recently. Probably under \"compiler development\".</p>",
+        "id": 405671049,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1701614164
+    },
+    {
+        "content": "<p>thanks for the detailed answer! I'll give it a go when I have time, reading that the first<br>\ntime around without knowing how small string works made me question my eyes haha</p>",
+        "id": 405907002,
+        "sender_full_name": "Pei Yang Ching",
+        "timestamp": 1701721958
+    },
+    {
+        "content": "<p>Note, it is technically a union of 3 different representation:</p>\n<ul>\n<li>Big Str</li>\n<li>Small Str</li>\n<li>Seamless Slice Str</li>\n</ul>\n<p>As such, both the highest bit of length and of capacity can be part of what determines the union values. So it isn't exactly nice to represent a  union either due to those bits being mixed in.</p>",
+        "id": 405907278,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701722114
+    },
+    {
+        "content": "<p>Really need 63 bit numbers in some of the union cases to make them accurate. That or of course, mask them on all uses.</p>",
+        "id": 405907359,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701722159
+    },
+    {
+        "content": "<p>Given this, I think that is why we just use a struct based layout</p>",
+        "id": 405907446,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701722183
+    },
+    {
+        "content": "<p>So in packed bits on a 64bit target, the 3 layouts are:</p>\n<div class=\"codehilite\"><pre><span></span><code>SmallStr : {bytes: [23; u8], constOne: u1, len: u7}\n\nBigStr: {bytes: *u8, len: u64,  cap: u64}\n# Note, len and cap always have highest bit as zero in this case\n\nSeamlessSlice:  {bytes: *u8, constOne: u1, len: u63,  constZero: u1, refCountPtr: upper63BitsOfPointer}\n# To get real refcount pointer just left shift the refCountPtr by 1.\n</code></pre></div>",
+        "id": 405908377,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701722635
+    }
+]

@@ -1,0 +1,98 @@
+[
+    {
+        "content": "<p>I'd like to remove the file extensions from package URLs, and instead use only HTTP headers and the contents of the file to determine how they're compressed.</p>\n<p>One motivation for this is that with the current design, it's impossible to upgrade to a better compression format in the future without breaking package URLs. For example, someone might want to first upload with gzip to get a bugfix or security release out as fast as possible, because brotli compression can take awhile, and then re-uploading later with brotli at maximum compression, without breaking anyone.</p>\n<p>Also, some hosting providers or CDNs might offer built-in brotli compression, so having to pre-compress with brotli when publishing takes unnecessarily long and is redundant with the compression the hosting provider will do automatically.</p>",
+        "id": 407771843,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702486692
+    },
+    {
+        "content": "<p>I think both the HTTP headers <em>and</em> the contents of the file should be used because some hosting providers don't let you customize the HTTP headers - e.g. GitHub Releases doesn't natively support brotli and doesn't give you a way to customize headers, and that's how almost all Roc packages are likely to be hosted, so if we didn't support doing the compression yourself (via <code>roc bundle</code>), then we just wouldn't get that compression at all in the most common case</p>",
+        "id": 407772090,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702486785
+    },
+    {
+        "content": "<p>a challenge is that although it's trivial to detect if the file is compressed with gzip (all gzip streams begin with the bytes <code>0x1F</code> <code>0x8B</code> specifically to identify them as being gzipped), the same is not true of brotli, which doesn't have signature bytes at the beginning as part of its specification</p>",
+        "id": 407772472,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702486887
+    },
+    {
+        "content": "<p>however, there's <a href=\"https://github.com/dsnet/compress/blob/39efe44ab707ffd2c1ef32cc7dbebfe584718686/doc/brotli-framing-format.md#field-descriptions\">a proposal to introduce this</a> which includes 4 initial signature bytes (<code>0x91</code>, <code>0x19</code>, <code>0x62</code>, <code>0x66</code>) that are not valid brotli, and therefore can't be mistaken for header-less brotli</p>",
+        "id": 407772717,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702486949
+    },
+    {
+        "content": "<p>that looks like a well-reasoned proposal, but the most popular Rust crate for brotli <a href=\"https://github.com/dropbox/rust-brotli/blob/c0c36218b2cbf7a24d23acd165fb18b9e9fb6242/src/enc/brotli_bit_stream.rs#L2805C9-L2805C21\">uses a different one</a> (<code>0xE1</code>, <code>0x97</code>)</p>",
+        "id": 407773663,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702487236
+    },
+    {
+        "content": "<p>also Mark Adler, coauthor of gzip, proposed (apparently at Google's request) a standard for this back in 2016, <a href=\"https://github.com/google/brotli/issues/298#issuecomment-172561983\">which also used a different magic number</a> (<code>0xCE</code>, <code>0xB2</code>, <code>0xB2</code>, <code>0x81</code>)</p>",
+        "id": 407773877,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702487292
+    },
+    {
+        "content": "<p>what's even more confusing to me is that it seems like all of these are using incorrect magic numbers? <a href=\"https://www.rfc-editor.org/rfc/rfc7932#section-9.1\">The brotli RFC says</a> that the stream header (which seems to be the very beginning of the brotli stream) begins with 7 bits, and:</p>\n<blockquote>\n<p>Note that bit pattern 0010001 is invalid and must not be used.</p>\n</blockquote>\n<p>so that means the two bit patterns that are invalid for the first 8 bytes are those 7 invalid bits plus either 0 or 1 as the eighth bit, which works out to be <code>0x22</code> and <code>0x23</code></p>",
+        "id": 407775948,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702488037
+    },
+    {
+        "content": "<p>If the hash of the archive is then only checked after compression that does mean a file can be replaced with a zip bomb.</p>",
+        "id": 407776026,
+        "sender_full_name": "Anton",
+        "timestamp": 1702488070
+    },
+    {
+        "content": "<p>true, but I think we need to defend against zip bombs in general because someone might just publish a new release of a package that's a zip bomb</p>",
+        "id": 407776554,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702488247
+    },
+    {
+        "content": "<p>given all that, I don't like the idea of trying to use signature bytes to identify a brotli-encoded file. It seems like they don't have that sorted out yet, and anything we pick is likely to be incompatible with a future official signature.</p>",
+        "id": 407778942,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702489189
+    },
+    {
+        "content": "<p>a few possible designs come to mind here:</p>\n<ol>\n<li>Only support gzip for now, wait until brotli has an official signature to identify it. This means downloads will be some amount larger, because brotli generally compresses better than gzip.</li>\n<li>Look for the magic gzip bytes, and if they aren't there, assume brotli. A problem with this is that I don't know whether the magic gzip bytes happen to be valid brotli bytes, which could lead to misidentifying some brotli-encoded files as gzip, leading to an error when decoding as gzip failed.</li>\n<li>Have some Roc-specific way to encode inside the file the information about how it's compressed. One idea for how to do that is to have it be a tarball containing 1 file, and that file has a file extension we can check. That works, but it adds ~1.5K to every download because that's the minimum size of a tarball.</li>\n</ol>",
+        "id": 407779409,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702489374
+    },
+    {
+        "content": "<p><a href=\"https://blog.cloudflare.com/results-experimenting-brotli/\">https://blog.cloudflare.com/results-experimenting-brotli/</a> says that based on Cloudflare's benchmarks:</p>\n<blockquote>\n<p>On average, Brotli at the maximal quality setting produces 1.19X smaller results than [gzip] at the maximal quality.</p>\n</blockquote>",
+        "id": 407780722,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702489863
+    },
+    {
+        "content": "<p>also maybe file extensions are just the way to go for now <span aria-label=\"stuck out tongue\" class=\"emoji emoji-1f61b\" role=\"img\" title=\"stuck out tongue\">:stuck_out_tongue:</span></p>",
+        "id": 407784864,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702491141
+    },
+    {
+        "content": "<p>Another potential security issue comes to mind (but might apply regardless): compression implementations often have security problems of their own, such as remote code execution. Does the decision of a pre-compression vs post-compression hash change our susceptibility to such attacks?</p>",
+        "id": 408116068,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1702619288
+    },
+    {
+        "content": "<p>Also, iiuc, zstd was designed with similar goals to brotli, but often has slightly better compression ratios, and perhaps wider adoption. It definitely has a magic byte sequence at the beginning.</p>",
+        "id": 408116262,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1702619424
+    },
+    {
+        "content": "<p>It is kinda interesting that brotli is targeted for web, but zstd is not really. I wonder if there is any meaningful difference because of that.</p>",
+        "id": 408123899,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702622830
+    }
+]

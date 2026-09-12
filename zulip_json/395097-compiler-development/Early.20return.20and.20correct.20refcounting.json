@@ -1,0 +1,218 @@
+[
+    {
+        "content": "<p>So I'm working on the <code>return</code> keyword that allows for early returns from functions, and unblocks the <code>try</code> keyword implementation. Besides adding tests, <a href=\"https://github.com/roc-lang/roc/pull/7173\">the PR is ready</a>... but for one issue: I'm not yet handling refcounting correctly on early returns (<a href=\"https://github.com/roc-lang/roc/blob/7518a2c5ab0a13a69f357ba85a65f68c87b909f1/crates/compiler/mono/src/ir.rs#L5885-L5900\">I'm just returning naively</a>).</p>\n<p>Though I'd normally try to fully investigate myself before pulling in help, I'm not finding things obvious enough to figure out how to make the right change without delaying the PR a good bit, so I'd love some help on at least the strategy to do this. AFAICT there are two ways to go about this:</p>\n<ol>\n<li>Convert functions with early returns to SSA, and use the existing code. In a GC language, this would be annoying (see nested ifs with deeply nested returns) but not terrible. Refcounting makes that approach less desirable since each instance can't just \"joinpoint\" to the final return, as each return has incremented the refcounts of different sets of vars. However, this doesn't need much more understanding of the Roc compiler than I already have.</li>\n<li>Track which refcounted variables have been created/had their refcount incremented up to each early return, and add dec/decref instructions for each of those values with each return statement. Presumably we do this somewhere already for end-of-function-body returns, but I've not found it yet in the ~30k lines of <code>crates/compiler/mono</code>.</li>\n</ol>\n<p>Does anyone with backend experience have thoughts on which of those options would be better/easier, and potentially could help me with the high-level plan? Or maybe there's another option? Any help is welcome.</p>\n<p><span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> I've heard that you may have some expertise here? If not, no worries.</p>",
+        "id": 478671610,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729761920
+    },
+    {
+        "content": "<p>Logging off for the day, but my current concept is to implement the equivalent of <a href=\"https://github.com/roc-lang/roc/blob/06996d88f29589e189843171cf74187a45cc777e/crates/compiler/can/src/scope.rs#L18\">roc_can::scope::Scope</a> in <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/mono/src/inc_dec.rs#L411\">insert_inc_dec_operations_proc</a> to track which refcounted vars need to be decremented before early returning. I'll try it tomorrow night if I get time</p>",
+        "id": 478677050,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729763721
+    },
+    {
+        "content": "<p>First off, I would check whether you need to handle anything for refcounting. I'm not sure that anything breaks with early returns but maybe it does.</p>",
+        "id": 478721861,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1729777756
+    },
+    {
+        "content": "<p>If it does the simplest approach which i would suggest is converting</p>\n<div class=\"codehilite\"><pre><span></span><code>foo = \\x -&gt;\n  n = if x then\n    return 1\n  else\n    2\n\n  n + 3\n</code></pre></div>\n<p>to</p>\n<div class=\"codehilite\"><pre><span></span><code>foo = \\x -&gt;\n  if x then\n    1\n  else\n    n = 2\n    n + 3\n</code></pre></div>",
+        "id": 478722065,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1729777800
+    },
+    {
+        "content": "<p>I'm not sure that scales, e.g. what if you do it in the middle of a <code>when</code> branch? or, even worse, a <code>when</code> guard? (we might want to disallow that <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span>)</p>",
+        "id": 478722344,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729777874
+    },
+    {
+        "content": "<p>Currently, return is only parsed as a statement, meaning anywhere we parse blocks that <code>allow_defs</code> it'll work, and anywhere else is a parse error. Aka it doesn't work for <code>if</code> conditions, <code>when</code> predicates, or <code>when</code> guards</p>",
+        "id": 478769181,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729791839
+    },
+    {
+        "content": "<p>oh I meant in one of the <code>when</code> branches, not the conditional</p>",
+        "id": 478772940,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729793329
+    },
+    {
+        "content": "<p>If we don't allow early return in <code>when</code> branches, then <code>try</code> won't work in <code>when</code> branches</p>",
+        "id": 478773031,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729793364
+    },
+    {
+        "content": "<p>especially if it's a <code>when</code> inside another <code>when</code></p>",
+        "id": 478773040,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729793367
+    },
+    {
+        "content": "<p>yeah my point is that I think the \"translate <code>return</code> to sugar\" idea runs into common situations where it doesn't work pretty quickly</p>",
+        "id": 478773101,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729793394
+    },
+    {
+        "content": "<p>Oh, I agree!</p>",
+        "id": 478773158,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729793404
+    },
+    {
+        "content": "<p>I guess the core issue is that we alway deal with refcounting for an entire block. With return, you have to be able to deal with refcounting for a partial block</p>",
+        "id": 478773272,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729793454
+    },
+    {
+        "content": "<p>Yep</p>",
+        "id": 478773286,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729793460
+    },
+    {
+        "content": "<p>This means that order of variable definition matters</p>",
+        "id": 478773301,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729793466
+    },
+    {
+        "content": "<p>that's already true for other reasons though <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 478773360,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729793497
+    },
+    {
+        "content": "<p>I think we still toposort our variables at some point</p>",
+        "id": 478773398,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729793517
+    },
+    {
+        "content": "<p>So I don't think order matters today even though it probably should</p>",
+        "id": 478773473,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729793531
+    },
+    {
+        "content": "<p>I guess purity inference may change this?</p>\n<p>With <code>!</code> desugaring to await, order kinda mattered due to all of the secret lambdas enforcing ordering.</p>",
+        "id": 478773629,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729793613
+    },
+    {
+        "content": "<p>Anyway, we probably just need a statement by statement build up of refcounted lifetimes that can be used anytime a return is created. If no return is hit, we just do full refcount handling at the end of the block. If a return is hit, we do a partial refcount handling before actually running the return</p>",
+        "id": 478773823,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729793685
+    },
+    {
+        "content": "<p>We form an SCC graph for defs and sort here: <a href=\"https://github.com/roc-lang/roc/blob/06996d88f29589e189843171cf74187a45cc777e/crates/compiler/can/src/def.rs#L2003\">https://github.com/roc-lang/roc/blob/06996d88f29589e189843171cf74187a45cc777e/crates/compiler/can/src/def.rs#L2003</a></p>",
+        "id": 478773893,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729793713
+    },
+    {
+        "content": "<p>That's my thought as well</p>",
+        "id": 478773966,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729793751
+    },
+    {
+        "content": "<p>yeah we need to stop reordering them</p>",
+        "id": 478774246,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729793860
+    },
+    {
+        "content": "<p>that's already true in isolation today <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 478774333,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729793887
+    },
+    {
+        "content": "<p>That'll happen with the canonicalization rewrite, right? unless we wanna do it earlier</p>",
+        "id": 478774379,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729793906
+    },
+    {
+        "content": "<p>yeah, it could happen then, or earlier - either way</p>",
+        "id": 478774388,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729793914
+    },
+    {
+        "content": "<p>Wouldn't be bad to do that first to keep the changes smaller</p>",
+        "id": 478774413,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729793924
+    },
+    {
+        "content": "<p>I think we still need to reorder function defs actually</p>",
+        "id": 478774421,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729793927
+    },
+    {
+        "content": "<p>but not non-functions</p>",
+        "id": 478774445,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729793931
+    },
+    {
+        "content": "<p>although that gets a bit tricky in the sense that they shouldn't be reordered earlier than when things they close over are defined</p>",
+        "id": 478774566,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729793983
+    },
+    {
+        "content": "<p>I thought we only planned to reorder top level functions.</p>",
+        "id": 478775788,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729794489
+    },
+    {
+        "content": "<p>But maybe mutually recursive lambdas with closures shouldn't work? I'm not actually sure they are really important to make work</p>",
+        "id": 478775844,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729794517
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Early.20return.20and.20correct.20refcounting/near/478775788\">said</a>:</p>\n<blockquote>\n<p>I thought we only planned to reorder top level functions.</p>\n</blockquote>\n<p>oh yeah I think this is right...I forget where we talked about reordering, but I think there was a thread somewhere</p>",
+        "id": 478777333,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729795153
+    },
+    {
+        "content": "<p>This?</p>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/395097-compiler-development/topic/shadowing.20functions/near/442502567\">said</a>:</p>\n<blockquote>\n<p>I guess that's the simplest design because the rule is basically \"you have to define a value before you use it, except top-level values can be defined in any order and used in any order\"</p>\n</blockquote>",
+        "id": 478777865,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729795346
+    },
+    {
+        "content": "<p>Okay, after much fiddling with <code>test_mono</code>, it seems that <span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> was correct and the refcounting is working even with nested returns. I added two test cases, one for nested if and the other for nested when, and they both seem to be working correctly.</p>\n<p>It might be good to get an extra review, but yeah, this PR is ready for review!</p>",
+        "id": 478847149,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729836213
+    },
+    {
+        "content": "<p>I'll double check that I have all the tests I want, and then move on to implementing <code>try</code></p>",
+        "id": 478847427,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729836374
+    },
+    {
+        "content": "<p>Yeah, tests look good to me. Moving on to <code>try</code></p>",
+        "id": 478851381,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729838695
+    }
+]

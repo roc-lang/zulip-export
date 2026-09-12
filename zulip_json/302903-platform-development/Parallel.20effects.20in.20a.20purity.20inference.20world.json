@@ -1,0 +1,110 @@
+[
+    {
+        "content": "<p>If you assume, that you have a platform, that could call effects in parallel, for example send to http-requests at the same time. How could you call this from roc?</p>\n<p>Of cause, you could create an effect like <code>doTwoHttpRequests : Request, Request -&gt; (Response, Response)</code>, but I want to do it more generic, so it not just works on Request, but on all Effects that do IO, like reading a file and sending a Request at the same time. </p>\n<p>I mean something similar to <a href=\"https://package.elm-lang.org/packages/elm/core/latest/Platform-Cmd#batch\">Cmd.batch</a> in elm.</p>\n<p>I don't think that <code>List.forEach!</code> can help here, since it would require Roc to start the greenthread instead of letting the platform handle it. </p>\n<p>Before purity inference, Roc would have created lambdas for each effectful function and return them at once, then the platform could have called each lambda in parallel. But with purity inference, the platform gets called immediately. So the platform can not know, that <code>[doStuff1!, doStuff2!, doStuff3!] |&gt; List.forEach!</code> is actually one call and each effect should be called in parallel but returned when all are finished.</p>\n<p>Before purity inference, the idea was, that Roc returns tags and the platform handles them like a state machine. I can see, how parallel effects where possible in this world.</p>\n<p>Is there a plan/story, how Roc can do parallel effects?</p>",
+        "id": 493171283,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1736672740
+    },
+    {
+        "content": "<p>The documentation on <a href=\"https://www.roc-lang.org/builtins/List#forEach!\">List.forEach!</a> has this example:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>List.forEach! [\"Alice\", \"Bob\", \"Charlie\"] \\name -&gt;\n    createAccount! name\n    log! \"Account created\"\n</code></pre></div>\n<p>Could the current or a future version of Roc support something like <code>List.forEachParallel!</code> that gives all the effectful functions to the platform, so the platform can call them in parallel, if it supports it.</p>",
+        "id": 493171774,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1736673067
+    },
+    {
+        "content": "<p>The current plan: <a class=\"message-link\" href=\"/#narrow/channel/304641-ideas/topic/stackful.20coroutines.20in.20hosts/near/473001620\">#ideas &gt; stackful coroutines in hosts @ 💬</a></p>",
+        "id": 493172111,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736673296
+    },
+    {
+        "content": "<p>In short, instead of implementing state machines under the name of effect interpreters</p>",
+        "id": 493172137,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736673324
+    },
+    {
+        "content": "<p>We just steal golang's green thread model</p>",
+        "id": 493172145,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736673339
+    },
+    {
+        "content": "<p>And run stuff that way</p>",
+        "id": 493172156,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736673347
+    },
+    {
+        "content": "<p>Also see <a href=\"https://gist.github.com/rtfeldman/ac6e3a6da7714b9f8d03e50865403637#asyncawait-without-the-async-or-the-await\">https://gist.github.com/rtfeldman/ac6e3a6da7714b9f8d03e50865403637#asyncawait-without-the-async-or-the-await</a></p>",
+        "id": 493172167,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1736673357
+    },
+    {
+        "content": "<p>It depends on the platform to do a lot of the implementation work, but then your <code>List.for_each_parallel!</code> would work pretty easily with a platform that supports such stackful coroutines</p>",
+        "id": 493172296,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1736673430
+    },
+    {
+        "content": "<p>Thank you for linking the other thread. I missed that. I will ask my question there to keep the discussion in one place.</p>",
+        "id": 493176213,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1736676664
+    },
+    {
+        "content": "<p>Yeah, I think the easier answer is that platforms will need to have some sort of threading solution (green or otherwise) that roc can interact with via effects</p>",
+        "id": 493203391,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736700254
+    },
+    {
+        "content": "<p>Also would be valid for a platform to expose something that takes a lists of commands and runs them in parallel under the hood</p>",
+        "id": 493203423,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736700294
+    },
+    {
+        "content": "<p>From <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> <a href=\"#narrow/channel/304641-ideas/topic/stackful.20coroutines.20in.20hosts/near/493203715\">answer in the other thread</a> I understand, that the platform has to return a lambda to the host, that the host can call in another thread.</p>\n<p>I am trying, if this works in the current version of roc. I getting errors and I am not sure, if I am doing something wrong or if this is currently not possible.</p>\n<p>The platform has the effect <code>do_foo! : Box ({} =&gt; {}) =&gt; {}</code>. It is called like <code>Host.do_foo! Box.box(\\_ -&gt; Host.stdout_line!(\"in the box\"))</code>. The platform also exposes this function to the host:</p>\n<div class=\"codehilite\"><pre><span></span><code>doer! : Box ({} =&gt; {}) =&gt; {}\ndoer! = \\boxed_fn! -&gt;\n    fn! = Box.unbox boxed_fn!\n    fn!({})\n</code></pre></div>\n<p>For the moment, there is no concurrency or threading involved. I just try to run the lambda with this <code>doer!</code> function. But I only get: <code>panic: a Lambda Set is empty. Most likely there is a type error in your program.</code></p>\n<p>I can see in the emitted llvm-ir, that Roc exports <code>roc__doer_0_caller(ptr %0, ptr %1, ptr %2)</code> and <code>roc__doer_1_exposed(ptr %0)</code>. I tested it with both of them.</p>\n<p><code>roc_doer_1_exposed</code> calls the following function, which seems to always panics. The given argument does not seem to be relevant</p>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"vg\">@_str_literal_14773762520492002118</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">private</span><span class=\"w\"> </span><span class=\"k\">unnamed_addr</span><span class=\"w\"> </span><span class=\"k\">constant</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"m\">81</span><span class=\"w\"> </span><span class=\"k\">x</span><span class=\"w\"> </span><span class=\"kt\">i8</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"k\">c</span><span class=\"s\">\"\\00\\00\\00\\00\\00\\00\\00\\00a Lambda Set is empty. Most likely there is a type error in your program.\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span>\n\n<span class=\"k\">define</span><span class=\"w\"> </span><span class=\"k\">internal</span><span class=\"w\"> </span><span class=\"k\">fastcc</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"vg\">@\"_doer!_4fe2c0cee861629d2ef04c3f725dba5813b563598f88e6fe57cefd4dd1a133\"</span><span class=\"p\">(</span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%\"boxed_fn!\"</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!51</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"nl\">entry:</span>\n<span class=\"w\">  </span><span class=\"nv\">%const_str_store</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"nv\">%str.RocStr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span>\n<span class=\"w\">  </span><span class=\"nv\">%result_value</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"p\">{},</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span>\n<span class=\"w\">  </span><span class=\"k\">call</span><span class=\"w\"> </span><span class=\"k\">fastcc</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@Box_unbox_99e2ebbd98e8a2a4c7ed9bd71d205d9f7b5d7e7a9ddb68dab65f2ad1c2198b</span><span class=\"p\">(</span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%\"boxed_fn!\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%result_value</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!52</span>\n<span class=\"w\">  </span><span class=\"k\">store</span><span class=\"w\"> </span><span class=\"nv\">%str.RocStr</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"k\">getelementptr</span><span class=\"w\"> </span><span class=\"k\">inbounds</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"vg\">@_str_literal_14773762520492002118</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"m\">8</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"m\">73</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"m\">73</span><span class=\"w\"> </span><span class=\"p\">},</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%const_str_store</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!52</span>\n<span class=\"w\">  </span><span class=\"k\">call</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@roc_panic</span><span class=\"p\">(</span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%const_str_store</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i32</span><span class=\"w\"> </span><span class=\"m\">0</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!52</span>\n<span class=\"w\">  </span><span class=\"k\">unreachable</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!52</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p><code>roc__doer_0_caller</code> calls the following function, that also always panics:</p>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"k\">define</span><span class=\"w\"> </span><span class=\"k\">internal</span><span class=\"w\"> </span><span class=\"k\">fastcc</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"vg\">@_48_f0adb8f180253d489b50ac5199522556362f583929ee5e65c919bd9ed2bc82f</span><span class=\"p\">({}</span><span class=\"w\"> </span><span class=\"nv\">%\"50\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%\"#arg_closure\"</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!141</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"nl\">entry:</span>\n<span class=\"w\">  </span><span class=\"nv\">%const_str_store</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"nv\">%str.RocStr</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span>\n<span class=\"w\">  </span><span class=\"k\">store</span><span class=\"w\"> </span><span class=\"nv\">%str.RocStr</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"k\">getelementptr</span><span class=\"w\"> </span><span class=\"k\">inbounds</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">i8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"vg\">@_str_literal_14773762520492002118</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"m\">8</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"m\">73</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"m\">73</span><span class=\"w\"> </span><span class=\"p\">},</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%const_str_store</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!142</span>\n<span class=\"w\">  </span><span class=\"k\">call</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@roc_panic</span><span class=\"p\">(</span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%const_str_store</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i32</span><span class=\"w\"> </span><span class=\"m\">0</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!142</span>\n<span class=\"w\">  </span><span class=\"k\">unreachable</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!142</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>It seems, that Roc generates code for <code>doer!</code>, that will always panic. Is this correct? Is there a way in today's Roc, that allows me to return a lambda and call it?</p>",
+        "id": 493967933,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1736958819
+    },
+    {
+        "content": "<p>The short answer is that this isn't supported today.</p>\n<p>The medium length answer is that I don't think boxing of closures and passing them back into roc works. You probably need to handle the closure unboxed and handle calling it directly from the platform. That said, it still wouldn't be necessarily safe to use in a multithreaded context. It might capture variables from the other thread. The variables do not have atomic refcounting and would potentially hit use after free or double free bugs.</p>",
+        "id": 493970034,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736959353
+    },
+    {
+        "content": "<p>I'm also not fully sure if effects generate all the necessary closure infrastructure. Directly exposed functions should, but not sure about effects.</p>",
+        "id": 493970222,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736959404
+    },
+    {
+        "content": "<p>Yea. I know about not having atomic refcouting. But wanted to see, what is currently possible, and how far I can go.</p>\n<p>Without the boxing in <code>doer!</code>, the code does not compile. It crashes with</p>\n<div class=\"codehilite\"><pre><span></span><code>thread &#39;main&#39; panicked at /home/ossi/.cargo/git/checkouts/inkwell-946411d814d2c9f8/89e06af/src/values/enums.rs:325:13:\nFound StructValue(StructValue { struct_value: Value { name: &quot;&quot;, address: 0x5bc65f74d1f8, is_const: false, is_null: false, is_undef: false, llvm_value: &quot;{} %1&quot;, llvm_type: &quot;{}&quot; } }) but expected PointerValue variant\nstack backtrace:\n   0: rust_begin_unwind\n   1: core::panicking::panic_fmt\n   2: inkwell::values::enums::BasicValueEnum::into_pointer_value\n   3: roc_gen_llvm::llvm::build::expose_function_to_host_help_c_abi\n   4: roc_gen_llvm::llvm::build::build_procedures_help\n   5: roc_gen_llvm::llvm::build::build_procedures\n   6: roc_build::program::gen_from_mono_module\n   7: roc_build::program::build_loaded_file\n   8: roc_build::program::build_file\n   9: roc_cli::build\n  10: roc::main\n</code></pre></div>\n<p>I thought, that the box is necessary, since all arguments need a known size.</p>\n<p>Is there another way to call the lambda?</p>",
+        "id": 493972272,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1736959731
+    },
+    {
+        "content": "<p>My guess is that we don't generate closure callers for effects. Theoretically you would remove <code>doer!</code>, unbox the lambda passed to <code>do_foo!</code> and roc would generate a closure callers for the lambda passed to foo, but I bet closure callers are only generated for closures return directly to the host.</p>",
+        "id": 493983396,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736963118
+    },
+    {
+        "content": "<p>Yes. I already tried this. There is no _caller function generated for the <code>do_foo!</code> effect.</p>\n<p>Do you think there is a chance, I can convert the lamda to a go function and call it? I think this seems unlikely.</p>\n<p>Or can I somehow manually implement the <code>do_foo_caller</code> function? Maybe in zig and then load the zig implementation as a shared library?</p>",
+        "id": 493985705,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1736963872
+    },
+    {
+        "content": "<p>Yeah, I think it isn't supported then.</p>",
+        "id": 493991093,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1736965683
+    }
+]

@@ -1,0 +1,140 @@
+[
+    {
+        "content": "<p>Question on <code>roc build</code> with the interpreter. It basically should be the same as <code>roc run</code> except that it will</p>\n<ol>\n<li>build the roc module env and serialize it via llvm to a global constant in an object file</li>\n<li>use a different version of the interpreter shim that loads from this global instead of from shared memory</li>\n<li>link all of those together into a standalone binary</li>\n</ol>\n<p>Does this sound correct?</p>",
+        "id": 547144901,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761498048
+    },
+    {
+        "content": "<p>yeah that sounds right to me!</p>",
+        "id": 547145774,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1761498850
+    },
+    {
+        "content": "<p>For our ipc, I see <code>parent_base_address</code>. Trying to makes sure I understand this correctly. Instead of serializing in a pointer free format, we serialize with pointers, but then shift them between the two different address spaces. Is that what is happening here?</p>\n<p>Trying to understand the ramifications of serializing to a slice of bytes instead of to a shared mem allocator.</p>",
+        "id": 547151824,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761504524
+    },
+    {
+        "content": "<p>Something just feels a bit off to me</p>",
+        "id": 547151830,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761504534
+    },
+    {
+        "content": "<p>4 messages were moved here from <a class=\"stream-topic\" data-stream-id=\"316715\" href=\"/#narrow/channel/316715-contributing/topic/Worklog.20.28Draft.20PRs.20and.20coordination.29/with/547144712\">#contributing &gt; Worklog (Draft PRs and coordination)</a> by <span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span>.</p>",
+        "id": 547152079,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1761504759
+    },
+    {
+        "content": "<p>so the basic procedure is:</p>\n<ul>\n<li>we have a fixed number of pointers in the <code>ModuleEnv</code> data structure (some of which live in nested data structures like <code>SafeList</code> and <code>SafeMultiList</code>) - e.g. maybe it's like 20, I'm not sure what the exact number is, but it doesn't vary by what's in the module, it's always the same exact number no matter what</li>\n<li>to serialize, we go through each of those pointers and subtract the module env's base address. Once that's done, they are no longer memory <strong>addresses</strong>, but rather memory <strong>offsets</strong></li>\n<li>to deserialize on the other side, we start with our freshly-created (but not yet initialized) ModuleEnv's base address, and go through each of those memory <strong>offsets</strong> and add that base address - thereby converting them back into valid pointers (except in the deserialized address space instead)</li>\n</ul>",
+        "id": 547152240,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1761504904
+    },
+    {
+        "content": "<p>does that clarify? Happy to answer any follow-up questions about it!</p>",
+        "id": 547152279,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1761504941
+    },
+    {
+        "content": "<p>That overall makes sense. I still don't quite understand why we serialize: <code>parent_base_addr: u64,</code> over the IPC. What is the parent in this case? the entire module+header?</p>",
+        "id": 547152831,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761505455
+    },
+    {
+        "content": "<p>I forget offhand, but I think it's the base address of the <code>ModuleEnv</code></p>",
+        "id": 547153067,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1761505684
+    },
+    {
+        "content": "<p>Oh cool, got it working!</p>",
+        "id": 547155287,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761507905
+    },
+    {
+        "content": "<p>That was surprisingly easy</p>",
+        "id": 547155297,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761507909
+    },
+    {
+        "content": "<p>That said, right now I have a hacked <code>rocRun</code> that builds an exe</p>",
+        "id": 547155313,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761507927
+    },
+    {
+        "content": "<p>Need to make it a separated updated <code>rocBuild</code> path.</p>",
+        "id": 547155324,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761507941
+    },
+    {
+        "content": "<div class=\"spoiler-block\"><div class=\"spoiler-header\">\n<p>standalone roc binary</p>\n</div><div class=\"spoiler-content\" aria-hidden=\"true\">\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>❯<span class=\"w\"> </span>/Users/bren077s/Library/Caches/roc/f0bdb35f6bc3514a3a4574c23848dd0b/temp/roc-tmp-1FrVoAORWsZgVE1nyj6dkXtYhYHVDVuB/roc_run_2271902749\nGenerated<span class=\"w\"> </span>numbers:<span class=\"w\"> </span><span class=\"nv\">a</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"m\">60</span>,<span class=\"w\"> </span><span class=\"nv\">b</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nv\">99</span>\n\n<span class=\"o\">===</span><span class=\"w\"> </span>Testing<span class=\"w\"> </span>addInts<span class=\"w\"> </span><span class=\"o\">(</span><span class=\"nv\">entry_idx</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"m\">0</span><span class=\"o\">)</span><span class=\"w\"> </span><span class=\"o\">===</span>\nroc<span class=\"w\"> </span>build<span class=\"w\"> </span>with<span class=\"w\"> </span>serialized\nmodule_env<span class=\"w\"> </span>offset:<span class=\"w\"> </span><span class=\"m\">536</span>\nparent_base_addr:<span class=\"w\"> </span><span class=\"m\">4575952896</span>\nchild_base_addr:<span class=\"w\"> </span><span class=\"m\">4334715136</span>\noffset:<span class=\"w\"> </span>-241237760\nExpected<span class=\"w\"> </span>add<span class=\"w\"> </span>result:<span class=\"w\"> </span><span class=\"m\">159</span>\nRoc<span class=\"w\"> </span>computed<span class=\"w\"> </span>add:<span class=\"w\"> </span><span class=\"m\">159</span>\nSUCCESS:<span class=\"w\"> </span>addInts<span class=\"w\"> </span>results<span class=\"w\"> </span>match!\n\n<span class=\"o\">===</span><span class=\"w\"> </span>Testing<span class=\"w\"> </span>multiplyInts<span class=\"w\"> </span><span class=\"o\">(</span><span class=\"nv\">entry_idx</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"m\">1</span><span class=\"o\">)</span><span class=\"w\"> </span><span class=\"o\">===</span>\nExpected<span class=\"w\"> </span>multiply<span class=\"w\"> </span>result:<span class=\"w\"> </span><span class=\"m\">5940</span>\nRoc<span class=\"w\"> </span>computed<span class=\"w\"> </span>multiply:<span class=\"w\"> </span><span class=\"m\">5940</span>\nSUCCESS:<span class=\"w\"> </span>multiplyInts<span class=\"w\"> </span>results<span class=\"w\"> </span>match!\n\n<span class=\"o\">===</span><span class=\"w\"> </span>FINAL<span class=\"w\"> </span><span class=\"nv\">RESULT</span><span class=\"w\"> </span><span class=\"o\">===</span>\nALL<span class=\"w\"> </span>TESTS<span class=\"w\"> </span>PASSED:<span class=\"w\"> </span>Both<span class=\"w\"> </span>entrypoints<span class=\"w\"> </span>work<span class=\"w\"> </span>correctly!\n</code></pre></div>\n</div></div>",
+        "id": 547155381,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761508014
+    },
+    {
+        "content": "<p>Niiice <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 547161922,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1761514982
+    },
+    {
+        "content": "<p>For roc build, instead of ever touching shared memory, I should be able to:</p>\n<ol>\n<li>create the module env in standard gpa/arena.</li>\n<li>create a new arena (or block of bytes) for what will be serialized.</li>\n<li>write the header at the start of the area</li>\n<li>serialize the module env into the bytes</li>\n</ol>\n<p>Right?</p>\n<hr>\n<p>So it will be a little bit of rearchitecting to do that, but nothing too bad. Probably the biggest hassle is that I want to factor it well instead of duplicating the code as a slight variant.</p>",
+        "id": 547169340,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761523684
+    },
+    {
+        "content": "<p>Nothing hard, just cleanup/organization.</p>",
+        "id": 547169350,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761523704
+    },
+    {
+        "content": "<p>sounds right, yeah!</p>",
+        "id": 547170039,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1761524505
+    },
+    {
+        "content": "<p>Also, I am a little confused that our current module even shared memory thing. It doesn't actually call moduleenv.serialize. I guess it kinda just adhoc deals with everything instead to avoid an extra copy to serialize.</p>",
+        "id": 547171573,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761526178
+    },
+    {
+        "content": "<p>Also, hmm. I guess an arena is not guaranteed to be contiguous given it is a linked list of blocks. So either I need to still used the shm allocator.</p>\n<p>I guess using the shm allocator is actually the minimal amount of copying (though not sure if it would include some extra unneeded data being serialized).</p>\n<p>Cause shm allocator is:</p>\n<ol>\n<li>writing to the allocator</li>\n<li>write to disk via llvm.</li>\n</ol>\n<p>Vs gpa/arena would be:</p>\n<ol>\n<li>write to allocator</li>\n<li>serialize to flat array of bytes</li>\n<li>write to disk via llvm.</li>\n</ol>",
+        "id": 547174497,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761528939
+    },
+    {
+        "content": "<p>So assuming the shm allocator isn't accidentally including extra bytes or otherwise significantly costly to create. It likely is the nicest way to handle all of this.</p>",
+        "id": 547174552,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1761528993
+    },
+    {
+        "content": "<p>Just an update: I still just have the prototype working on a branch. It is a hacked roc run that builds and runs. Hoping to get back to his later this week or early next.</p>\n<p>Since I am planning to anchor to shared mem, I think it will make the refactoring to land pretty small. Mostly need to enable running the roc app compilation step at two different potential locations. For build it has to run before all the linking. For run. It should run after (or eventually in parallel)</p>",
+        "id": 553468932,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1762199634
+    },
+    {
+        "content": "<p>So hyped for this. Will be really nice to unlock wasm based platforms.</p>",
+        "id": 553506907,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1762217930
+    }
+]

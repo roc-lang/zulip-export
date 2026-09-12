@@ -1,0 +1,170 @@
+[
+    {
+        "content": "<p>By numbers parsing, you mean conversion to binary? I'd be a little hesitant about that specifically because it loses information about how the number was written - e.g. hex vs decimal. That's critical for formatting, at at least possibly useful for better error messages in some contexts. Lastly, it's extra work that the tokenizer doesn't really need to do (i.e. can be done later instead, and isn't needed by all downstream consumers of tokens).</p>",
+        "id": 529321827,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752771689
+    },
+    {
+        "content": "<p>for the context:</p>\n<p><a class=\"message-link\" href=\"/#narrow/channel/395097-compiler-development/topic/casual.20conversation/near/528639242\">#compiler development &gt; casual conversation @ 💬</a> <br>\n<a class=\"message-link\" href=\"/#narrow/channel/316715-contributing/topic/Worklog.20.28Draft.20PRs.20and.20coordination.29/near/529264158\">#contributing &gt; Worklog (Draft PRs and coordination) @ 💬</a></p>",
+        "id": 529322252,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1752771835
+    },
+    {
+        "content": "<p>Hmm, I don't think this is the right approach</p>",
+        "id": 529324507,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752772722
+    },
+    {
+        "content": "<p>I agree operating on things in cache is important, but I think <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> is over-indexing on that. One of the things that makes SIMDJson fast is delaying a bunch of processing until later when it's actually needed - even if that means reloading that from cache.</p>",
+        "id": 529326620,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752773545
+    },
+    {
+        "content": "<p>Carbon-lang, which has some very ambitious perf targets, copies out numbers and such to separate bufferes during tokenization (lexing), but doesn't do the actual conversion to binary until later.</p>",
+        "id": 529326809,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752773624
+    },
+    {
+        "content": "<p>Also, extra is IMO currently too large and needs to be trimmed down. Trying to store parsed 64-bit (or 128-bit!) values there will significantly increase memory usage and maybe even slow other things down.</p>",
+        "id": 529327084,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752773750
+    },
+    {
+        "content": "<p>At a minimum, this processing should be separable / configurable, perhaps via an interface (anytype?) passed to the tokenizer with a no-op impl we can use for the formatter. And I would do everything we can to not add to <code>extra</code></p>",
+        "id": 529327532,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752773928
+    },
+    {
+        "content": "<p>I think you are likely accurate about most of this. Especially given individual hot loops especially that stay in Simd are very powerful. It is important to remember that a branch miss can often be much worse than a cache miss.</p>",
+        "id": 529327877,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752774059
+    },
+    {
+        "content": "<p>But I would guess both can be made to work with great perf...I mean tokenization is such a small part of E2E time anyway.</p>",
+        "id": 529328745,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752774412
+    },
+    {
+        "content": "<p>Tokenization is currently more that half the time when benchmarking the parser. That’s non-trivial!</p>",
+        "id": 529329044,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752774513
+    },
+    {
+        "content": "<p>About a third of that time is spent interning identifiers currently.</p>",
+        "id": 529329401,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752774640
+    },
+    {
+        "content": "<p>I think this sounds right as a high level but is likely wrong in practice <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span> </p>\n<p>the specific reason that the paper talks about for SIMDjson's speed is avoiding branch mispredictions</p>\n<p>let's say I want to not do any processing and instead just store the number <code>12345</code> in a side table (like Carbon apparently does). what <em>specifically</em> happens to store those bytes in a side table?</p>\n<p>we iterate through the digits in a <code>for</code> loop until we hit the end of the sequence, each time copying a byte over. there is 1 branch misprediction, at the end of the loop, when we hit the end.</p>\n<p>suppose instead that I am processing <code>12345</code> from a string into an <code>u64</code> and then putting that in a side table. what does the CPU do differently?</p>\n<p>again, it iterates through each digit, does some extra arithmetic (no impact on branch predictions and essentially free), then at the end of the loop, hits the same 1 branch misprediction because we hit the end of the digits, and then copies the u64 into the target side table, which does not involve branching</p>",
+        "id": 529330741,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752775153
+    },
+    {
+        "content": "<p>so if the reason SIMDjson is fast is (as the paper says) because it minimizes branch mispredictions, and processing the digits into u64 involves the exact same number of branch mispredictions (namely, 1) as copying it into a side table instead...where specifically is the anticipated slowdown coming from?</p>",
+        "id": 529330838,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752775190
+    },
+    {
+        "content": "<p>alternatively, if the idea is to not copy anything into a side table (so, don't do what Carbon does) and instead just write down the Region for a later stage to use, now we're saying that it's a good idea to trade a branch misprediction in tokenization for a cache miss in a later stage? that definitely does not sound like it would improve performance <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 529331354,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752775348
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"453336\">Joshua Warner</span> <a href=\"#narrow/stream/316715-contributing/topic/Pull.20Request.20for.20Review/near/529329044\">said</a>:</p>\n<blockquote>\n<p>Tokenization is currently more that half the time when benchmarking the parser. That’s non-trivial!</p>\n</blockquote>\n<p>Oh, I'm sure it will be important, but it is small potatoes compared to can and type checking. At least last time I measured</p>",
+        "id": 529331596,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752775435
+    },
+    {
+        "content": "<p>Btw, I watched <a href=\"https://youtu.be/wlvKAT7SZIQ?si=Tx7xiddcx-7Cz5Y0\">this talk</a> yesterday and must say the part about how to avoid mispredictions and branching in general (in particular in json parsing) is a great exercise for an array language  <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>\n<div class=\"youtube-video message_inline_image\"><a data-id=\"wlvKAT7SZIQ\" href=\"https://youtu.be/wlvKAT7SZIQ?si=Tx7xiddcx-7Cz5Y0\"><img src=\"https://uploads.zulipusercontent.net/5375c455629fb30551be2f04eacd37a6c3b6196c/68747470733a2f2f692e7974696d672e636f6d2f76692f776c764b415437535a49512f6d7164656661756c742e6a7067\"></a></div>",
+        "id": 529343858,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1752780865
+    },
+    {
+        "content": "<blockquote>\n<p>we're saying that it's a good idea to trade a branch misprediction in tokenization for a cache miss in a later stage? that definitely does not sound like it would improve performance</p>\n</blockquote>\n<p>There are multiple other possible effects here:</p>\n<ol>\n<li>Depending on tooling setup/etc, tokenization can easily happen much more frequently than canonicalization, because of things like format-on-save and possible later optimizations like (in a language server) realizing that all the tokens are the same and so we don't need to re-run the parser or canonicalization/etc.</li>\n<li>You might cache miss _regardless_ in that later stage. Perhaps not on that exact memory load, but on an independent/neighboring one effectively covers this one.</li>\n<li>You're also paying a cost to copy this information around thru the parser, can, etc - none of which it's relevant for. Neither the parser nor Can need to known the value of an int/string/etc to do their job. An extra 64-bit value in the parse tree is a non-trivial extra bit of data to store and copy, when multiplied by a large number of tokens. In contrast, basically everything needs to keep the range around for error reporting, so if we just use that it's free.</li>\n</ol>",
+        "id": 529350332,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752783749
+    },
+    {
+        "content": "<p>17 messages were moved here from <a class=\"stream-topic\" data-stream-id=\"316715\" href=\"/#narrow/channel/316715-contributing/topic/Pull.20Request.20for.20Review/with/529317927\">#contributing &gt; Pull Request for Review</a> by <span class=\"user-mention silent\" data-user-id=\"453336\">Joshua Warner</span>.</p>",
+        "id": 529350476,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1752783814
+    },
+    {
+        "content": "<p>Can needs to know because we report errors for literal out of bounds, which is where I first noticed this</p>",
+        "id": 529360220,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752788523
+    },
+    {
+        "content": "<p>Ah, interesting. Why do that in Can rather than after type checking? I assume you have to re-do that after type checking _anyway_, to handle cases where type checking refined the type to e.g. a U8 or whatever.</p>",
+        "id": 529363872,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752790797
+    },
+    {
+        "content": "<p>ah, it's just because we need to classify it as like \"this frac fits in F32\" vs \"this frac doesn't fit in F32\" so that we can inform the type system, so that during type checking we can unify with the appropriate constraints</p>",
+        "id": 529376054,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752800897
+    },
+    {
+        "content": "<p>I guess another way to say it is that we're \"generating the constraints\" during canonicalization that type unification will later turn into errors (or not) during normal unification</p>",
+        "id": 529376077,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752800919
+    },
+    {
+        "content": "<blockquote>\n<p>this frac fits in F32</p>\n</blockquote>\n<p>Don't all Fracs fit in an F32?</p>",
+        "id": 529378289,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752803154
+    },
+    {
+        "content": "<p>Or I guess essentially all Fracs?</p>",
+        "id": 529378342,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752803193
+    },
+    {
+        "content": "<p>Wait, frac = float? And you're deciding between f32 and f64? (essentially?)</p>",
+        "id": 529378932,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1752803713
+    },
+    {
+        "content": "<p><code>Frac</code> means one of <code>F32</code>, <code>F64</code>, or <code>Dec</code></p>\n<p>(<code>Dec</code> is fixed-point, not floating-point, so the name \"float\" doesn't accurately describe it)</p>",
+        "id": 529380527,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752805107
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/blob/716f2294dbcd8777055ba3886efc1249e55630d3/src/check/canonicalize.zig#L3371\">https://github.com/roc-lang/roc/blob/716f2294dbcd8777055ba3886efc1249e55630d3/src/check/canonicalize.zig#L3371</a></p>",
+        "id": 529380664,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1752805215
+    },
+    {
+        "content": "<p>I don't feel good about replacing region info with numeric data in <code>extra</code>. the other options are always pushing this data to a separate collection (as with interned), or extending token size which of course is a terrible idea.</p>",
+        "id": 529437987,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1752835834
+    }
+]

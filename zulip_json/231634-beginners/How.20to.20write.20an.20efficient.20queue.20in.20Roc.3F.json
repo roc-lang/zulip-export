@@ -1,0 +1,38 @@
+[
+    {
+        "content": "<p>I'm slowly making my way through some Everybody Codes problems and a lot of the time I'm reaching for a queue data structure. In Go, I'm able to make a simple queue using slices. To enqueue, I append to the slice and to dequeue, I can get the head using q[0] and get the tail using q[1:].</p>\n<p>In Roc, I'm experiencing slow performance anytime there are a lot of elements involved. I tried to make a simple flood-fill example:</p>\n<div class=\"codehilite\"><pre><span></span><code>main! = |args| {\n    size = U64.from_str(args.get(0)?)?\n\n    # Flood fill a 1D array, starting in its middle.\n    # Use a queue to keep track of the next flood points under consideration.\n    var $array = List.repeat(0, size)\n    var $queue = [size / 2]\n    while $queue.len() &gt; 0 {\n        head = $queue.get(0)?\n        $queue = $queue.drop_first(1)\n        $array = $array.set(head, 1)?\n        if head &gt; 0 {\n            left = head - 1\n            if $array.get(left)? == 0 {\n                $queue = $queue.append(left)\n            }\n        }\n        if head &lt; $array.len() - 1 {\n            right = head + 1\n            if $array.get(right)? == 0 {\n                $queue = $queue.append(right)\n            }\n        }\n    }\n\n    for a in $array {\n        if a != 1 {\n            return Err(FloodFillIncorrect)\n        }\n    }\n\n    Ok({})\n}\n</code></pre></div>\n<p>Some sample runtimes on my machine after building with --opt=speed:</p>\n<div class=\"codehilite\"><pre><span></span><code>$ time ./floodfill 1000\nreal    0m0.008s\nuser    0m0.002s\nsys 0m0.006s\n\n$ time ./floodfill 10000\nreal    0m0.087s\nuser    0m0.025s\nsys 0m0.059s\n\n$ time ./floodfill 100000\nreal    0m0.454s\nuser    0m0.110s\nsys 0m0.340s\n\n$ time ./floodfill 1000000\nreal    0m4.246s\nuser    0m1.004s\nsys 0m3.203s\n\n$ time ./floodfill 10000000\nreal    0m42.567s\nuser    0m10.011s\nsys 0m32.195s\n</code></pre></div>\n<p>I looked on github and found similar issues (but not quite the same):<br>\n<a href=\"https://github.com/roc-lang/roc/issues/10851\">https://github.com/roc-lang/roc/issues/10851</a><br>\n<a href=\"https://github.com/roc-lang/roc/issues/10849\">https://github.com/roc-lang/roc/issues/10849</a><br>\n<a href=\"https://github.com/roc-lang/roc/issues/10848\">https://github.com/roc-lang/roc/issues/10848</a></p>\n<p>So are my problems due to my queue implementation being inefficient or due to a performance bug in the Roc compiler? Any guidance you could give me would be great!</p>",
+        "id": 617562322,
+        "sender_full_name": "cerk",
+        "timestamp": 1787179296
+    },
+    {
+        "content": "<p>Thanks for the clear example <span class=\"user-mention\" data-user-id=\"1180662\">@cerk</span> this was interesting to dig into and uncovered some bugs and compiler optimizations we can follow up with. </p>\n<p>I asked my agentic friends to swing off some performance tools. The results are here if anyone is interested to read more about the approach </p>\n<p><a href=\"https://gist.github.com/lukewilliamboswell/4883369c71baf5b65d79186644de3f07\">https://gist.github.com/lukewilliamboswell/4883369c71baf5b65d79186644de3f07</a></p>\n<p>In short, the <code>List.drop_first(1)</code> creates a seamless slice whose data pointer has moved past the beginning of the allocation. When you then call <code>append</code>, Roc doesn't reuse the capacity before that pointer, it allocates a new list, copies the remaining elements, and release the old allocation.</p>\n<p>A better general representation retains the list and advance instead of repeatedly calling <code>drop_first</code> like;</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>var $queue = List.with_capacity(size)\n$queue = $queue.append(start)\nvar $cursor = 0\nwhile $cursor &lt; $queue.len() {\n    point = $queue.get($cursor)?\n    $cursor = $cursor + 1\n    # enqueue with $queue.append(...)\n}\n</code></pre></div>\n<p>For this flood fill, marking cells as visited when they are enqueued also prevents the same cell from being queued more than once. Explicitly using <code>0.U8</code> and <code>1.U8</code> for the visited array avoids the original program’s inferred 16-byte <code>Dec</code> elements.</p>\n<p>With those changes, the Roc implementation became allocation-free inside the traversal loop and took about <code>8.7 ms</code> at 1,000,000 elements. The corresponding Zig implementation took about <code>2.2 ms</code>. The remaining difference looks like compiler optimization work.</p>",
+        "id": 617574919,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1787185442
+    },
+    {
+        "content": "<p>Thanks <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span>. Your explanation was helpful and clear. I'll stop using <code>List.drop_first(1)</code>, preallocate the queue when possible and use <code>$cursor</code>.</p>\n<p>Note that the queue size in my example only gets up to a maximum of 2 because of the 0 checks in the array. I.e., if I put this check in the while loop...</p>\n<div class=\"codehilite\"><pre><span></span><code>    while $queue.len() &gt; 0 {\n        if $queue.len() &gt; 2 {\n            crash &quot;too many items in queue!&quot;\n        }\n        .\n        .\n        .\n    }\n</code></pre></div>\n<p>...the program never crashes. I now understand that I'm continually allocating because of <code>List.drop_first(1)</code> but it should be a small allocation. This repeated small allocation would be enough to cause the slowdown I'm seeing?</p>",
+        "id": 617589590,
+        "sender_full_name": "cerk",
+        "timestamp": 1787194602
+    },
+    {
+        "content": "<p>I didn't follow the cursor suggestion. Is the idea that you reserve some size in memory and then wrap around to the beginning if you append off the end (and if the beginning has been freed up by dequeues)? Or is it something else?</p>",
+        "id": 617597004,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1787199689
+    },
+    {
+        "content": "<p>It's not reusable or anything, just indexes into the list</p>",
+        "id": 617597634,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1787200057
+    },
+    {
+        "content": "<p>I'd name that <code>$index</code> personally <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 617672571,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787225700
+    }
+]

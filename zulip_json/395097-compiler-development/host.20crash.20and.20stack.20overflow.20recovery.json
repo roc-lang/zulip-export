@@ -1,0 +1,734 @@
+[
+    {
+        "content": "<p>I want to write down some notes on how hosts should handle the roc program either performing a <code>crash</code> or stack overflowing. this is going to be kinda unstructured; I just want to get it down in one place and we can talk about whatever aspects of it <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 532323360,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060051
+    },
+    {
+        "content": "<p>so wasm and non-wasm targets need totally different things, so let's start with Windows because it's the most straightforward</p>",
+        "id": 532323445,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060079
+    },
+    {
+        "content": "<p>outside wasm, the way stack overflows get detected is that the host decides how much stack space to reserve, and then \"reserves\" it by telling the OS to mark a page of memory just past that point as readonly</p>",
+        "id": 532323620,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060134
+    },
+    {
+        "content": "<p>e.g. if you want 2MB of stack space, you set the memory page right after the 2MB mark to be readonly</p>",
+        "id": 532323671,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060155
+    },
+    {
+        "content": "<p>the CPU is really fast and efficient at bumping the stack pointer, but it's also really dumb. it doesn't do any checking whatsoever about whether it has run out of stack space</p>",
+        "id": 532323785,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060192
+    },
+    {
+        "content": "<p>so what happens is that eventually it bumps its way into the readonly memory, causing a segfault</p>",
+        "id": 532323819,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060202
+    },
+    {
+        "content": "<p>(in contrast, heap allocation - which makes sure not to allocate into the 2MB of reserved space, or the readonly guard page, and which can explicitly do conditionals and give an OOM error if it has run out - does not need to cause a segfault on purpose like this)</p>",
+        "id": 532323985,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060257
+    },
+    {
+        "content": "<p>so, to recover from the stack overflow, there are a few things that need to happen:</p>\n<ul>\n<li><em>before</em> running the code that could stack overflow (this is true of both host code and roc code), the host needs to register a segfault handler function with the OS</li>\n<li>the OS segfault handler function will get called when the segfault happens, and it will receive some info about what happened, including the memory address that segfaulted</li>\n<li>the handler can then see if this address is inside the readonly guard page; if so, then this segfault must have been a stack overflow and we can proceed to handle the stack overflow</li>\n</ul>",
+        "id": 532324442,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060417
+    },
+    {
+        "content": "<p>at this point, when the \"handle stack overflow\" logic is running, the system is in a weird state because:</p>\n<ul>\n<li>when you're inside a segfault handler function like this, there are certain OS operations you're not supposed to do (I'm actually not sure what they are, but I think a lot of syscalls?)</li>\n<li>we just overflowed the stack a moment ago, which means we are extremely low on stack space - we might not even have any. if our segfault handler also overflows the stack, we're toast, so we ideally would be using so few variables etc. that everything happens in registers and our generated code doesn't even end up attempting to bump the stack pointer for the entire handler.</li>\n<li>the Roc application function still has its entire stack in memory, and we need to get rid of it because the application has crashed and we want the stack to go back to where it was before the Roc function started executing</li>\n<li>despite all this, we still want to report a nice stack trace to the end user</li>\n</ul>",
+        "id": 532325306,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060680
+    },
+    {
+        "content": "<p>also, once we're done handling everything, we need to clean up all the resources and get back to a normal host state</p>",
+        "id": 532325637,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060788
+    },
+    {
+        "content": "<p>I mention this stack overflow case first, because:</p>\n<ul>\n<li>in theory we could have Roc's <code>crash</code> do a bunch of automatic fancy cleanup stuff for the host (e.g. making every Roc call return a <code>Result</code>), but even if we did that, the host would already need to do all this tricky stuff to handle stack overflows anyway</li>\n<li>since handling stack overflows is strictly harder than handling the current design for <code>crash</code> (where we just call a host function that says \"Roc crashed; do whatever you want to do to handle that right now!\") it seems best to <em>not</em> attempt to automatically do fancy cleanup stuff, and instead just let the host reuse code for stack overflow handling and <code>crash</code> handling</li>\n</ul>",
+        "id": 532326094,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060924
+    },
+    {
+        "content": "<p>ok so let's start with recovering and cleaning up, and get to showing a trace later</p>",
+        "id": 532326228,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754060967
+    },
+    {
+        "content": "<p>the simplest way to recover from a stack overflow (and this works for <code>crash</code> too) is:</p>\n<ul>\n<li>before calling the Roc function, the host does a <code>setjmp</code> - which basically just copies all the current CPU registers, including the stack pointer, to some threadlocal memory</li>\n<li>later, in either the segfault handler where we detected a stack overflow, or in the function we give the roc app to run when a <code>crash</code> occurs, we do a <code>longjmp</code> - which basically just takes that memory we stored earlier and puts everything back in the registers again</li>\n<li>at this point, all the contents of memory are the same, but the stack is back where it was before, and the CPU happily continues executing from right after the original <code>setjmp</code></li>\n</ul>",
+        "id": 532326674,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061119
+    },
+    {
+        "content": "<p>so we can use that to get execution back where we want it, but there's still the matter that the Roc program may have allocated heap memory or opened file handles, and this doesn't clean any of that up</p>",
+        "id": 532326878,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061188
+    },
+    {
+        "content": "<p>I think the best solution there is that the host should not share a single global allocator between itself and Roc, but rather provide a dedicated allocator just for the Roc program</p>",
+        "id": 532326999,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061230
+    },
+    {
+        "content": "<p>and if there are multiple Roc entrypoints running concurrently, they should each have their own allocators</p>",
+        "id": 532327219,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061297
+    },
+    {
+        "content": "<p>this way, if one of them crashes or stack overflows, the host can just reset that allocator and cleanup has been achieved</p>",
+        "id": 532327267,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061313
+    },
+    {
+        "content": "<p>separately, if it's doing file handle stuff, that should be tracked somewhere the host can access it, so that it can iterate through the open file handles and close them</p>",
+        "id": 532327372,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061348
+    },
+    {
+        "content": "<p>we can model all of this in <code>basic-cli</code> and <code>basic-webserver</code> so host authors can have a good example to follow</p>",
+        "id": 532327434,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061366
+    },
+    {
+        "content": "<p>ok, so at this point we have a way for the host to:</p>\n<ul>\n<li>detect stack overflows in the roc program</li>\n<li>recover from them by restoring execution to the proper place</li>\n<li>clean up memory and other resources the Roc program was using</li>\n<li>do the same things for <code>crash</code></li>\n</ul>",
+        "id": 532328300,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061668
+    },
+    {
+        "content": "<p>of note, an alternative to <code>setjmp</code>/<code>longjmp</code> is to do stack unwinding - e.g. <code>libunwind</code> (~100KB dependency) lets you avoid the <code>setjmp</code> up front (maybe like a dozen CPU instructions), but that seems not worth it to me considering <code>setjmp</code> and <code>longjmp</code> are much simpler</p>",
+        "id": 532328810,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061847
+    },
+    {
+        "content": "<p>ok so now the backtrace</p>",
+        "id": 532328831,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061856
+    },
+    {
+        "content": "<p>on Windows, there's a built-in API for getting backtraces - <a href=\"https://learn.microsoft.com/en-us/windows/win32/debug/capturestackbacktrace\">https://learn.microsoft.com/en-us/windows/win32/debug/capturestackbacktrace</a></p>",
+        "id": 532328969,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061903
+    },
+    {
+        "content": "<p>however, it isn't aware of debuginfo, so it wouldn't give things like line numbers etc.</p>",
+        "id": 532329142,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754061961
+    },
+    {
+        "content": "<p>however, there's a more advanced one that does get you debug info - <a href=\"https://learn.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-stackwalk64\">https://learn.microsoft.com/en-us/windows/win32/api/dbghelp/nf-dbghelp-stackwalk64</a> - but to get that, the host has to dynamically link <code>dbghelp.dll</code> (which does ship with Windows, fortunately)</p>",
+        "id": 532329485,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754062068
+    },
+    {
+        "content": "<p>unfortunately,  this is a pretty complex function that does use stack memory itself, and if we're in the middle of a stack overflow, it's possible that trying to walk the stack could result in  another stack overflow, at which point we're toast</p>",
+        "id": 532330470,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754062381
+    },
+    {
+        "content": "<p>so we need to be really really conservative in what we do</p>",
+        "id": 532332070,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754062895
+    },
+    {
+        "content": "<p>one thing that helps is that Windows automatically converts the guard page to be writable again (so, no longer a guard page) at which point we can grow our stack into it</p>",
+        "id": 532332371,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063004
+    },
+    {
+        "content": "<p>so we get one more page (at least 4096B) of memory to work with, for just the stack walking and recording it somewhere else (most likely a threadlocal that we pre-reserved and can access after the longjmp to display the recorded stack trace to the end user in whatever way we like)</p>",
+        "id": 532332496,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063054
+    },
+    {
+        "content": "<p>however, this does mean that if we don't want to \"leak\" guard pages, we need to manually change that page back to a guard page after the longjmp - which is doable, it's just something the host needs to do</p>",
+        "id": 532332583,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063088
+    },
+    {
+        "content": "<p>one more note: the interpreter just does all this stuff itself and reports a stack overflow as a normal <code>crash</code></p>",
+        "id": 532332797,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063167
+    },
+    {
+        "content": "<p>because it's managing its own \"stack\"</p>",
+        "id": 532332818,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063176
+    },
+    {
+        "content": "<p>ok so that's Windows - we can recover from stack overflows and <code>crash</code>es, including showing the end user a backtrace</p>",
+        "id": 532332891,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063207
+    },
+    {
+        "content": "<p>which includes debuginfo, so function names and line numbers etc.</p>",
+        "id": 532332913,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063215
+    },
+    {
+        "content": "<p>on UNIX, we can follow the same basic strategy but with less built-in behavior</p>",
+        "id": 532332980,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063236
+    },
+    {
+        "content": "<p>specifically:</p>\n<ul>\n<li>to get a backtrace with debuginfo, we need <code>libbacktrace</code> (adds ~50KB to the binary), which parses DWARF debuginfo.</li>\n<li>the guard page isn't automatically switched to writable during the segfault handler, so we need to do that ourselves (and then set it back to being a guard page after the longjmp, just like we do on Windows)</li>\n</ul>",
+        "id": 532333309,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063366
+    },
+    {
+        "content": "<p>since the backtrace-obtaining functionality is completely different for interpreter vs optimized build, I think the compiled roc application should expose a <code>backtrace()</code> symbol the host can link and call, and it will have the same API regardless of whether we're interpreting or running an optimized build (the optimized build will use <code>libbacktrace</code>, which we'll need to bundle along with our builtins, and then the interpreter will do its own thing with its own stack memory)</p>",
+        "id": 532333545,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063448
+    },
+    {
+        "content": "<p>ok so that's Windows and UNIX...now for wasm!</p>",
+        "id": 532333579,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063460
+    },
+    {
+        "content": "<p>wasm is totally different from either of those</p>",
+        "id": 532333615,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063472
+    },
+    {
+        "content": "<p>the wasm binary is not allowed to look at its own bytes, so it can't do its own stack unwinding or generate its own backtrace</p>",
+        "id": 532333699,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063498
+    },
+    {
+        "content": "<p>however, the things we need to happen can be done outside the wasm vm (so, in the browser that means JS can do it)</p>",
+        "id": 532333791,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063533
+    },
+    {
+        "content": "<p>for simplicity I'll talk about the browser, but hopefully other wasm vms will have equivalent ways of doing these things</p>",
+        "id": 532333859,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063564
+    },
+    {
+        "content": "<p>when a stack overflow occurs in wasm, execution immediately halts and JS gets a runtime exception, which it can catch with <code>try</code>/ <code>catch</code></p>",
+        "id": 532333946,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063595
+    },
+    {
+        "content": "<p>that exception includes the backtrace info, and as long as the binary was built with source maps (which can be either included in the wasm binary itself or can be hosted separate from the binary and the browser can download it), JS can use the source maps to get line numbers etc.</p>",
+        "id": 532334127,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063659
+    },
+    {
+        "content": "<p>for <code>crash</code>, wasm can call out to an external JS function, and JS can inspect the current wasm stack while it's paused - and again can use source maps to get debuginfo</p>",
+        "id": 532334246,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063702
+    },
+    {
+        "content": "<p>JS can also just cancel the entire wasm process, which takes care of stack memory cleanup, execution, etc.</p>",
+        "id": 532334299,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063724
+    },
+    {
+        "content": "<p>for the interpreter inside the browser, it gets slightly trickier because we can't just be like \"here is my <code>backtrace()</code> function and I'll give you what you want regardless of whether I'm an interpreter or an optimized build\"</p>",
+        "id": 532334490,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063794
+    },
+    {
+        "content": "<p>because although the interpreter can offer that, the optimized build can't (because it can't see its own executable bytes like it can outside of wasm)</p>",
+        "id": 532334547,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063813
+    },
+    {
+        "content": "<p>so instead, basically I think what we need to do in wasm is make it so that when we call the \"I crashed\" host handler (in JS), if we're the interpreter, we automatically create a backtrace and pass it to JS, so JS can just use that</p>",
+        "id": 532334708,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063868
+    },
+    {
+        "content": "<p>but if we're an optimized build, we just pass <code>null</code>, and then JS in the host can check for that and see \"oh, there's a <code>null</code> backtrace here, so that must mean I need to go inspect the currently-running wasm stack myself and build my own trace\"</p>",
+        "id": 532334837,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754063915
+    },
+    {
+        "content": "<p>for the stack overflow scenario it's actually more straightforward, because that's naturally a thrown exception with backtrace info in the exception, so in theory we can have the interpreter just handcraft one of those exceptions, except including all the backtrace info from the interpreter</p>",
+        "id": 532335845,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754064270
+    },
+    {
+        "content": "<p>ok I think that's everything!</p>",
+        "id": 532335864,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754064277
+    },
+    {
+        "content": "<p>I think the key here is having good examples of how to do all of that in <code>basic-cli</code>, <code>basic-webserver</code>, and wasm hosts too, so that other platform authors can treat everything I just described as just some general boilerplate stuff they set up and then backtraces for stack overflows and <code>crash</code> Just Work as if this were an interpreted language or a language with a VM, except without the VM overhead <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 532336263,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754064419
+    },
+    {
+        "content": "<p>Couple thoughts:</p>\n<ol>\n<li>We may want to consider abstracting stack overflow a _bit_, such that the host doesn't have to know about both the interpreter and the compiler.</li>\n<li>We should use a frame pointer, which (as long as all code on the stack is Roc code) makes backtraces relatively trivial to compute.</li>\n</ol>",
+        "id": 532351122,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754069893
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"453336\">Joshua Warner</span> <a href=\"#narrow/channel/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recovery/near/532351122\">said</a>:</p>\n<blockquote>\n<ol start=\"2\">\n<li>We should use a frame pointer, which (as long as all code on the stack is Roc code) makes backtraces relatively trivial to compute.</li>\n</ol>\n</blockquote>\n<p>the problem with that is that then inlined functions disappear completely, whereas e.g. DWARF has metadata about \"here's the function that was inlined here\" so you can get a more useful stack trace even if things were inlined. also we want the DWARF metadata anyway for line numbers etc.</p>\n<p>I haven't actually implemented a stack walker with or without libbactrace, but from what I've read, if you want to get the DWARF metadata anyway, that's the whole hard part - and at that point you might as well rely on that as the source of truth instead of the frame pointer, even if you have one</p>",
+        "id": 532353081,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754070707
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"453336\">Joshua Warner</span> <a href=\"#narrow/channel/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recovery/near/532351122\">said</a>:</p>\n<blockquote>\n<ol>\n<li>We may want to consider abstracting stack overflow a _bit_, such that the host doesn't have to know about both the interpreter and the compiler.</li>\n</ol>\n</blockquote>\n<p>in theory I'd like to do this, but it doesn't seem possible for the <code>crash</code> scenario in wasm (at least based on my research) to avoid the host having to do something different in one scenario vs the other one</p>",
+        "id": 532353192,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754070762
+    },
+    {
+        "content": "<p>and outside of wasm, I think the stack overflow <em>handler</em> has to be installed by the host, because Roc functions are (and ought to be) stateless, plus the host might have other signal handlers that could conflict with ours if we installed it ourselves</p>",
+        "id": 532353332,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754070823
+    },
+    {
+        "content": "<p>and the interpreter can just do a normal <code>crash</code> for signalling that a stack overflow has happened</p>",
+        "id": 532353407,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754070853
+    },
+    {
+        "content": "<p>so from that perspective, the only thing I think we could really abstract is <code>backtrace()</code> - but honestly I actually think I'd rather do the same thing we do with wasm there, where we say \"here's a backtrace if I'm an interpreter, but otherwise I just give you <code>null</code> and you need to go walk the stack yourself\"</p>",
+        "id": 532353513,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754070892
+    },
+    {
+        "content": "<p>because that way we don't have to staple a 50KB <code>libbacktrace</code>static dependency to every optimized Roc app, when the host might already have that dependency themselves and just be able to use the one they already have</p>",
+        "id": 532353610,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754070928
+    },
+    {
+        "content": "<p>Hmm, tbh I wouldn't optimize for making backtraces perfect in the presence of inlining and optimization.</p>",
+        "id": 532367466,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754076897
+    },
+    {
+        "content": "<p>There never going to be perfect anyway</p>",
+        "id": 532367508,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754076916
+    },
+    {
+        "content": "<p>I'd just keep track of which functions have other functions inlined into them, and make a note of that in the backtrace</p>",
+        "id": 532367551,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754076937
+    },
+    {
+        "content": "<p>e.g.</p>\n<div class=\"codehilite\"><pre><span></span><code>foo\nbar (*contains inlined functions)\nbaz\n</code></pre></div>",
+        "id": 532367595,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754076962
+    },
+    {
+        "content": "<p>In other words, what I'd do is:</p>\n<ol>\n<li>guarantee you can always get some kind of backtrace via frame pointers. The runtime code is pretty minimal. You may or may not have symbols, and that's fine. Image base offset, image UUID, and return addresses are sufficient to fully reconstruct the stack more properly later (e.g. in a tool we ship with the roc binary, or cobbling together other open source tools)</li>\n<li>allow the host to link libbacktrace if it wants more full functionality</li>\n</ol>",
+        "id": 532368081,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754077178
+    },
+    {
+        "content": "<p>ah that's interesting</p>",
+        "id": 532369599,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754077851
+    },
+    {
+        "content": "<p>so basically give up a slight amount of perf (reserving 1 register for the duration of the roc call) for the benefit of hosts having the option to do simple backtrace without line numbers on optimized builds</p>",
+        "id": 532369710,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754077905
+    },
+    {
+        "content": "<p>I could also see that being a <code>platform</code> module knob maybe</p>",
+        "id": 532369771,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754077938
+    },
+    {
+        "content": "<p>like they can request a frame pointer or not (if they're not gonna use it anyway, might as well take the extra perf improvement)</p>",
+        "id": 532369805,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754077957
+    },
+    {
+        "content": "<p><a href=\"https://www.brendangregg.com/blog/2024-03-17/the-return-of-the-frame-pointers.html?utm_source=chatgpt.com\">https://www.brendangregg.com/blog/2024-03-17/the-return-of-the-frame-pointers.html?utm_source=chatgpt.com</a></p>",
+        "id": 532372637,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754079307
+    },
+    {
+        "content": "<p>lol, utm outing me <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 532372686,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754079331
+    },
+    {
+        "content": "<p>I would actually say that unless we find a strong case that really really needs that register, we should not even make it an option</p>",
+        "id": 532372873,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754079419
+    },
+    {
+        "content": "<p>Note that line numbers can work just fine with frame pointer backtraces</p>",
+        "id": 532372997,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754079488
+    },
+    {
+        "content": "<p>All you need is <code>addr2line</code> at that point</p>",
+        "id": 532373030,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754079505
+    },
+    {
+        "content": "<p>(either the tool itself, or functionality thereof)</p>",
+        "id": 532373054,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754079519
+    },
+    {
+        "content": "<p>TIL about <code>addr2line</code> - but apparently it's basically the same thing as <code>libbacktrace</code> except it's designed to be invoked in a separate process on a file that's a memory dump of the frame?</p>",
+        "id": 532373701,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754079810
+    },
+    {
+        "content": "<p>Yep!</p>",
+        "id": 532376018,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754080928
+    },
+    {
+        "content": "<p>And, most importantly IMO, it doesn't require linking, and can even be done after the fact</p>",
+        "id": 532376050,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754080946
+    },
+    {
+        "content": "<p>(doesn't require symbols being embedded in the binary, or even being on the machine where the crash happened)</p>",
+        "id": 532376081,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1754080963
+    },
+    {
+        "content": "<p>hm, but wouldn't the best UX normally be getting the stack trace immediately?</p>",
+        "id": 532381323,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754083643
+    },
+    {
+        "content": "<p>I mean if all we have to do is enable stack frames to get it, then sure, might as well, but wouldn't host authors pretty much always want to use <code>libbacktrace</code> anyway for runtime stack traces? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 532381436,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754083713
+    },
+    {
+        "content": "<p>I don't think it is safe to longjmp from a segfault handler, but you can modify the return address to go to a temp function and then longjmp.</p>\n<p>Also, of note, you want to leave segfault handlers as fast as possible. So all of the stuff discussed here should be deferred and outside of the segfault handler.</p>\n<blockquote>\n<p>and if there are multiple Roc entrypoints running concurrently, they should each have their own allocators</p>\n</blockquote>\n<p>I wonder how expensive that would be... A lot of perf is gained from things like tcmalloc (thread cache malloc) with its smart reuse of memory.</p>\n<blockquote>\n<p>if it's doing file handle stuff, that should be tracked somewhere the host can access it, so that it can iterate through the open file handles and close them</p>\n</blockquote>\n<p>Or we implement standard exceptions in roc. Use debug info to walk the stack and run destructors on the roc values. Stack walking is slower when there is an exception but greatly reduces the cost when no exceptions happen.</p>\n<blockquote>\n<p>of note, an alternative to <code>setjmp</code>/<code>longjmp</code> is to do stack unwinding - e.g. <code>libunwind</code> (~100KB dependency) lets you avoid the <code>setjmp</code> up front (maybe like a dozen CPU instructions), but that seems not worth it to me considering <code>setjmp</code> and <code>longjmp</code> are much simpler</p>\n</blockquote>\n<p>I'm not sold due to all the extra cost of the host needing to manually track every resource that roc uses....</p>\n<blockquote>\n<p>one more note: the interpreter just does all this stuff itself and reports a stack overflow as a normal <code>crash</code></p>\n</blockquote>\n<p>Yeah, interpreter should be super simple here. And should be able to give nicer errors.</p>\n<blockquote>\n<p>since the backtrace-obtaining functionality is completely different for interpreter vs optimized build, I think the compiled roc application should expose a <code>backtrace()</code> symbol the host can link and call, and it will have the same API regardless of whether we're interpreting or running an optimized build (the optimized build will use <code>libbacktrace</code>, which we'll need to bundle along with our builtins, and then the interpreter will do its own thing with its own stack memory)</p>\n</blockquote>\n<p>If compiled binaries are just for optimized builds, why not just not have backtraces? It is really common to leave out debug info in release builds anyway. Leave that for the interpreter.</p>",
+        "id": 532382720,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754084479
+    },
+    {
+        "content": "<blockquote>\n<p>guarantee you can always get some kind of backtrace via frame pointers</p>\n</blockquote>\n<p>Frame pointer is a waste in my opinion (hurts perf for little gain most of the time, should be optional and not default). Just don't have debug info in release builds and use the interpreter which is better suited for this anyway. Give a super crude trace for anything optimized</p>",
+        "id": 532382900,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754084583
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> [said](<a href=\"#narrow/channel/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recov\">https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recov</a></p>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recovery/near/532382720\">said</a>:</p>\n<blockquote>\n<p>I don't think it is safe to longjmp from a segfault handler, but you can modify the return address to go to a temp function and then longjmp.</p>\n<p>Also, of note, you want to leave segfault handlers as fast as possible. So all of the stuff discussed here should be deferred and outside of the segfault handler.</p>\n</blockquote>\n<p>hm, how would this work for purposes of getting a backtrace? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> </p>\n<p>modify return address, go to temp function, then do backtrace, then longjmp?</p>\n<p>I assume by default <code>libbacktrace</code> would not work post-longjmp, since the backtrace code itself would be potentially stomping over the previous stack memory <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 532387993,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754087635
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recovery/near/532382900\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>guarantee you can always get some kind of backtrace via frame pointers</p>\n</blockquote>\n<p>Frame pointer is a waste in my opinion (hurts perf for little gain most of the time, should be optional and not default). Just don't have debug info in release builds and use the interpreter which is better suited for this anyway. Give a super crude trace for anything optimized</p>\n</blockquote>\n<p>I think that would be fine for some use cases but pretty bad for others - e.g. if my web server <code>crash</code>es, I really want as real backtrace in my logs as I can get without sacrificing optimizations <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 532388142,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754087729
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recovery/near/532382720\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>if it's doing file handle stuff, that should be tracked somewhere the host can access it, so that it can iterate through the open file handles and close them</p>\n</blockquote>\n<p>Or we implement standard exceptions in roc. Use debug info to walk the stack and run destructors on the roc values. Stack walking is slower when there is an exception but greatly reduces the cost when no exceptions happen.</p>\n</blockquote>\n<p>I dunno, I know we've talked about this a bunch over the years, but I just keep coming back to:</p>\n<ul>\n<li>the described above is way, way faster than exceptions if you do actually need to clean up</li>\n<li>it's also way simpler to just give Roc stuff its own allocator</li>\n<li>the host might want to decouple those anyway because a different allocator might be better for Roc's allocation patterns compared to the rest of the host</li>\n<li>it's astronomically simpler for the compiler</li>\n</ul>\n<p>it just feels like exceptions would be a way to make host authors do a bit less work for the tradeoff of having worse perf when there's an exception and a ton of added complexity</p>",
+        "id": 532388493,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754087953
+    },
+    {
+        "content": "<p>btw I don't actually think cleaning up file handles would be much work for the host</p>",
+        "id": 532388622,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754088041
+    },
+    {
+        "content": "<p>they already need to be tracked somewhere for the whole \"refcounted fd via <code>roc_alloc</code> that cleans itself up\" design, so even in the worst case scenario where you have a bunch of roc functions running at once and they're passing the handles between one another, even then all you have to do is just make sure to keep a running list of which fds a given roc function is executing, and you just go through and decref those if it crashes.</p>",
+        "id": 532388788,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754088143
+    },
+    {
+        "content": "<p>feels like stack overflow handling is the big burden here, and I don't know of a way to make that burden easier without sacrificing flexibility (e.g. host can have their own signal handlers without worrying about roc installing its own that conflict with the host's) and/or some huge perf penalty like introducing a vm or something</p>",
+        "id": 532388852,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754088197
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recovery/near/532387993\">said</a>:</p>\n<blockquote>\n<p>hm, how would this work for purposes of getting a backtrace? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> </p>\n<p>modify return address, go to temp function, then do backtrace, then longjmp?</p>\n<p>I assume by default <code>libbacktrace</code> would not work post-longjmp, since the backtrace code itself would be potentially stomping over the previous stack memory <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>\n</blockquote>\n<p>Yeah, I think something like that. Savinging the old stack address when you do so </p>\n<p>Maybe all the ceremony isn't required but I remember seeing something like this in go when dealing with stack swapping (which happens on a signal from a timer if a go routine runs for top long)</p>",
+        "id": 532395594,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754093397
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recovery/near/532388622\">said</a>:</p>\n<blockquote>\n<p>btw I don't actually think cleaning up file handles would be much work for the host</p>\n</blockquote>\n<p>No, I assume the memory allocator cleanup would be the bigger hassle (and having state per thread). Specifically if you just want a gpa and not arenas</p>",
+        "id": 532395832,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754093491
+    },
+    {
+        "content": "<blockquote>\n<p>it just feels like exceptions would be a way to make host authors do a bit less work for the tradeoff of having worse perf when there's an exception and a ton of added complexity</p>\n</blockquote>\n<p>I mean I would hope exceptions are truly exceptional and roc rarely crashes in production, but I guess that may vary a lot by use case.</p>",
+        "id": 532396010,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754093586
+    },
+    {
+        "content": "<p>And for backrraces in release builds, it definitely is true that having full dwarf info and backrraces from debug info is the most friendly.</p>",
+        "id": 532396194,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754093748
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recovery/near/532395832\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recovery/near/532388622\">said</a>:</p>\n<blockquote>\n<p>btw I don't actually think cleaning up file handles would be much work for the host</p>\n</blockquote>\n<p>No, I assume the memory allocator cleanup would be the bigger hassle (and having state per thread). Specifically if you just want a gpa and not arenas</p>\n</blockquote>\n<p>hm, why would that be hard? seems like e.g. mimalloc, jemalloc, snmalloc all have a concept of making an allocator instance</p>",
+        "id": 532397393,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754094784
+    },
+    {
+        "content": "<p>I don't think you actually want a new allocator per coroutine</p>",
+        "id": 532399152,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754096314
+    },
+    {
+        "content": "<p>That could be hundreds of thousands of allocator instances in a webserver.</p>",
+        "id": 532399235,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754096380
+    },
+    {
+        "content": "<p>not per coroutine, per roc entrypoint</p>",
+        "id": 532399302,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754096409
+    },
+    {
+        "content": "<p>so per request handler</p>",
+        "id": 532399312,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754096418
+    },
+    {
+        "content": "<p>Yeah, that is per coroutine. Each coroutine would be running a roc request</p>",
+        "id": 532399337,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754096432
+    },
+    {
+        "content": "<p>hm, why would that be bad? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 532399488,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754096535
+    },
+    {
+        "content": "<p>having a separate heap for each of them</p>",
+        "id": 532399520,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754096558
+    },
+    {
+        "content": "<p>e.g. seems to work great for Erlang <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 532399532,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754096569
+    },
+    {
+        "content": "<p>Maybe it wouldn't be, but it would be a lot more overhead than what is normal.</p>",
+        "id": 532399547,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754096583
+    },
+    {
+        "content": "<p>Cause they won't share pages for example. So each will end up claim some number of pages even if very little memory is used by roc.</p>",
+        "id": 532399599,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754096618
+    },
+    {
+        "content": "<p>yeah that's fair</p>",
+        "id": 532399828,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754096801
+    },
+    {
+        "content": "<p>I mean we can try it out and see how it does</p>",
+        "id": 532399836,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754096807
+    },
+    {
+        "content": "<p>can also try that out alongside arenas per request</p>",
+        "id": 532399887,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754096838
+    },
+    {
+        "content": "<p>I mean, to be clear, Folkert and I spent a ton of hours trying to get C++ style exceptions working without a libc++ dependency, everyone I asked about it said what we were trying to do was a huge mistake, and scrapping it really made things a lot simpler - so I'm not saying we could never do it, just that I think the downside is very serious, so the upside really needs to justify it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 532400011,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754096961
+    },
+    {
+        "content": "<p>Yeah, totally fair around exceptions.</p>",
+        "id": 532400165,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754097095
+    },
+    {
+        "content": "<p>Also, to be fair, most languages just don't recover from stack overflows. Like no attempt is made at all</p>",
+        "id": 532400659,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754097509
+    },
+    {
+        "content": "<p>Same as OOMs</p>",
+        "id": 532400669,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754097520
+    },
+    {
+        "content": "<p>Just classes of bugs that are accepted as fatal generally</p>",
+        "id": 532400678,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754097531
+    },
+    {
+        "content": "<p>But I guess you still need some solution to calls to crash....so <span aria-label=\"shrug\" class=\"emoji emoji-1f937\" role=\"img\" title=\"shrug\">:shrug:</span>, may need this kind of heavy handed solution.</p>",
+        "id": 532400748,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754097589
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/host.20crash.20and.20stack.20overflow.20recovery/near/532400659\">said</a>:</p>\n<blockquote>\n<p>Also, to be fair, most languages just don't recover from stack overflows. Like no attempt is made at all</p>\n</blockquote>\n<p>that's true of like C and C++ and Rust, sure, but not the garbage collected languages we're competing directly with</p>",
+        "id": 532400951,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754097733
+    },
+    {
+        "content": "<p>like if you hit a stack overflow in Java, C#, JavaScript, Ruby, Python, they all definitely let you gracefully recover - and normally they translate it to a normal exception</p>",
+        "id": 532401024,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754097798
+    },
+    {
+        "content": "<p>I don't know about Go but given its approach to stacks I assume so too</p>",
+        "id": 532401031,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754097809
+    },
+    {
+        "content": "<p>like a whole webserver going down because one request handler stack overflowed would be a deal-breaker I think</p>",
+        "id": 532401044,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754097825
+    },
+    {
+        "content": "<p>and if we solve it for hosts in that use case, then we have a solution for all hosts <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 532401064,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754097841
+    },
+    {
+        "content": "<blockquote>\n<p>I don't know about Go but given its approach to stacks I assume so too</p>\n</blockquote>\n<p>Go doesn't have stack overflows. Just OOMs. Stack will keep growing until OOM. At least that is my recollection</p>",
+        "id": 532401692,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754098213
+    },
+    {
+        "content": "<p>ahh right</p>",
+        "id": 532401728,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754098260
+    },
+    {
+        "content": "<p>Also, it might just be the case that we have to hack something like mimalloc or tcmalloc to instead of being thread local, being coroutine local. That may work to avoid the overhead, but give good cleanup.</p>",
+        "id": 532401729,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1754098263
+    },
+    {
+        "content": "<p>ooh interesting!</p>",
+        "id": 532401752,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1754098277
+    }
+]

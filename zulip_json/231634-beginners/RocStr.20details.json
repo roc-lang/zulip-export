@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>I'm trying my hand at writing a custom <code>RocStr</code> implementation and I'm wondering about a few things</p>\n<p><strong>Small strings</strong></p>\n<p>If I understand correctly, when a string is &lt;= 15 bytes, the first 15 bytes contain the string data, the last byte contains the metadata and the \"small string flag\" is the most significant bit of the metadata (= the last byte).</p>\n<p>However the implementation of <code>RocStr.is_small_str</code> takes the length (= the last 8 bytes) and checks its most significant bit (through a <code>usize -&gt; isize</code> conversion), which should be part of the string, not the metadata. The method seems to work though, what am I missing?</p>\n<p><strong>Not dropping RocStr in Rust</strong></p>\n<p>The <code>RocStr</code> in <code>roc_std</code> implements the <code>Drop</code> trait, which frees the memory when the <code>RocStr</code> goes out of scope in Rust and if the ref count is 1. This leads to the use of <code>core::mem::forget</code> in host code.</p>\n<p>I'm trying out a version without <code>Drop</code>, which does nothing with ref count / memory - unless you want to store the value. In this case, there's <code>MyRocStr.incr_ref_count</code>. Here's the implementation:<br>\n<a href=\"https://github.com/erwinkn/roc-platform-experiments/blob/main/platform/src/lib.rs#L84-L97\">https://github.com/erwinkn/roc-platform-experiments/blob/main/platform/src/lib.rs#L84-L97</a></p>\n<p>The host also stores all the strings printed by the Roc application until the end of the program and prints them again. If I don't increment the ref count, I see some garbage data, so the memory has been freed. If I increment the ref count, the string is kept alive, so the idea seems to be working.</p>\n<p>Are there problems with this approach? I'm still not sure I understand why <code>RocStr</code> in <code>roc_std</code> has a Drop implementation, so I may be missing something</p>",
+        "id": 265330385,
+        "sender_full_name": "Erwin Kuhn",
+        "timestamp": 1639761956
+    },
+    {
+        "content": "<p>If i wasn't in an airport, i would try and help. I'll try to look over this tomorrow if someone hasn't already figured it out.<br>\nAlso, implementation uses the last byte cause little endianness.</p>",
+        "id": 265342316,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1639767029
+    },
+    {
+        "content": "<p>So when you flip the byte order, 1 flag bit is in the same location as the sign but of an isize</p>",
+        "id": 265342888,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1639767284
+    },
+    {
+        "content": "<p>I think the endianness is what I was missing, I was also confused by that code</p>",
+        "id": 265356850,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1639773229
+    },
+    {
+        "content": "<p>the <code>Drop</code> implementation is needed because calling roc's main function could return a string to the host. The host then needs to clean up that string, otherwise we would leak memory. <code>RocStr</code>  owns the allocation</p>",
+        "id": 265356961,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1639773279
+    },
+    {
+        "content": "<p>(I wonder if for rust we should instead call it <code>RocString</code>, and we could then make a <code>RocStr</code> type that borrows its contents (so it's used as <code>&amp;RocStr</code>  in practice)</p>",
+        "id": 265357044,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1639773333
+    },
+    {
+        "content": "<p>Catching up a bit late, sorry!</p>",
+        "id": 265993968,
+        "sender_full_name": "Erwin Kuhn",
+        "timestamp": 1640343080
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/231634-beginners/topic/RocStr.20details/near/265342316\">said</a>:</p>\n<blockquote>\n<p>Also, implementation uses the last byte cause little endianness.</p>\n</blockquote>\n<p>Wow that's a really smart trick! I guess this is for performance reasons vs using a XOR to retrieve the flag bit, if it were somewhere else?</p>",
+        "id": 265994076,
+        "sender_full_name": "Erwin Kuhn",
+        "timestamp": 1640343203
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281543\">Folkert de Vries</span> <a href=\"#narrow/stream/231634-beginners/topic/RocStr.20details/near/265357044\">said</a>:</p>\n<blockquote>\n<p>(I wonder if for rust we should instead call it <code>RocString</code>, and we could then make a <code>RocStr</code> type that borrows its contents (so it's used as <code>&amp;RocStr</code>  in practice)</p>\n</blockquote>\n<p>One thing I've done in Rust is to add a phantom marker on <code>RocStr</code> to give it a lifetime,  and add a method that increases refcount and returns an owned type without lifetime to store it.</p>\n<p>You can still store the <code>RocStr</code> without increasing ref count by explicitly giving it a <code>'static</code> lifetime, but at this point you're saying \"trust me, I got this\", so I think it's fine</p>",
+        "id": 265994188,
+        "sender_full_name": "Erwin Kuhn",
+        "timestamp": 1640343325
+    },
+    {
+        "content": "<p>The point of not owning the <code>RocStr</code> that's passed as argument to a function exposed to Roc code vs owning a <code>RocString</code> returned from application code applies to any language though, right?</p>",
+        "id": 265994244,
+        "sender_full_name": "Erwin Kuhn",
+        "timestamp": 1640343380
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"460799\">Erwin Kuhn</span> <a href=\"#narrow/stream/231634-beginners/topic/RocStr.20details/near/265994076\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/231634-beginners/topic/RocStr.20details/near/265342316\">said</a>:</p>\n<blockquote>\n<p>Also, implementation uses the last byte cause little endianness.</p>\n</blockquote>\n<p>Wow that's a really smart trick! I guess this is for performance reasons vs using a XOR to retrieve the flag bit, if it were somewhere else?</p>\n</blockquote>\n<p>I maen an optimizing compiler like llvm would probably make them equivalent, but it theoretically saves an instruction or 2. Instead of xor and compare to value, it is just directly compare to a value.</p>",
+        "id": 266027479,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1640385004
+    }
+]

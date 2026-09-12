@@ -1,0 +1,134 @@
+[
+    {
+        "content": "<p>I'm working on a Roc project for continuous integration and running into an 'alias analysis' error:</p>\n<p>Project code is <a href=\"https://github.com/jwoudenberg/roc-ci\">here</a></p>\n<p>When I run <code>roc test package/main.roc</code> I get three warnings (that I don't think I can do anything about), but no compilation errors. Same when I run <code>roc check package/main.roc</code>. When I run <code>roc run package/main.roc</code> I get the following error:</p>\n<div class=\"codehilite\"><pre><span></span><code>thread &#39;main&#39; panicked at &#39;Error in alias analysis: error in module ModName(&quot;UserApp&quot;), function definition FuncName(&quot;\\x12\\x00\\x00\\x003\\x00\\x00\\x00;A\\xd5\\xcd\\xbf \\x7fy&quot;), definition of value binding ValueId(9): could not find func in module ModName(&quot;UserApp&quot;) with name FuncName(&quot;1\\x00\\x00\\x00D\\x00\\x00\\x00\\xc4Q\\x0e\\xe3\\xcb\\xf0l\\x0c&quot;)&#39;, crates/compiler/gen_llvm/src/llvm/build.rs:5779:19\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>\n<p>I've isolated the problem to <a href=\"https://github.com/jwoudenberg/roc-ci/blob/main/package/Runner/LocalInternal.roc#L109\">this line</a>. When I slightly change the code allowing me to take that line out, the program runs. The line in question is not actually encountered when running<code>roc run package/main.roc</code> without extra arguments, but its existence seems to trigger the error regardless.</p>\n<p>I've tried working around the problems for quite a bit:</p>\n<ul>\n<li>Change the error parameter of the <code>Task</code> returned from <code>step.run</code> from a tagged union to a <code>Str</code>.</li>\n<li>Adding/removing type annotations in varous places</li>\n<li>Turning some type aliases into opaque types</li>\n</ul>\n<p>None of these worked though, and I'm taking shots in the dark because I don't have an intuition for what might be underlying problem.</p>\n<p>I'd be happy to try create a minimal reproducible example of the bug, but I read in <a href=\"#narrow/stream/231634-beginners/topic/Compiler.20bug\">this related thread</a> that more examples of this type of bug are not super useful.</p>\n<p>I'm not sure what to try next, and would be super grateful for any help getting me unstuck. Even links to reading that would help me build an understanding of what's going wrong so I can try more informed workarounds would be super appreciated!</p>",
+        "id": 430255777,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1711718678
+    },
+    {
+        "content": "<p>hm, looks like the link is broken in <code>this line</code> <span aria-label=\"point up\" class=\"emoji emoji-1f446\" role=\"img\" title=\"point up\">:point_up:</span></p>",
+        "id": 430257440,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1711719490
+    },
+    {
+        "content": "<p>Thank you! Fixed!</p>",
+        "id": 430258743,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1711720124
+    },
+    {
+        "content": "<blockquote>\n<p>I  get three warnings (that I don't think I can do anything about)</p>\n</blockquote>\n<p>This is <a href=\"https://github.com/roc-lang/roc/issues/5477\">#5477</a> which Agus is working on and the module params should fix.</p>",
+        "id": 430312314,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1711743210
+    },
+    {
+        "content": "<p>Spent some time playing with this and I haven't been able to find a workaround either. I think it might be related to having a function which returns a Task stored in a record.</p>",
+        "id": 430315187,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1711744801
+    },
+    {
+        "content": "<p>I'm wondering if you could re-architect to have the step funcs stored in a list, and then the <code>step.run</code> could be an index into that list?</p>",
+        "id": 430315350,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1711744875
+    },
+    {
+        "content": "<p>That might help by removing one less thing that could be causing an issue... but just an idea</p>",
+        "id": 430315459,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1711744930
+    },
+    {
+        "content": "<p>Thank you for taking a look! I'm going to give the list approach a try, thanks for the idea!</p>",
+        "id": 430324375,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1711750233
+    },
+    {
+        "content": "<p>I gave storing the functions in a list a try, but unfortunately the same error persists (pushed a <code>fns-in-list</code> branch). Doing that refactor did make me realize an unrelated aspect of the code could be simpler, so that was nice!</p>",
+        "id": 430331294,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1711754815
+    },
+    {
+        "content": "<p>I think you probably need to rewrite <a href=\"https://github.com/jwoudenberg/roc-ci/blob/8314a8d094c04d4a7d65a613ae0e10b8205bd340/package/Runner/LocalInternal.roc#L89-L101\">this section of code</a> in terms of <a href=\"https://www.roc-lang.org/packages/basic-cli/Task#loop\">Task.loop</a>.</p>",
+        "id": 430451080,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1711865434
+    },
+    {
+        "content": "<p>We have some bugs that currently tend to arise with manually walking lists of tasks to run them.</p>",
+        "id": 430451120,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1711865462
+    },
+    {
+        "content": "<p>Might even need to rewrite the entire <code>runSteps</code> in terms of <code>Task.loop</code></p>",
+        "id": 430451281,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1711865540
+    },
+    {
+        "content": "<p>Thanks for the tip! I refactored <code>runSteps</code> to use <code>Task.loop</code>, and I think the code looks nicer now, though it's still failing when I attempt to run it with the same error as before.</p>",
+        "id": 430463173,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1711877551
+    },
+    {
+        "content": "<p>To see what happens, I removed the loop entirely and ran the run function on just the first step in the list passed in, but this results in the same error. Based on that, I think the loop isn't culpable :).</p>",
+        "id": 430483885,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1711897984
+    },
+    {
+        "content": "<p>Oh, surprising. Let me take a deeper look in a bit</p>",
+        "id": 430484464,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1711898307
+    },
+    {
+        "content": "<p>Interesting. The cause is <a href=\"https://github.com/jwoudenberg/roc-ci/blob/e6f117cba535b78be2ab88a65ee3bf6945897a9d/package/Runner/LocalInternal.roc#L102\">step.run</a>.</p>",
+        "id": 430492614,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1711905313
+    },
+    {
+        "content": "<p>Maybe is it somehow cause by the nesting of task related lambdas and then storage into the record....but why.</p>",
+        "id": 430492937,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1711905636
+    },
+    {
+        "content": "<p>Yeah, trying to figure that out too. I've noticed that when I do the wrapping of the lambda in a datastructure and then call it directly after things seem fine, but if there's some more distance between the wrapping and calling then at some point it becomes a problem. Haven't figured out the exact threshold yet though.</p>",
+        "id": 430504691,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1711916568
+    },
+    {
+        "content": "<p>I tried one other thing today, which was to replace cli-basic's <code>Task</code> with a custom type (something I want to do anyway at some point, to control what IO is possible in a step towards turning this into a platform). That didn't work though. Maybe not entirely surprisingly given it made the types more complicated rather than less.</p>",
+        "id": 431392139,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1712260773
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> do you have any ideas for how to work around this? seems like it's a blocker for the CI chapter</p>",
+        "id": 432972599,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1712951751
+    },
+    {
+        "content": "<p>All I know is that it seems like your compiler doesn't like storing the task in a record. That might be a useful tip for debugging, but would have to mess around with it a lot more to have any concrete ideas.</p>",
+        "id": 432972910,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1712951881
+    },
+    {
+        "content": "<p>I'm not blocked on the chapter, I think I could do most of the design and write the text, but would be nice if by the time we publish we could run it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span>.</p>\n<p>I'm not sure if it's the storing of the task in a record is the problem directly. If I create a wrapped task like that, and then use it \"soon enough\", then that's fine. It's when creating more distance between the wrapping and unwrapping that the problem starts occuring, but I've had trouble finding what border you need to cross to start running into the problem. I ran out of ideas last time I tried, will give it another go in a bit.</p>",
+        "id": 432979171,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1712954677
+    }
+]

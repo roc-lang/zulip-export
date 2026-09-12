@@ -1,0 +1,392 @@
+[
+    {
+        "content": "<p>one of the things that's cool about interpreters like Ruby's (which I'll use as an example because I'm the most familiar with it) is that you can do things like:</p>\n<ul>\n<li>when there's a <code>crash</code>, immediately halt the program and drop into a step debugger on the command line (assuming the process was spawned from the command line)</li>\n<li>alternatively, allow setting breakpoints in advance (by various means; I want to leave out of scope of this thread exactly what the interface should be for setting breakpoints)</li>\n<li>once you're in debugging mode, you can change source files on the fly - even including changing the next line right after where the program is currently paused - and when you continue running the program, these changes have magically been applied</li>\n</ul>",
+        "id": 499959566,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739662413
+    },
+    {
+        "content": "<p>this seems both awesome and also feasible with our planned interpreter backend, such that when you do <code>roc foo.roc</code> it just supports all of this right away, as long as you didn't pass <code>--optimize</code> to <code>roc</code></p>",
+        "id": 499959631,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739662452
+    },
+    {
+        "content": "<p>however, it's still nontrivial!</p>",
+        "id": 499959652,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739662486
+    },
+    {
+        "content": "<p>for reasons I'd also prefer to keep out of scope of this thread, let's assume that we are interpreting canonicalized IR</p>",
+        "id": 499959677,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739662508
+    },
+    {
+        "content": "<p>if the debugger pauses the interpreter on a particular IR node, and you change the source file on disk...when you resume the interpreter, how does it know that the source file changed? And how can it modify the upcoming instructions, including the very next line of the program, when it's in the middle of interpreting a canonical IR in memory?</p>",
+        "id": 499959786,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739662606
+    },
+    {
+        "content": "<p>regarding how we know the source file changed, at first I thought we could just diff the current source file after you hit resume (or step, etc.) to see if it changed, but then I realized you might have edited another module - possibly one that's not even directly imported by this one, but rather indirectly imported</p>",
+        "id": 499959937,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739662776
+    },
+    {
+        "content": "<p>in that scenario, are we really going to re-check the disk every single time we call a function from another module? That would be way too slow.</p>",
+        "id": 499959944,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739662798
+    },
+    {
+        "content": "<p>instead, the fast way to do this would be that, whenever <code>roc</code> is running a program with debugging enabled, it sets up a watch on every file that gets imported, and whenever that file changes, we know it's time to rebuild the canonical IR (and potentially report new compilation errors)</p>",
+        "id": 499960022,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739662842
+    },
+    {
+        "content": "<p>at this point I realized if we have that, then we have realtime hot code loading <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 499960034,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739662852
+    },
+    {
+        "content": "<p>so really, I think the experience I mentioned at the start the thread can be broken down into two projects:</p>\n<ul>\n<li>realtime hot code loading for the interpreter based on file watching</li>\n<li>the debugger being able to halt the program, step, etc.</li>\n</ul>",
+        "id": 499960219,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663007
+    },
+    {
+        "content": "<p>there might be a bit of coordination between the two, but I think the vast majority of each of those projects seem totally independent of one another</p>",
+        "id": 499960281,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663052
+    },
+    {
+        "content": "<p>e.g. the hot code loading needs to (I think) keep around the source file hashes in memory, along with the dependency graph, so it can efficiently tell which IRs need to be rebuilt in memory when source files change on disk</p>",
+        "id": 499960326,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663103
+    },
+    {
+        "content": "<p>I think it also needs to have a string-based translation step for \"upgrading\" all the interned IDs and such when a source file changes</p>",
+        "id": 499960362,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663142
+    },
+    {
+        "content": "<p>Rather than keeping around hashes in memory, I would instead (or in addition) keep around the stat - mtime, ctime, inode, size - and if none of those have changed, assume the hash hasn't changed either</p>",
+        "id": 499960418,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663168
+    },
+    {
+        "content": "<p>yep, we can do both! Related: <a href=\"https://apenwarr.ca/log/20181113\">https://apenwarr.ca/log/20181113</a></p>",
+        "id": 499960448,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663220
+    },
+    {
+        "content": "<p>although that's more about rebuilds</p>",
+        "id": 499960468,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663248
+    },
+    {
+        "content": "<p>if we're running and have OS file watches set up, then we get events whenever things change (and if they changed, then certainly mtime changed)</p>",
+        "id": 499960483,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663262
+    },
+    {
+        "content": "<p>OS file watches are not completely reliable, FWIW</p>",
+        "id": 499960545,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663303
+    },
+    {
+        "content": "<blockquote>\n<p>(and if they changed, then certainly mtime changed)</p>\n</blockquote>\n<p>This is very much not true</p>",
+        "id": 499960554,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663313
+    },
+    {
+        "content": "<p>oh, true</p>",
+        "id": 499960562,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663330
+    },
+    {
+        "content": "<p>given second resolution etc.</p>",
+        "id": 499960566,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663334
+    },
+    {
+        "content": "<p>Yeah, also some apps have the annoying proclivity to modify a file and then set the mtime to some earlier time (perhaps the exact same time)</p>",
+        "id": 499960593,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663386
+    },
+    {
+        "content": "<p>The particular such apps I know of are not text editors tho. Text editors are probably not being that sneaky.</p>",
+        "id": 499960647,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663418
+    },
+    {
+        "content": "<p>hopefully haha</p>",
+        "id": 499960663,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663425
+    },
+    {
+        "content": "<p>regardless, I haven't heard of OS file watching APIs being unreliable</p>",
+        "id": 499960668,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663435
+    },
+    {
+        "content": "<p>do you have any links I could read to learn more?</p>",
+        "id": 499960678,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739663448
+    },
+    {
+        "content": "<p>See <a href=\"https://developer.apple.com/documentation/coreservices/kfseventstreameventflaguserdropped\">https://developer.apple.com/documentation/coreservices/kfseventstreameventflaguserdropped</a> for example</p>",
+        "id": 499960928,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663747
+    },
+    {
+        "content": "<p><code>watchman</code> handles that sort of thing for you</p>",
+        "id": 499960992,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663779
+    },
+    {
+        "content": "<p>(as probably do many libraries that abstract over file events)</p>",
+        "id": 499960999,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663794
+    },
+    {
+        "content": "<p>That sort of thing can happen if the system is under heavy filesystem load, for instance</p>",
+        "id": 499961097,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663886
+    },
+    {
+        "content": "<p>OSes generally prioritize availability over delivering all file events</p>",
+        "id": 499961102,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663902
+    },
+    {
+        "content": "<p>Switching branches in a large repo can trigger that sort of behavior quite frequently</p>",
+        "id": 499961126,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739663946
+    },
+    {
+        "content": "<p>oh I see</p>",
+        "id": 499961479,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739664210
+    },
+    {
+        "content": "<p>well that's just normal error handling though right?</p>",
+        "id": 499961484,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739664221
+    },
+    {
+        "content": "<p>like the OS still informs us that a full file scan is necessary, it's not like we just silently don't get any info</p>",
+        "id": 499961496,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739664241
+    },
+    {
+        "content": "<p>I believe so, yes</p>",
+        "id": 499961546,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739664276
+    },
+    {
+        "content": "<p>Of course the same caveats for mtime often apply to file events</p>",
+        "id": 499961552,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739664289
+    },
+    {
+        "content": "<p>e.g. memory mapped files can delay file events (and maybe suppress them altogether?)</p>",
+        "id": 499961577,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739664319
+    },
+    {
+        "content": "<p>That said, I would be very much not shocked to learn that there are OSes and configurations thereof that can legitimately drop file events with no notice.</p>",
+        "id": 499961658,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739664371
+    },
+    {
+        "content": "<p>File events are generally not treated with the same level of care as other file system operations</p>",
+        "id": 499961681,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739664402
+    },
+    {
+        "content": "<p>Anyway, popping back up a level, I'd recommend looking at how the git index works</p>",
+        "id": 499961832,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739664508
+    },
+    {
+        "content": "<p>That's the sort of state we'd want to keep in memory</p>",
+        "id": 499961843,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739664522
+    },
+    {
+        "content": "<p>And, popping back to the original discussion, debuggers / hot reloading is very cool! (and complicated)</p>",
+        "id": 499962516,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739665117
+    },
+    {
+        "content": "<p>I'm reminded about <a href=\"https://mun-lang.org/\">https://mun-lang.org/</a></p>",
+        "id": 499962520,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739665124
+    },
+    {
+        "content": "<p>I think there's going to be some overlap between what we'll want for caching, what we'll want for editor tooling, and what we'll want for hot code loading</p>",
+        "id": 499962787,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739665373
+    },
+    {
+        "content": "<p>This sounds fun. I'm for it</p>",
+        "id": 499966133,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739668562
+    },
+    {
+        "content": "<p>Also, I think general hot code reloading would be much  easier than patching mid function</p>",
+        "id": 499966212,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739668614
+    },
+    {
+        "content": "<p>Also, I'm more used to seeing a repl from debugger mid function than patching. I think that also is an easier problem to solve than full mid function patching</p>",
+        "id": 499966603,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739668975
+    },
+    {
+        "content": "<p>I actually suspect it's not as hard as it sounds</p>",
+        "id": 499967955,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739670292
+    },
+    {
+        "content": "<p>basically you do a diff and it's just very conservative</p>",
+        "id": 499967982,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739670307
+    },
+    {
+        "content": "<p>if anything changed about the function you're in the middle of executing while the debugger is stopped, you verify that absolutely nothing changed prior to the current line where you're paused</p>",
+        "id": 499968070,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739670366
+    },
+    {
+        "content": "<p>bc if it did, then you can no longer be confident that the state you're currently in at runtime even exists in the new source file</p>",
+        "id": 499968172,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739670491
+    },
+    {
+        "content": "<p>whereas if the entire function up to the current place where you're paused is unchanged, then you can re-canonicalize, use source regions to find the place in the new canonical iR where you need to pick up, and go from there</p>",
+        "id": 499968223,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739670587
+    },
+    {
+        "content": "<p>and if anything changed in the function after where you paused, it's fine</p>",
+        "id": 499968285,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739670624
+    },
+    {
+        "content": "<p>You also need to know that the parts of the function that have changed either haven't been run, or wouldn't have contributed to the current state of the program - i.e. you need to keep track of code coverage</p>",
+        "id": 499968605,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739671004
+    },
+    {
+        "content": "<p>(maybe that's what you meant)</p>",
+        "id": 499968611,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739671013
+    },
+    {
+        "content": "<p>yeah a crude form of that - just source diff basically</p>",
+        "id": 499969939,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739672392
+    },
+    {
+        "content": "<p>I guess a fancier version could do an IR diff</p>",
+        "id": 499969994,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739672412
+    },
+    {
+        "content": "<p>in case you only added a comment or something</p>",
+        "id": 499970005,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739672426
+    },
+    {
+        "content": "<blockquote>\n<p>if anything changed about the function you're in the middle of executing while the debugger is stopped, you verify that absolutely nothing changed prior to the current line where you're paused</p>\n</blockquote>\n<p>This sounds less nice than just getting an a REPL, but I guess we can support both</p>",
+        "id": 499973283,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739675795
+    },
+    {
+        "content": "<p>oh sorry, I do actually mean both <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 499973940,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739676564
+    },
+    {
+        "content": "<p>like in Ruby you get a repl + debugger at the same time</p>",
+        "id": 499973944,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739676570
+    },
+    {
+        "content": "<p>like you're in a repl, but then also you have access to debugging commands for stepping, resuming, etc.</p>",
+        "id": 499973952,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739676587
+    },
+    {
+        "content": "<p>Yeah, so I guess all 3? repl + debugger + hot reloading (even line by line in the debugger)?</p>",
+        "id": 499974020,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739676629
+    },
+    {
+        "content": "<p>yep! <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 499974037,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739676653
+    }
+]

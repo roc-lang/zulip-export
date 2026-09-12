@@ -1,0 +1,572 @@
+[
+    {
+        "content": "<p>For the parser (and the tokenizer, really), I've been thinking about a couple things: (1) I'd like to force as-much-as-possible, for us to do tolerant-parsing: mark a node as malformed and move on, and (2) how to record diagnostics.</p>\n<p>Those don't seem related on the surface, but I think they actually are.</p>\n<p>Imagine, for a moment, that the parser didn't have a separate side channel to write diagnostic messages to. And, when we hit an error, we should probably be putting some kind of 'malformed' node in the tree.</p>\n<p>Why don't we make those the same thing? i.e. make the _only_ way to report diagnostics be to put a 'malformed' node into the tree?</p>\n<p>This way we can structurally guarantee that we're doing our best-effort at error recovery, and it also simplifies the interface.</p>\n<p>We can do the same thing for the tokenizer - tokenizer diagnostics are simply error tokens inserted into that stream. When the parser sees one, it dutifully puts a malformed_token node into the tree and does its error recovery.</p>\n<p>At the end of parsing we can quickly grab these back out by checking the list of nodes with SIMD instructions to fetch the list of diagnostics out of the associated data for each malformed/malformed_token node. If we simply store a bool for whether we encountered an error during parsing, we can skip this step in the happy path.</p>\n<p>Thoughts? (<span class=\"user-mention\" data-user-id=\"781658\">@Anthony Bullard</span>?)</p>",
+        "id": 499146924,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739334811
+    },
+    {
+        "content": "<p>this sounds rad</p>",
+        "id": 499147853,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739335492
+    },
+    {
+        "content": "<p>the nodes in later stages might be too small for the amount of error context we'd want to include, but seems like it should work great in parsing!</p>",
+        "id": 499147906,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739335527
+    },
+    {
+        "content": "<p>single source of truth <span aria-label=\"muscle\" class=\"emoji emoji-1f4aa\" role=\"img\" title=\"muscle\">:muscle:</span></p>",
+        "id": 499147913,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739335541
+    },
+    {
+        "content": "<p>The same thing can probably work for canonicalization/desugaring</p>",
+        "id": 499148552,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739335960
+    },
+    {
+        "content": "<p>Agree it gets messy as you get deeper into the compiler</p>",
+        "id": 499148568,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739335972
+    },
+    {
+        "content": "<p>Looking thru the current tokenizer diagnostics, I think this works for most of them but not all</p>",
+        "id": 499149199,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739336405
+    },
+    {
+        "content": "<p>For anything that's _actually_ malformed, we should do this</p>",
+        "id": 499149227,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739336416
+    },
+    {
+        "content": "<p>There are some things where we could in principle let the parser ignore the problem and just make a \"side-note\" - e.g. MisplacedCarriageReturn, AsciiControl, LeadingZero, and UppercaseBase, all of which are really \"warnings\" rather than errors.</p>",
+        "id": 499149717,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739336574
+    },
+    {
+        "content": "<p>\"hey this looks funky but I'll let it slide\"</p>",
+        "id": 499149807,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739336632
+    },
+    {
+        "content": "<p>Actually - if the formatter is just going to fix something up (e.g. fix the misplaced carriage return), and someone has \"format on save\" hooked up, it feels kinda silly to be reporting those kind of warnings</p>",
+        "id": 499150122,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739336849
+    },
+    {
+        "content": "<p>I think it's important for CI</p>",
+        "id": 499219339,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739363167
+    },
+    {
+        "content": "<p>hm, actually I guess we could have <code>roc format --check</code> take care of reporting those? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 499219579,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739363246
+    },
+    {
+        "content": "<p>eh, but those are actual mistakes, not stylistic choices, and <code>roc check</code> should tell you about mistakes</p>",
+        "id": 499219845,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739363331
+    },
+    {
+        "content": "<p><code>roc format --check</code> should just tell you about when your code is off stylistically</p>",
+        "id": 499219972,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739363372
+    },
+    {
+        "content": "<p>Can we make them malformed nodes that store the issue side band?</p>",
+        "id": 499350315,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404273
+    },
+    {
+        "content": "<p>That way, you still are required to have the node, but no fancy check or simd required</p>",
+        "id": 499350345,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404294
+    },
+    {
+        "content": "<p>Just look at the length of the sideband data structure</p>",
+        "id": 499350372,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404307
+    },
+    {
+        "content": "<p>Can literally make the only way to add something to the data structure is to generate a malformed node at the same time</p>",
+        "id": 499350443,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404332
+    },
+    {
+        "content": "<p>For later stages, I think we just have to map all of these nodes to the crash builtin. Then the build stage of the compiler literally doesn't need to know anything about the malformed nodes or concept</p>",
+        "id": 499350534,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404396
+    },
+    {
+        "content": "<p>So the mapping to crashes would be the final stage of check (or first stage of build)</p>",
+        "id": 499350585,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404433
+    },
+    {
+        "content": "<p>Might be nice to do that stage before running the interpreter anyway, but that is optional</p>",
+        "id": 499350679,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404494
+    },
+    {
+        "content": "<p>It'd be nice to show a message saying \"you got 32 compiler problems, that's bad!\"</p>",
+        "id": 499351046,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739404721
+    },
+    {
+        "content": "<p>And I don't know how to do that if we immediately convert the CompilerProblem nodes into crashes</p>",
+        "id": 499351068,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739404741
+    },
+    {
+        "content": "<p>Oh, this wouldn't be immediately. They would be malformed nodes through check and check can report all these things. The backend just doesn't care about frontend compiler problems that should turn into crashes so that roc can still run in a partially broken state.</p>",
+        "id": 499351236,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404809
+    },
+    {
+        "content": "<p>Also, I think the nodes above aren't compiler problems</p>",
+        "id": 499351291,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404840
+    },
+    {
+        "content": "<p>They are parse issues</p>",
+        "id": 499351298,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404844
+    },
+    {
+        "content": "<p>Aren't compiler problems things we plan to ban via fuzzing?</p>",
+        "id": 499351321,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404857
+    },
+    {
+        "content": "<p>They are the guaranteed failure cases</p>",
+        "id": 499351344,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739404868
+    },
+    {
+        "content": "<p>Yes, earlier phase malformed nodes should get converted to crashes</p>",
+        "id": 499351882,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739405140
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20parser.20diagnostics/near/499351321\">said</a>:</p>\n<blockquote>\n<p>Aren't compiler problems things we plan to ban via fuzzing?</p>\n</blockquote>\n<p>Ideally yes, but to plan for the worst, let's have good error messages anyway</p>",
+        "id": 499351974,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1739405179
+    },
+    {
+        "content": "<p>Yeah, for sure. But I don't see how that relates to this thread</p>",
+        "id": 499356144,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739407751
+    },
+    {
+        "content": "<p>We easily could collect compiler problems after each stage and aggregate them up. Given they should be exceptionally rare, it is even fine if they have more costly handling.</p>",
+        "id": 499356303,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739407831
+    },
+    {
+        "content": "<p>Hey y'all, I've been in bed with the flu for the past 4 days.  I apologize for not communicating better but it hit me suddenly and hard.</p>",
+        "id": 499763506,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739545126
+    },
+    {
+        "content": "<p>I should have my conflicts resolved and my parser PR ready to merge sometime today.  But I also have a LOT of work to catch back up on today</p>",
+        "id": 499763604,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739545156
+    },
+    {
+        "content": "<p>No worries! Sounds like you were doing what you should have been doing - resting!</p>",
+        "id": 499778252,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739549336
+    },
+    {
+        "content": "<p>sorry to hear about the flu - hope you're feeling better, and don't worry about PRs. They can wait. <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 499780440,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739550044
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/22008/qZPxOsUeBDRhAM38-LnXvwKt/Screenshot-2025-02-15-at-9.49.31-AM.png\">Screenshot 2025-02-15 at 9.49.31 AM.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/qZPxOsUeBDRhAM38-LnXvwKt/Screenshot-2025-02-15-at-9.49.31-AM.png\" title=\"Screenshot 2025-02-15 at 9.49.31 AM.png\"><img data-original-content-type=\"image/png\" data-original-dimensions=\"742x981\" src=\"/user_uploads/thumbnail/22008/qZPxOsUeBDRhAM38-LnXvwKt/Screenshot-2025-02-15-at-9.49.31-AM.png/840x560.webp\"></a></div><p>Has anyone ever seen GIt have behavior like this?  My editor has saved buffers for Parser.zig and IR.zig, and <code>git</code> knows about them, but they don't show up in my filesystem.  I don't think I've seen this in my 13 years of using Git.</p>",
+        "id": 499925016,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739634664
+    },
+    {
+        "content": "<p>case sensitivity?</p>",
+        "id": 499925915,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739635322
+    },
+    {
+        "content": "<p><code>ir.zig</code> and <code>IR.zig</code> are the same file on macOS, but not on Linux</p>",
+        "id": 499925989,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1739635363
+    },
+    {
+        "content": "<p>That's right</p>",
+        "id": 499926004,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635379
+    },
+    {
+        "content": "<p>I hit exactly that when I rebased your PR</p>",
+        "id": 499926028,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739635399
+    },
+    {
+        "content": "<p>Well I'm trying to figure out what to do here...</p>",
+        "id": 499926032,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635400
+    },
+    {
+        "content": "<p>Oh, you already rebased it?</p>",
+        "id": 499926056,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635420
+    },
+    {
+        "content": "<p>I just saw your DM</p>",
+        "id": 499926110,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635444
+    },
+    {
+        "content": "<p>How did you fix this?</p>",
+        "id": 499926141,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635456
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/pull/7609\">https://github.com/roc-lang/roc/pull/7609</a></p>",
+        "id": 499926143,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739635459
+    },
+    {
+        "content": "<p>To get past the casing rename thing I squashed the commits prior to rebase</p>",
+        "id": 499926164,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739635485
+    },
+    {
+        "content": "<p>So this is already merged?</p>",
+        "id": 499926177,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635494
+    },
+    {
+        "content": "<p>Yep!</p>",
+        "id": 499926197,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739635514
+    },
+    {
+        "content": "<p>So I can just do something useful then!</p>",
+        "id": 499926212,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635520
+    },
+    {
+        "content": "<p>Thank you!</p>",
+        "id": 499926221,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635525
+    },
+    {
+        "content": "<p>And thank you for making sure the commits were still mine, it means a lot to me</p>",
+        "id": 499926243,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635541
+    },
+    {
+        "content": "<p>Of course!</p>",
+        "id": 499926332,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739635577
+    },
+    {
+        "content": "<p>Trying to figure out what to tackle next</p>",
+        "id": 499926376,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635617
+    },
+    {
+        "content": "<p>I'll probably keep working on some of the low hanging fruit since my brain is still only at 80% capacity at the moment</p>",
+        "id": 499926406,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739635645
+    },
+    {
+        "content": "<p>Some of the feedback on your original PR is still outstanding</p>",
+        "id": 499926496,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739635699
+    },
+    {
+        "content": "<p>(So that’s an option if you want)</p>",
+        "id": 499926532,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739635737
+    },
+    {
+        "content": "<p>I have some partially complete local changes to start emitting diagnostics from the parser instead of panicking</p>",
+        "id": 499926587,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739635793
+    },
+    {
+        "content": "<p>I think at this point the braces discussion has settled, so you could start converting the parser to that</p>",
+        "id": 499926685,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739635845
+    },
+    {
+        "content": "<p><a href=\"#narrow/stream/304641-ideas/topic/braces.20syntax\">https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/braces.20syntax</a></p>",
+        "id": 499926803,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739635926
+    },
+    {
+        "content": "<p>Ok, yeah, let me do that.</p>",
+        "id": 499927046,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636158
+    },
+    {
+        "content": "<p>I need to look at what feedback I didn't address.  I thought I had addressed the last of Sam's feedback, but maybe that never made it in?</p>",
+        "id": 499927116,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636192
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/pull/7597#discussion_r1953437310\">https://github.com/roc-lang/roc/pull/7597#discussion_r1953437310</a> i think this is the last item</p>",
+        "id": 499927129,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739636207
+    },
+    {
+        "content": "<p>That’s more of an FYI than concrete feedback tho</p>",
+        "id": 499927171,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739636253
+    },
+    {
+        "content": "<p>And doesn’t apply directly in the parser currently anyway since we’re catching ooms and panicking at a lower level</p>",
+        "id": 499927237,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739636294
+    },
+    {
+        "content": "<p>So <span aria-label=\"shrug\" class=\"emoji emoji-1f937\" role=\"img\" title=\"shrug\">:shrug:</span></p>",
+        "id": 499927242,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739636305
+    },
+    {
+        "content": "<p>Yeah, just looked at it, hadn't seen the latest feedback after that</p>",
+        "id": 499927561,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636578
+    },
+    {
+        "content": "<p>There isn't a ton pressing there but I will work to address it when I can</p>",
+        "id": 499927577,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636591
+    },
+    {
+        "content": "<p>Makes sense</p>",
+        "id": 499927595,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739636611
+    },
+    {
+        "content": "<p>I think planning out the move to braces is the most straightforward thing right now - and the most pressing</p>",
+        "id": 499927604,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636617
+    },
+    {
+        "content": "<p>The one thing I am pained about this change  is - I will not be able to use our existing corpus of snapshots for testing</p>",
+        "id": 499927657,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636645
+    },
+    {
+        "content": "<p>They will all have to be worked up to fit the new syntax</p>",
+        "id": 499927670,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636658
+    },
+    {
+        "content": "<p>Which makes me wonder if we should try to develop a new set of principles for adding snapshots while we are at it</p>",
+        "id": 499927718,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636702
+    },
+    {
+        "content": "<p>One thing that crossed my mind was to do a one-time formatter change to the old compiler, in order to spit out this new syntax</p>",
+        "id": 499927719,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739636702
+    },
+    {
+        "content": "<p>Oh, that could work - would be a bit of work but not too bad</p>",
+        "id": 499927742,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636724
+    },
+    {
+        "content": "<p>Do you think you could work on that in parallel?</p>",
+        "id": 499927748,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636731
+    },
+    {
+        "content": "<p>With me continuing on this?</p>",
+        "id": 499927756,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636739
+    },
+    {
+        "content": "<p>Since you are the ParseFather of the Rust compiler <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 499927839,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636768
+    },
+    {
+        "content": "<p>Haha yeah</p>",
+        "id": 499927856,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739636779
+    },
+    {
+        "content": "<p>Don't worry, I'm bogged down enough physically/mentally right now that I won't make TOO much progress while you do that</p>",
+        "id": 499927896,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1739636813
+    },
+    {
+        "content": "<p>Here's what I was thinking for malformed nodes + diagnostics in the parser: <a href=\"https://github.com/roc-lang/roc/pull/7611\">https://github.com/roc-lang/roc/pull/7611</a></p>",
+        "id": 499938932,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739643454
+    },
+    {
+        "content": "<p>Essentially, have a .malformed tag that is allowed to stand in for any other node kind</p>",
+        "id": 499938951,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739643478
+    },
+    {
+        "content": "<p>I didn't implement this part yet, but when calling getStatement (for example), that'd return an error (or null?) if we're looking at a malformed node.</p>",
+        "id": 499939056,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739643531
+    },
+    {
+        "content": "<p>That sounds good to me.</p>",
+        "id": 500760054,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1740006318
+    },
+    {
+        "content": "<p>My biggest issue with malformed is: \"How do we decide that that we've included enough in the malformed node to make the continuation of the token stream resulting in a well-formed node?\"</p>",
+        "id": 500760183,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1740006371
+    },
+    {
+        "content": "<p>A common heuristic is to consume tokens until the end of the line, and until all braces have been matched (supposing it’s not a braces problem)</p>",
+        "id": 500784819,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1740020859
+    },
+    {
+        "content": "<p>someone wrote an article about this in the context of Zig at some point</p>",
+        "id": 500785976,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1740021612
+    },
+    {
+        "content": "<p>like there are some \"cutoff points\" (or something - I forget what term they used) where you can tell it's definitely the end of <em>something</em></p>",
+        "id": 500786012,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1740021640
+    },
+    {
+        "content": "<p>an example was if you have an open <code>\"</code> and you hit a newline</p>",
+        "id": 500786023,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1740021650
+    },
+    {
+        "content": "<p>you can say \"ok, we don't know where it was <em>supposed</em> to end, but we can cut it off at the newline and go back to parsing normally so we don't have the rest of the file being treated as a string literal\"</p>",
+        "id": 500786050,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1740021681
+    },
+    {
+        "content": "<p>we could do something similar with top-level declarations although maybe it's not worth it to detect that <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 500786152,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1740021740
+    },
+    {
+        "content": "<p>(\"that\" being a newline followed immediately by an identifier)</p>",
+        "id": 500786167,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1740021764
+    },
+    {
+        "content": "<p>We also might be able to use indentation and/braces as guides. We can know whether braces are properly matched in the file (the tokenizer needs to compute this anyway). We can probably jump to the nearest closing brace.</p>",
+        "id": 500786247,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1740021831
+    },
+    {
+        "content": "<p>A while back I was reading the source of rust-analyzer and they do the same there.  Let me try to dig it out from my memory: When expecting a specific token, they also provide a set of \"recovery tokens\" which could start a node, even though such node wouldn't be in the right place. </p>\n<p>So for an input:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">struct</span><span class=\"w\"> </span><span class=\"n\">User</span>\n</code></pre></div>\n<p>tokens wouldn't be wrapped in an ErrorNode. <code>struct</code> would be included in the error recovery set when expecting an identifier of a function. When the parser sees a <code>struct</code>, an error would be reported that a function identifier was expected. Then it would start to parse a struct as normal.</p>\n<p>On the other hand, in </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"mi\">2</span>\n</code></pre></div>\n<p><code>2</code> would not be in the recovery set, since it isn't a start of a node they would want to parse for resilience. It would just get skipped in it's own (which means, wrap it in an ErrorNode).<br>\n I remember there was a rule specifically to never skip a <code>}</code> in such cases in order to keep the braces balanced. They'd end the malformed node before the brace and return from that specific parse function. The caller will probably expect a closing brace to be the next token. At worst, you are getting an unmatched closing brace error, which is very easy to fix.</p>",
+        "id": 500825385,
+        "sender_full_name": "Norbert Hajagos",
+        "timestamp": 1740041700
+    }
+]

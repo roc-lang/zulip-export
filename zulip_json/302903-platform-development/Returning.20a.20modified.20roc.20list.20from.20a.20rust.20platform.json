@@ -1,0 +1,842 @@
+[
+    {
+        "content": "<p>I'm trying to implement an efficient buffered reader and I want to support returning the buffer you just used.<br>\nIf there is only one reference, then it will be reused.</p>\n<p>Currently, my code looks like this, I'm not sure If I'm doing it right, but I'm trying to make rust happy with me returning the buffer I technically have a mutable reference to. I thought the simplest way to do that was to recreate the roc list from a pointer. But I'm really unsure. Any help would be greatly appreciated :)</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">roc_fx_fileReadByteBuf</span><span class=\"p\">(</span>\n<span class=\"w\">    </span><span class=\"n\">data</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">RocBox</span><span class=\"o\">&lt;</span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">buf</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">RocList</span><span class=\"o\">&lt;</span><span class=\"kt\">u8</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">RocResult</span><span class=\"o\">&lt;</span><span class=\"n\">RocList</span><span class=\"o\">&lt;</span><span class=\"kt\">u8</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">RocStr</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">buf_reader</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">BufReader</span><span class=\"o\">&lt;</span><span class=\"n\">File</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">ThreadSafeRefcountedResourceHeap</span><span class=\"p\">::</span><span class=\"n\">box_to_resource</span><span class=\"p\">(</span><span class=\"n\">data</span><span class=\"p\">);</span>\n\n<span class=\"w\">    </span><span class=\"k\">loop</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">available</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">match</span><span class=\"w\"> </span><span class=\"n\">buf_reader</span><span class=\"p\">.</span><span class=\"n\">fill_buf</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"nb\">Ok</span><span class=\"p\">(</span><span class=\"n\">n</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"n\">n</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"k\">ref</span><span class=\"w\"> </span><span class=\"n\">e</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"fm\">matches!</span><span class=\"p\">(</span><span class=\"n\">e</span><span class=\"p\">.</span><span class=\"n\">kind</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">ErrorKind</span><span class=\"p\">::</span><span class=\"n\">Interrupted</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"k\">continue</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">e</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">RocResult</span><span class=\"p\">::</span><span class=\"n\">err</span><span class=\"p\">(</span><span class=\"n\">e</span><span class=\"p\">.</span><span class=\"n\">to_string</span><span class=\"p\">().</span><span class=\"n\">as_str</span><span class=\"p\">().</span><span class=\"n\">into</span><span class=\"p\">()),</span>\n<span class=\"w\">        </span><span class=\"p\">};</span>\n<span class=\"w\">        </span><span class=\"c1\">//We should be able to ask the user to \"return\" their buffer. So that if they do they get the same buffer back and we don't have to re-allocate. Should be a nice optimization.</span>\n<span class=\"w\">        </span><span class=\"c1\">//TODO: If the capacity is larger but the len isn't right we should be able to extend the len to match. I don't have access to a function that does that though</span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">buf</span><span class=\"p\">.</span><span class=\"n\">is_unique</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">buf</span><span class=\"p\">.</span><span class=\"n\">capacity</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">&gt;=</span><span class=\"w\"> </span><span class=\"n\">available</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">buf</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"n\">available</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                    </span><span class=\"n\">buf</span><span class=\"p\">.</span><span class=\"n\">copy_from_slice</span><span class=\"p\">(</span><span class=\"n\">available</span><span class=\"p\">);</span>\n<span class=\"w\">                    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                        </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">RocResult</span><span class=\"p\">::</span><span class=\"n\">ok</span><span class=\"p\">(</span><span class=\"n\">RocList</span><span class=\"p\">::</span><span class=\"n\">from_raw_parts</span><span class=\"p\">(</span>\n<span class=\"w\">                            </span><span class=\"n\">buf</span><span class=\"p\">.</span><span class=\"n\">as_mut_ptr</span><span class=\"p\">(),</span>\n<span class=\"w\">                            </span><span class=\"n\">buf</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">(),</span>\n<span class=\"w\">                            </span><span class=\"n\">buf</span><span class=\"p\">.</span><span class=\"n\">capacity</span><span class=\"p\">(),</span>\n<span class=\"w\">                        </span><span class=\"p\">));</span>\n<span class=\"w\">                    </span><span class=\"p\">};</span>\n<span class=\"w\">                </span><span class=\"p\">}</span>\n<span class=\"w\">            </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">list</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">RocResult</span><span class=\"p\">::</span><span class=\"n\">ok</span><span class=\"p\">(</span><span class=\"n\">RocList</span><span class=\"p\">::</span><span class=\"n\">from_slice</span><span class=\"p\">(</span><span class=\"n\">available</span><span class=\"p\">));</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">len</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">available</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"n\">buf_reader</span><span class=\"p\">.</span><span class=\"n\">consume</span><span class=\"p\">(</span><span class=\"n\">len</span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">list</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 486112225,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733324362
+    },
+    {
+        "content": "<p>I think all I needed to do was inc the reference count when I make the duplicate. <br>\nIt's no longer crashing but it's not actually any faster so It mustn't be running this optimisation often</p>",
+        "id": 486141810,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733332354
+    },
+    {
+        "content": "<blockquote>\n<p>it's not actually any faster</p>\n</blockquote>\n<p>I'd expect this to be a memory usage diff, not a perf diff, no?</p>",
+        "id": 486158922,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733338533
+    },
+    {
+        "content": "<p>In your fast case you don't consume the length. Is that related?</p>",
+        "id": 486180633,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733347021
+    },
+    {
+        "content": "<p>Also, you can just edit the length in place instead of making sure it is a perfect match</p>",
+        "id": 486182199,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733347728
+    },
+    {
+        "content": "<p>Also, if you keep allocating the same sized object right after freeing it, malloc has a fast path to just return the old version. So may not be much of a perf difference</p>",
+        "id": 486182442,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733347819
+    },
+    {
+        "content": "<p>A bugger perf different would probably come from avoid the extra copy from the buf reader to roc</p>",
+        "id": 486182495,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733347849
+    },
+    {
+        "content": "<p>Theoretically could use a seamless slice with a constant refcount to deal with this. Then only would cost the copy of roc mutates the list</p>",
+        "id": 486182588,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733347893
+    },
+    {
+        "content": "<p>Though that may not be safe over repeated calls...I'd have to think about it more</p>",
+        "id": 486182638,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733347919
+    },
+    {
+        "content": "<p>Yeah sorry that was a bug. I did a whole bunch of testing and noticed essentially no difference in memory usage or performance between the two versions.<br>\nPerhaps 10%, but it's hard to say when benchmarks have a little variance and the call time is absolutely dominated by FFI overhead (I assume this is somewhat meaningful?) and IO.</p>\n<p>Do you mean make the reader's internal buffer the slice from roc? </p>\n<p>I believe It should be safe so long as you re-check on each read that the buffer is still unique and if so you create a clone.</p>",
+        "id": 486203075,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733358704
+    },
+    {
+        "content": "<p>Oh yeah in my final code I did edit the length in place too :)</p>",
+        "id": 486203163,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733358748
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"651372\">Eli Dowling</span> <a href=\"#narrow/stream/302903-platform-development/topic/Returning.20a.20modified.20roc.20list.20from.20a.20rust.20platform/near/486203075\">said</a>:</p>\n<blockquote>\n<p>Do you mean make the reader's internal buffer the slice from roc? </p>\n</blockquote>\n<p>Yep</p>",
+        "id": 486203327,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733358864
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"651372\">Eli Dowling</span> <a href=\"#narrow/stream/302903-platform-development/topic/Returning.20a.20modified.20roc.20list.20from.20a.20rust.20platform/near/486203075\">said</a>:</p>\n<blockquote>\n<p>the call time is absolutely dominated by FFI overhead (I assume this is somewhat meaningful?)</p>\n</blockquote>\n<p>Unless it is being called constantly (unlikely if return multiple bytes), there should be about 0 ffi overhead</p>",
+        "id": 486203423,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733358951
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/302903-platform-development/topic/Returning.20a.20modified.20roc.20list.20from.20a.20rust.20platform/near/486203423\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"651372\">Eli Dowling</span> <a href=\"#narrow/stream/302903-platform-development/topic/Returning.20a.20modified.20roc.20list.20from.20a.20rust.20platform/near/486203075\">said</a>:</p>\n<blockquote>\n<p>the call time is absolutely dominated by FFI overhead (I assume this is somewhat meaningful?)</p>\n</blockquote>\n<p>Good to know! Has anyone measured the overhead of effects overall? As in if I want to do any effect vs just calling a roc function how much slower is it? </p>\n<p>Unless it is being called constantly (unlikely if return multiple bytes), there should be about 0 ffi overhead</p>\n</blockquote>",
+        "id": 486203584,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733359045
+    },
+    {
+        "content": "<p>I definitely saw huge performance improvements by making the buffer larger, so I thought there might be a pretty meaningful cost to jumping in and out of roc code. <br>\nAs in a 100 byte buffer takes 2 seconds and a 20k buffer takes 150ms. <br>\nAnd it seems to be seeing improvements even between 20k and 100k. </p>\n<p>I'm keen to test some other languages buffered readers to compare too :)</p>",
+        "id": 486203963,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733359208
+    },
+    {
+        "content": "<p>Probably not from jumping in and out of roc, but other overhead that is alleviated from looping in larger chunks. I'll definitely have to try benchmarking this</p>",
+        "id": 486204185,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733359381
+    },
+    {
+        "content": "<p>Yeah, I thought the same. I'll let you know my results and provide some snippets, keen to understand this and see how we compare to others :)</p>",
+        "id": 486204328,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733359477
+    },
+    {
+        "content": "<p>For example, one big copy is much faster then many small copies</p>",
+        "id": 486204330,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733359479
+    },
+    {
+        "content": "<p>Yeah yeah, for sure</p>",
+        "id": 486204370,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733359502
+    },
+    {
+        "content": "<p>Do you have anything I could run right now just to check for any major roc perf issues?</p>",
+        "id": 486204607,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733359675
+    },
+    {
+        "content": "<p>I can push all my code up later today but obviously it's a modified basic cli platform and a benchmark to go with it</p>",
+        "id": 486205170,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733360047
+    },
+    {
+        "content": "<p>I'll put a quick test in go and dotnet in the repo too for comparison</p>",
+        "id": 486205205,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733360081
+    },
+    {
+        "content": "<p><span aria-label=\"thank you\" class=\"emoji emoji-1f64f\" role=\"img\" title=\"thank you\">:thank_you:</span></p>",
+        "id": 486205561,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733360282
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> <br>\n<a href=\"https://github.com/faldor20/basic-cli/tree/purity-inference\">https://github.com/faldor20/basic-cli/tree/purity-inference</a><br>\n<a href=\"https://github.com/faldor20/roc-experiments\">https://github.com/faldor20/roc-experiments</a><br>\nThose repos have my experiments and my basic-cli fork.<br>\nThe last one is the go impl.</p>\n<div class=\"codehilite\"><pre><span></span><code>Benchmark 1 (78 runs): ./buf-reuse\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time          63.6ms ±  441us    62.6ms … 64.3ms          0 ( 0%)        0%\n  peak_rss           2.71MB ±  103KB    2.36MB … 2.88MB          2 ( 3%)        0%\n  cpu_cycles         6.98M  ±  111K     6.83M  … 7.54M          10 (13%)        0%\n  instructions       10.1M  ± 1.11K     10.1M  … 10.1M           4 ( 5%)        0%\n  cache_references   34.4K  ± 1.00K     32.2K  … 36.6K           0 ( 0%)        0%\n  cache_misses       26.0K  ±  732      23.6K  … 27.2K           3 ( 4%)        0%\n  branch_misses      5.13K  ±  190      4.23K  … 5.62K           4 ( 5%)        0%\nBenchmark 2 (76 runs): ./buf-no-reuse\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time          65.4ms ±  559us    64.5ms … 67.2ms          6 ( 8%)        💩+  2.9% ±  0.2%\n  peak_rss           2.72MB ± 93.0KB    2.62MB … 2.88MB          0 ( 0%)          +  0.6% ±  1.1%\n  cpu_cycles         13.3M  ±  235K     13.0M  … 14.4M           2 ( 3%)        💩+ 91.0% ±  0.8%\n  instructions       28.9M  ± 1.56K     28.9M  … 28.9M           8 (11%)        💩+187.8% ±  0.0%\n  cache_references   44.1K  ± 1.72K     40.6K  … 48.3K           0 ( 0%)        💩+ 28.0% ±  1.3%\n  cache_misses       26.6K  ±  770      24.3K  … 27.9K           4 ( 5%)        💩+  2.3% ±  0.9%\n  branch_misses      35.2K  ± 1.05K     33.5K  … 39.4K           2 ( 3%)        💩+585.8% ±  4.6%\nBenchmark 3 (76 runs): ./read-speed\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time          65.8ms ±  536us    64.7ms … 67.9ms          2 ( 3%)        💩+  3.5% ±  0.2%\n  peak_rss           2.01MB ± 85.2KB    1.84MB … 2.10MB          0 ( 0%)        ⚡- 25.5% ±  1.1%\n  cpu_cycles         19.9M  ±  256K     19.4M  … 21.2M           1 ( 1%)        💩+184.5% ±  0.9%\n  instructions       36.9M  ± 92.9K     36.8M  … 37.4M           2 ( 3%)        💩+267.6% ±  0.2%\n  cache_references   51.9K  ± 4.62K     40.1K  … 64.1K           0 ( 0%)        💩+ 50.8% ±  3.0%\n  cache_misses       14.9K  ±  658      13.8K  … 16.9K           2 ( 3%)        ⚡- 42.5% ±  0.8%\n  branch_misses      18.7K  ±  626      17.4K  … 20.3K           0 ( 0%)        💩+263.9% ±  2.8%\n</code></pre></div>",
+        "id": 486227479,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733375204
+    },
+    {
+        "content": "<p>No-reuse is recreating the buffer every time. <br>\nInterestingly, this is still way faster than using rusts read-buffered</p>",
+        "id": 486227525,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733375254
+    },
+    {
+        "content": "<p>The way it works for this testing build is:<br>\n If, when you call read, you provide a <code>List U8</code> that is the same as the one the reader was created with, it will reuse that buffer. Otherwise it will make a new list. <br>\nObviously normally you'd check for it being unique, but for testing this provides me a guarantee that it's doing what I want</p>",
+        "id": 486227802,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733375468
+    },
+    {
+        "content": "<p>Crazy the difference in CPU cycles between the 3, yet almost identical execution time</p>",
+        "id": 486227946,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733375606
+    },
+    {
+        "content": "<p>I know... I guess it's just waiting on the file system and the rest is kind of irrelevant.</p>",
+        "id": 486228036,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733375674
+    },
+    {
+        "content": "<p>Yeah, probably. io is slow....though it should be hot file cache so all in ram</p>",
+        "id": 486228057,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733375699
+    },
+    {
+        "content": "<p>At least I assume it should be</p>",
+        "id": 486228076,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733375708
+    },
+    {
+        "content": "<p>Oh, this is literally just reading. I expected it to be parsing of something as well.</p>",
+        "id": 486228172,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733375778
+    },
+    {
+        "content": "<p>I wonder why 2 gets so many branch misses? I also wonder if I wasn't comparing pointers and just passed in a flag if that would make it not do that.</p>",
+        "id": 486228191,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733375797
+    },
+    {
+        "content": "<p>Makes sense go is way more CPU instructions. It is multithreaded and doing async io.</p>",
+        "id": 486228195,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733375801
+    },
+    {
+        "content": "<p>Probably branch misses in malloc/free/refcounting? Given that should be the main difference from one.</p>",
+        "id": 486228233,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733375835
+    },
+    {
+        "content": "<p>yeah, I also have the parser and I'd like to build that in a few langs too, but I wanted to validate if this was having an impact or not first.</p>",
+        "id": 486228238,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733375842
+    },
+    {
+        "content": "<p>make sure I'm not just measuring slower IO or buffering or some silly thing like that <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 486228271,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733375878
+    },
+    {
+        "content": "<p>Also, you probably want <code>List.repeat</code></p>",
+        "id": 486228445,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733376002
+    },
+    {
+        "content": "<p>Instead of range and map</p>",
+        "id": 486228485,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733376007
+    },
+    {
+        "content": "<p>ohh, thanks!</p>\n<p>I'll definitely merge this into basic-cli at soon. Just to give you an idea how insanely much quicker, this is.<br>\nThis is using the whole file reading basic-cli comes with:<br>\nReading line by line is pretty similar.</p>\n<div class=\"codehilite\"><pre><span></span><code>  measurement          mean ± σ            min … max           outliers\n  wall_time          16.7s  ± 1.01s     15.6s  … 17.7s           0 ( 0%)\n  peak_rss           2.75MB ±    0      2.75MB … 2.75MB          0 ( 0%)\n  cpu_cycles         68.7G  ± 1.28G     67.4G  … 70.0G           0 ( 0%)\n  instructions        299G  ±  619       299G  …  299G           0 ( 0%)\n  cache_references    857K  ±  181K      706K  … 1.06M           0 ( 0%)\n  cache_misses        351K  ± 74.9K      283K  …  431K           0 ( 0%)\n  branch_misses      47.5M  ±  545K     47.2M  … 48.2M           0 ( 0%)\n</code></pre></div>",
+        "id": 486229005,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733376386
+    },
+    {
+        "content": "<p>I'm pretty happy with a 350x speed up ;)</p>",
+        "id": 486229065,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733376439
+    },
+    {
+        "content": "<p>Reading hole file definitely should not be that show (but basic CLI really has not been optimized yet)</p>",
+        "id": 486231817,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733378486
+    },
+    {
+        "content": "<p>Side note for API: You should store the buffer with the reader. Then make the API match the older reader API. Just make it skip the rust buffer and reuse the roc buffer when possible.</p>",
+        "id": 486231964,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733378556
+    },
+    {
+        "content": "<p>Then everyone can just use this by default and get speed boosts</p>",
+        "id": 486232010,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733378581
+    },
+    {
+        "content": "<p>Also, all of these test apps like expected speed almost all time in the read system call. Go has more async io and scheduler overhead. The version that always allocated spends more time freeing and calculating capacity (I assume this is a fail on the perf tool and actually is allocating)</p>",
+        "id": 486232164,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733378666
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/302903-platform-development/topic/Returning.20a.20modified.20roc.20list.20from.20a.20rust.20platform/near/486231817\">said</a>:</p>\n<blockquote>\n<p>Reading hole file definitely should not be that show (but basic CLI really has not been optimized yet)</p>\n</blockquote>\n<p>Hahah yeah, I agree. <br>\nAnd the API will be the same, I just wanted more control while I was testing.</p>",
+        "id": 486232329,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733378775
+    },
+    {
+        "content": "<p>It'd be good to have a new API as well that takes any reader and buf and \"consumes and returns that buff\" if it's unique. That way you could do some fancy multi buffer things with reuse.</p>",
+        "id": 486232598,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733378985
+    },
+    {
+        "content": "<p>I don't think that really fits basic-cli, but maybe</p>",
+        "id": 486232682,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379023
+    },
+    {
+        "content": "<p>Also, reading whole file is just <code>File.readBytes!</code>?</p>",
+        "id": 486232781,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379105
+    },
+    {
+        "content": "<p>Yup</p>",
+        "id": 486232796,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733379116
+    },
+    {
+        "content": "<p>Or are you talking still through the reader?</p>",
+        "id": 486232797,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379117
+    },
+    {
+        "content": "<p>I think in the long term it'd be good to have a standardized reader/ stream standard or maybe ability.</p>\n<p>That way folks can write platform agnostic roc code that Interfaces with byte streams.</p>\n<p>That is a proposal from another day though <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 486232992,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733379229
+    },
+    {
+        "content": "<p>For me, reading the whole file at once is about 3x slower than this new code. No where near the speedup you are seeing.</p>",
+        "id": 486233124,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379303
+    },
+    {
+        "content": "<p>Oh interesting, I did think it was odd. I'll have to investigate later. <br>\nHow big if your file?</p>",
+        "id": 486233159,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733379339
+    },
+    {
+        "content": "<p>Mines about 400mb</p>",
+        "id": 486233277,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733379389
+    },
+    {
+        "content": "<p>80 megabytes</p>",
+        "id": 486233351,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379429
+    },
+    {
+        "content": "<p>That's my code:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">testRawReadSpeed</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">len</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"mi\">8000</span>\n<span class=\"w\">    </span><span class=\"nv\">res</span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nv\">try</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">File</span><span class=\"nf\">.</span><span class=\"nv\">readBytes</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"s\">\"input.txt\"</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"nv\">done</span><span class=\"nf\">=</span><span class=\"nv\">res</span><span class=\"nf\">|&gt;</span><span class=\"kt\">List</span><span class=\"nf\">.</span><span class=\"nv\">len</span>\n\n<span class=\"w\">    </span><span class=\"kt\">Stdout</span><span class=\"nf\">.</span><span class=\"nv\">line</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"s\">\"done!!$(Inspect.toStr (done))\"</span>\n\n<span class=\"nv\">main</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">_</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">try</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">testRawReadSpeed</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Result</span><span class=\"nf\">.</span><span class=\"nv\">onErr</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">a</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Inspect</span><span class=\"nf\">.</span><span class=\"nv\">toStr</span><span class=\"w\"> </span><span class=\"nv\">a</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Stdout</span><span class=\"nf\">.</span><span class=\"nv\">line</span><span class=\"err\">!</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"nv\">try</span><span class=\"w\"> </span><span class=\"kt\">Stdout</span><span class=\"nf\">.</span><span class=\"nv\">line</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"s\">\"done!\"</span>\n<span class=\"w\">    </span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n</code></pre></div>",
+        "id": 486233371,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733379448
+    },
+    {
+        "content": "<p>Of random base64 text</p>",
+        "id": 486233372,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379449
+    },
+    {
+        "content": "<p>Yeah, my code is equivalent</p>",
+        "id": 486233468,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379494
+    },
+    {
+        "content": "<p>that's super duper wierd</p>",
+        "id": 486233487,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733379512
+    },
+    {
+        "content": "<p>Spends 75% of the time in read and 25% copying bytes from the rust vector to the roc list</p>",
+        "id": 486233517,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379546
+    },
+    {
+        "content": "<p>Did you accidentally build either the platform or roc without optimization? Also are you sure it is the same input file that your other test saw?</p>",
+        "id": 486233661,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379618
+    },
+    {
+        "content": "<p>wait a minute... I'm stupid. I was using the wrong script. Like an absolute moron <span aria-label=\"man facepalming\" class=\"emoji emoji-1f926-200d-2642\" role=\"img\" title=\"man facepalming\">:man_facepalming:</span> </p>\n<div class=\"codehilite\"><pre><span></span><code>whole-file\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time          1.78s  ± 2.36ms    1.78s  … 1.78s           0 ( 0%)        0%\n  peak_rss            822MB ± 75.7KB     821MB …  822MB          0 ( 0%)        0%\n  cpu_cycles          974M  ± 2.49M      972M  …  977M           0 ( 0%)        0%\n  instructions       3.28G  ±  226      3.28G  … 3.28G           0 ( 0%)        0%\n  cache_references   6.15M  ± 20.8K     6.13M  … 6.17M           0 ( 0%)        0%\n  cache_misses       1.57M  ± 27.6K     1.54M  … 1.59M           0 ( 0%)        0%\n  branch_misses      5.07K  ±  163      4.89K  … 5.21K           0 ( 0%)        0%\nBenchmark 2 (31 runs): ./buf-reuse\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time           164ms ± 4.49ms     159ms …  176ms          3 (10%)        ⚡- 90.8% ±  0.3%\n  peak_rss           2.69MB ±  101KB    2.49MB … 2.88MB          0 ( 0%)        ⚡- 99.7% ±  0.0%\n  cpu_cycles         7.01M  ±  225K     6.77M  … 7.57M           3 (10%)        ⚡- 99.3% ±  0.1%\n  instructions       10.1M  ± 1.25K     10.1M  … 10.1M           2 ( 6%)        ⚡- 99.7% ±  0.0%\n  cache_references   20.6K  ± 1.12K     18.2K  … 22.7K           0 ( 0%)        ⚡- 99.7% ±  0.1%\n  cache_misses       8.89K  ±  239      8.03K  … 9.31K           1 ( 3%)        ⚡- 99.4% ±  0.5%\n  branch_misses      5.54K  ±  165      5.30K  … 5.85K           0 ( 0%)        💩+  9.3% ±  4.0%\n</code></pre></div>",
+        "id": 486233743,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733379683
+    },
+    {
+        "content": "<p>my laptop isn't plugged in anymore btw</p>",
+        "id": 486233769,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733379700
+    },
+    {
+        "content": "<p>Let me make a bigger file to see if the time diff grows</p>",
+        "id": 486233891,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379773
+    },
+    {
+        "content": "<p>Haha...that made the diff closer....</p>",
+        "id": 486234081,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733379896
+    },
+    {
+        "content": "<p>wait, closer to each other, or closer to my results?</p>",
+        "id": 486234130,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733379934
+    },
+    {
+        "content": "<p>closer to eachother:</p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>$<span class=\"w\"> </span>du<span class=\"w\"> </span>-hs<span class=\"w\"> </span>--apparent-size<span class=\"w\"> </span>input.txt\n611M<span class=\"w\">    </span>input.txt\n$<span class=\"w\"> </span>poop<span class=\"w\"> </span>./read-speed<span class=\"w\"> </span>./read-speed-test<span class=\"w\"> </span>./read-speed-test-fast\nBenchmark<span class=\"w\"> </span><span class=\"m\">1</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"m\">3</span><span class=\"w\"> </span>runs<span class=\"o\">)</span>:<span class=\"w\"> </span>./read-speed\n<span class=\"w\">  </span>measurement<span class=\"w\">          </span>mean<span class=\"w\"> </span>±<span class=\"w\"> </span>σ<span class=\"w\">            </span>min<span class=\"w\"> </span>…<span class=\"w\"> </span>max<span class=\"w\">           </span>outliers<span class=\"w\">         </span>delta\n<span class=\"w\">  </span>wall_time<span class=\"w\">          </span><span class=\"m\">1</span>.74s<span class=\"w\">  </span>±<span class=\"w\">  </span>107ms<span class=\"w\">    </span><span class=\"m\">1</span>.64s<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">1</span>.85s<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span><span class=\"m\">0</span>%\n<span class=\"w\">  </span>peak_rss<span class=\"w\">           </span><span class=\"m\">3</span>.10MB<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">2</span>.36KB<span class=\"w\">    </span><span class=\"m\">3</span>.10MB<span class=\"w\"> </span>…<span class=\"w\"> </span><span class=\"m\">3</span>.10MB<span class=\"w\">          </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span><span class=\"m\">0</span>%\n<span class=\"w\">  </span>cpu_cycles<span class=\"w\">         </span><span class=\"m\">86</span>.6M<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">10</span>.9M<span class=\"w\">     </span><span class=\"m\">74</span>.0M<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">93</span>.3M<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span><span class=\"m\">0</span>%\n<span class=\"w\">  </span>instructions<span class=\"w\">       </span><span class=\"m\">91</span>.8M<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">13</span>.0M<span class=\"w\">     </span><span class=\"m\">76</span>.9M<span class=\"w\">  </span>…<span class=\"w\">  </span>101M<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span><span class=\"m\">0</span>%\n<span class=\"w\">  </span>cache_references<span class=\"w\">   </span><span class=\"m\">6</span>.76M<span class=\"w\">  </span>±<span class=\"w\">  </span>390K<span class=\"w\">     </span><span class=\"m\">6</span>.35M<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">7</span>.13M<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span><span class=\"m\">0</span>%\n<span class=\"w\">  </span>cache_misses<span class=\"w\">        </span>119K<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">51</span>.5K<span class=\"w\">     </span><span class=\"m\">84</span>.5K<span class=\"w\">  </span>…<span class=\"w\">  </span>178K<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span><span class=\"m\">0</span>%\n<span class=\"w\">  </span>branch_misses<span class=\"w\">       </span>229K<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">15</span>.6K<span class=\"w\">      </span>218K<span class=\"w\">  </span>…<span class=\"w\">  </span>247K<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span><span class=\"m\">0</span>%\nBenchmark<span class=\"w\"> </span><span class=\"m\">2</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"m\">3</span><span class=\"w\"> </span>runs<span class=\"o\">)</span>:<span class=\"w\"> </span>./read-speed-test\n<span class=\"w\">  </span>measurement<span class=\"w\">          </span>mean<span class=\"w\"> </span>±<span class=\"w\"> </span>σ<span class=\"w\">            </span>min<span class=\"w\"> </span>…<span class=\"w\"> </span>max<span class=\"w\">           </span>outliers<span class=\"w\">         </span>delta\n<span class=\"w\">  </span>wall_time<span class=\"w\">          </span><span class=\"m\">2</span>.07s<span class=\"w\">  </span>±<span class=\"w\">  </span>205ms<span class=\"w\">    </span><span class=\"m\">1</span>.83s<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">2</span>.20s<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">          </span>+<span class=\"w\"> </span><span class=\"m\">18</span>.8%<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">21</span>.3%\n<span class=\"w\">  </span>peak_rss<span class=\"w\">           </span><span class=\"m\">1</span>.28GB<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">76</span>.9KB<span class=\"w\">    </span><span class=\"m\">1</span>.28GB<span class=\"w\"> </span>…<span class=\"w\"> </span><span class=\"m\">1</span>.28GB<span class=\"w\">          </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>💩+41241.8%<span class=\"w\"> </span>±<span class=\"w\">  </span><span class=\"m\">4</span>.0%\n<span class=\"w\">  </span>cpu_cycles<span class=\"w\">         </span><span class=\"m\">1</span>.57G<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">3</span>.00M<span class=\"w\">     </span><span class=\"m\">1</span>.57G<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">1</span>.57G<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>💩+1715.0%<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">21</span>.0%\n<span class=\"w\">  </span>instructions<span class=\"w\">       </span><span class=\"m\">5</span>.12G<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">55</span>.1<span class=\"w\">      </span><span class=\"m\">5</span>.12G<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">5</span>.12G<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>💩+5478.9%<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">22</span>.7%\n<span class=\"w\">  </span>cache_references<span class=\"w\">   </span><span class=\"m\">44</span>.2M<span class=\"w\">  </span>±<span class=\"w\">  </span>191K<span class=\"w\">     </span><span class=\"m\">44</span>.0M<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">44</span>.4M<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>💩+554.3%<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">10</span>.3%\n<span class=\"w\">  </span>cache_misses<span class=\"w\">       </span><span class=\"m\">16</span>.3M<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">18</span>.5K<span class=\"w\">     </span><span class=\"m\">16</span>.3M<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">16</span>.3M<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>💩+13639.3%<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">74</span>.0%\n<span class=\"w\">  </span>branch_misses<span class=\"w\">      </span><span class=\"m\">6</span>.16K<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">61</span>.2<span class=\"w\">      </span><span class=\"m\">6</span>.09K<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">6</span>.22K<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>⚡-<span class=\"w\"> </span><span class=\"m\">97</span>.3%<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">10</span>.9%\nBenchmark<span class=\"w\"> </span><span class=\"m\">3</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"m\">4</span><span class=\"w\"> </span>runs<span class=\"o\">)</span>:<span class=\"w\"> </span>./read-speed-test-fast\n<span class=\"w\">  </span>measurement<span class=\"w\">          </span>mean<span class=\"w\"> </span>±<span class=\"w\"> </span>σ<span class=\"w\">            </span>min<span class=\"w\"> </span>…<span class=\"w\"> </span>max<span class=\"w\">           </span>outliers<span class=\"w\">         </span>delta\n<span class=\"w\">  </span>wall_time<span class=\"w\">          </span><span class=\"m\">1</span>.64s<span class=\"w\">  </span>±<span class=\"w\">  </span>169ms<span class=\"w\">    </span><span class=\"m\">1</span>.49s<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">1</span>.80s<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">          </span>-<span class=\"w\">  </span><span class=\"m\">5</span>.5%<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">16</span>.6%\n<span class=\"w\">  </span>peak_rss<span class=\"w\">           </span><span class=\"m\">3</span>.66MB<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">64</span>.2KB<span class=\"w\">    </span><span class=\"m\">3</span>.56MB<span class=\"w\"> </span>…<span class=\"w\"> </span><span class=\"m\">3</span>.69MB<span class=\"w\">          </span><span class=\"m\">1</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"m\">25</span>%<span class=\"o\">)</span><span class=\"w\">        </span>💩+<span class=\"w\"> </span><span class=\"m\">18</span>.1%<span class=\"w\"> </span>±<span class=\"w\">  </span><span class=\"m\">3</span>.2%\n<span class=\"w\">  </span>cpu_cycles<span class=\"w\">         </span><span class=\"m\">13</span>.3M<span class=\"w\">  </span>±<span class=\"w\">  </span>453K<span class=\"w\">     </span><span class=\"m\">12</span>.7M<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">13</span>.8M<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>⚡-<span class=\"w\"> </span><span class=\"m\">84</span>.7%<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">15</span>.7%\n<span class=\"w\">  </span>instructions<span class=\"w\">       </span><span class=\"m\">12</span>.7M<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">28</span>.7<span class=\"w\">      </span><span class=\"m\">12</span>.7M<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">12</span>.7M<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>⚡-<span class=\"w\"> </span><span class=\"m\">86</span>.2%<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">17</span>.6%\n<span class=\"w\">  </span>cache_references<span class=\"w\">    </span>563K<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">66</span>.3K<span class=\"w\">      </span>513K<span class=\"w\">  </span>…<span class=\"w\">  </span>661K<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>⚡-<span class=\"w\"> </span><span class=\"m\">91</span>.7%<span class=\"w\"> </span>±<span class=\"w\">  </span><span class=\"m\">7</span>.3%\n<span class=\"w\">  </span>cache_misses<span class=\"w\">       </span><span class=\"m\">17</span>.6K<span class=\"w\">  </span>±<span class=\"w\"> </span><span class=\"m\">1</span>.36K<span class=\"w\">     </span><span class=\"m\">16</span>.3K<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">19</span>.1K<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>⚡-<span class=\"w\"> </span><span class=\"m\">85</span>.2%<span class=\"w\"> </span>±<span class=\"w\"> </span><span class=\"m\">54</span>.0%\n<span class=\"w\">  </span>branch_misses<span class=\"w\">      </span><span class=\"m\">7</span>.99K<span class=\"w\">  </span>±<span class=\"w\">  </span><span class=\"m\">272</span><span class=\"w\">      </span><span class=\"m\">7</span>.75K<span class=\"w\">  </span>…<span class=\"w\"> </span><span class=\"m\">8</span>.34K<span class=\"w\">           </span><span class=\"m\">0</span><span class=\"w\"> </span><span class=\"o\">(</span><span class=\"w\"> </span><span class=\"m\">0</span>%<span class=\"o\">)</span><span class=\"w\">        </span>⚡-<span class=\"w\"> </span><span class=\"m\">96</span>.5%<span class=\"w\"> </span>±<span class=\"w\">  </span><span class=\"m\">8</span>.4%\n</code></pre></div>\n<p>This is go, whole file, then your new code.</p>",
+        "id": 486234283,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733380012
+    },
+    {
+        "content": "<p>oh, well this is quite strange... I've go no idea. my only guess at this point is that because I'm using a pretty low power laptop I've got way less cache or my ram is way slower or something so the cost of loading this big ol chunk of memory is higher.</p>",
+        "id": 486234592,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733380191
+    },
+    {
+        "content": "<p>I am using a beefy gaming laptop (though a bit dated at this point). So yeah, probably something like that. (also, my system is a bit complicated, zfs filesystem with compression, not sure exactly how file caching pans out) 100% could be system differences that make your system less friendly to loading files in really large chunks (or more realistically makes mine less friendly to loading in small chunks).</p>",
+        "id": 486234935,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733380387
+    },
+    {
+        "content": "<p>out of curiousity, could you run: <code>sudo -v; du -hs input.txt; hyperfine --prepare 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches' -w0 -r5 ./whole-file ./buf-reuse</code></p>",
+        "id": 486235186,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733380539
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>Whole file:\n  Time (mean ± σ):      1.930 s ±  0.018 s    [User: 0.952 s, System: 0.944 s]\n  Range (min … max):    1.913 s …  1.955 s    5 runs\nreuse:\n   Time (mean ± σ):     371.8 ms ±   5.8 ms    [User: 10.0 ms, System: 294.5 ms]\n  Range (min … max):   366.5 ms … 378.6 ms    5 runs\n\nSummary\n  ./buf-reuse ran\n    5.19 ± 0.09 times faster than ./readWhole\n</code></pre></div>",
+        "id": 486235522,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733380730
+    },
+    {
+        "content": "<p>Can I also get the exact size of your <code>input.txt</code>: <code>du -hs input.txt</code></p>",
+        "id": 486235735,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733380852
+    },
+    {
+        "content": "<p>391M    ./input.txt</p>",
+        "id": 486235772,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733380874
+    },
+    {
+        "content": "<p>I can't imagine this matters but the content isn't really random. It's mostly the same really long line copied</p>",
+        "id": 486235878,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733380927
+    },
+    {
+        "content": "<p>If you don't have compression on your filesystem, it shouldn't matter</p>",
+        "id": 486235914,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733380950
+    },
+    {
+        "content": "<p>Anyway, really cool. Hoping this isn't a fluke and a number of people that aren't me will see perf gains like that. (though we also should totally make reading bytes to end read directly to a roc list).</p>",
+        "id": 486236043,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733381027
+    },
+    {
+        "content": "<p>This was fun. I'll definitely update all the reading api's to use this trick.</p>",
+        "id": 486236236,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733381128
+    },
+    {
+        "content": "<p>When we get parallelism it'd be cool to use a pair of buffers to make an alternating buffer loop that runs the read handler with one buffer and then reads into the other one then swaps them when both tasks are done.</p>",
+        "id": 486236532,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733381284
+    },
+    {
+        "content": "<p>Also, even on my machine, I would expect that reading the whole file would only be a few percent faster than than reading in chunks. (and it would use a crap ton more memory).</p>",
+        "id": 486236705,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733381400
+    },
+    {
+        "content": "<p>So this setup is still much nicer for many many use cases</p>",
+        "id": 486236774,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733381420
+    },
+    {
+        "content": "<p>I think I would have intuitively thought the opposite. <br>\nI guess you're saying you'd expect the file system api overhead is more than that of allocating a huge block of memory?<br>\nI wonder if there would be an inflection point? <br>\nLike I assume reading from a tcp socket is faster than from the filesystem?</p>",
+        "id": 486237171,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733381664
+    },
+    {
+        "content": "<p>I've not actually got any experience benchmarking any of this, so I just have a vague hunch <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 486237260,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733381729
+    },
+    {
+        "content": "<blockquote>\n<p>I guess you're saying you'd expect the file system api overhead is more than that of allocating a huge block of memory?</p>\n</blockquote>\n<p>A single large allocation is pretty cheap if you have free ram. The file api has to copy data. Copying data is always slow.</p>",
+        "id": 486237659,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733381950
+    },
+    {
+        "content": "<blockquote>\n<p>Like I assume reading from a tcp socket is faster than from the filesystem?</p>\n</blockquote>\n<p>Assuming the data is ready and you don't have to wait on network io, should be equivalent to reading from a filesystem in ram most of the time.</p>",
+        "id": 486237771,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733382004
+    },
+    {
+        "content": "<p>That all makes sense. <br>\nWell I'll be keen to see if with this approach the whole file read ends up faster!</p>",
+        "id": 486238029,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733382142
+    },
+    {
+        "content": "<p>maybe not on your system, but should be on mine</p>",
+        "id": 486239101,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733382706
+    },
+    {
+        "content": "<p>Also, if you are willing to give me more metrics (hoping you have the same perf counters), can you run this on each app:<br>\n<code>perf stat -B -e cache-references,cache-misses,cycles,instructions,branches,branch-misses,faults,migrations,cycle_activity.stalls_total,resource_stalls.any</code></p>",
+        "id": 486239213,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733382741
+    },
+    {
+        "content": "<p>I'm guessing I should compile with --profiling and the leagcy linker?</p>",
+        "id": 486239277,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733382779
+    },
+    {
+        "content": "<p>and <code>--optimize</code> of course</p>",
+        "id": 486239467,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733382888
+    },
+    {
+        "content": "<p>Though this is just aggregate cpu counter stats, so I guess <code>--profiling</code> and legacy linker shouldn't actually make a difference.</p>",
+        "id": 486239530,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733382923
+    },
+    {
+        "content": "<p>oh good, because my self built version of roc cannot call the legacy linker and I don't want to have nix build a version that can because that takes ages <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 486239703,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733383005
+    },
+    {
+        "content": "<p>Yeah, probably fine to run on the same executables you had above</p>",
+        "id": 486240070,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733383096
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>starting\ndone!!(Ok 553462367)\n\n Performance counter stats for &#39;./buf-reuse&#39;:\n\n        10,032,011      cache-references\n         6,953,420      cache-misses                     #   69.31% of all cache refs\n       389,319,100      cycles\n       595,658,461      instructions                     #    1.53  insn per cycle\n       120,573,534      branches\n           169,221      branch-misses                    #    0.14% of all branches\n               114      faults\n                 5      migrations\n\n       0.458919494 seconds time elapsed\n\n       0.010922000 seconds user\n       0.378975000 seconds sys\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>done!!553462367\ndone!\n\n Performance counter stats for &#39;./readWhole&#39;:\n\n        38,754,204      cache-references\n        25,693,393      cache-misses                     #   66.30% of all cache refs\n     2,433,906,387      cycles\n     5,815,782,790      instructions                     #    2.39  insn per cycle\n       829,527,258      branches\n           218,738      branch-misses                    #    0.03% of all branches\n           270,342      faults\n                 1      migrations\n\n       2.451330888 seconds time elapsed\n\n       1.286101000 seconds user\n       1.138542000 seconds sys\n</code></pre></div>",
+        "id": 486240129,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733383133
+    },
+    {
+        "content": "<p>I had to remove the last two events because it said they were invalid</p>",
+        "id": 486240189,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733383165
+    },
+    {
+        "content": "<p>Oh it's going to take a little longer now btw, my file is a little bigger because I converted it base64 when I made that comment about it not being random just to be totally sure</p>",
+        "id": 486240336,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733383228
+    },
+    {
+        "content": "<blockquote>\n<p>I had to remove the last two events because it said they were invalid</p>\n</blockquote>\n<p><span aria-label=\"tear\" class=\"emoji emoji-1f972\" role=\"img\" title=\"tear\">:tear:</span></p>",
+        "id": 486240460,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733383301
+    },
+    {
+        "content": "<p>Apparently they are not supported in any modern intel cpus.</p>",
+        "id": 486240803,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733383453
+    },
+    {
+        "content": "<p>Ok, most interesting notes of difference:</p>\n<ol>\n<li>your machine simply is running way way less instructions than mine (especially for the reuse case, ~10x less)</li>\n<li>you have a much higher cache miss ratio, but also a lot less cache references overall. (like 5-8x less cache references)</li>\n</ol>\n<p>Overall, In both cases, your system is doing a lot less than mine. It seems likely that my memory hierarchy is solidly faster than yours (at least the outer level caches, maybe not the small close to cpu caches that the reuse stays in).</p>",
+        "id": 486241735,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733383925
+    },
+    {
+        "content": "<p>Hey, great news!</p>",
+        "id": 486242286,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384201
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>Architecture:             x86_64\n  CPU op-mode(s):         32-bit, 64-bit\n  Address sizes:          39 bits physical, 48 bits virtual\n  Byte Order:             Little Endian\nCPU(s):                   8\n  On-line CPU(s) list:    0-7\nVendor ID:                GenuineIntel\n  Model name:             11th Gen Intel(R) Core(TM) i7-1185G7 @ 3.00GHz\n    CPU family:           6\n    Model:                140\n    Thread(s) per core:   2\n    Core(s) per socket:   4\n    Socket(s):            1\n    Stepping:             1\n    CPU(s) scaling MHz:   20%\n    CPU max MHz:          4800.0000\n    CPU min MHz:          400.0000\n    BogoMIPS:             5990.40\narch_capabilities\nVirtualization features:\n  Virtualization:         VT-x\nCaches (sum of all):\n  L1d:                    192 KiB (4 instances)\n  L1i:                    128 KiB (4 instances)\n  L2:                     5 MiB (4 instances)\n  L3:                     12 MiB (1 instance)\nNUMA:\n  NUMA node(s):           1\n  NUMA node0 CPU(s):      0-7\nVulnerabilities:\n</code></pre></div>",
+        "id": 486242292,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733384205
+    },
+    {
+        "content": "<p>I just had the bright idea to get my filesystem, compression, zfs special caching out of the way! Ran everything in a <code>tmpfs</code> (so from ram)</p>",
+        "id": 486242344,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384233
+    },
+    {
+        "content": "<p>I now see about a 5x perf improvement with buffer reuse</p>",
+        "id": 486242356,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384242
+    },
+    {
+        "content": "<p>hey!!! That's familar</p>",
+        "id": 486242383,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733384255
+    },
+    {
+        "content": "<p>So I bet many other people will see that too!</p>",
+        "id": 486242423,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384282
+    },
+    {
+        "content": "<p>Pretty much the exact same. Excellent!</p>",
+        "id": 486242476,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733384289
+    },
+    {
+        "content": "<p>Interesting extra note from the benchmark. reading in one go should be about the same speed as reading with the buffer</p>",
+        "id": 486242596,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384355
+    },
+    {
+        "content": "<p>it spends 20% of the time reading to the rust vec and 80% of the time copying that to the roc list</p>",
+        "id": 486242651,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384392
+    },
+    {
+        "content": "<p>Not user why it isn't just a memcpy and a lot faster</p>",
+        "id": 486242765,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384435
+    },
+    {
+        "content": "<p>But if we read straight to the roc list, would be about 5x faster and a toss up which version is fastest</p>",
+        "id": 486242811,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384461
+    },
+    {
+        "content": "<p>haha, I was just writing the exact same thing, surprising that it's slower to read from the FS than a vec in rust</p>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/302903-platform-development/topic/Returning.20a.20modified.20roc.20list.20from.20a.20rust.20platform/near/486242765\">said</a>:</p>\n<blockquote>\n<p>Not user why it isn't just a memcpy and a lot faster</p>\n</blockquote>",
+        "id": 486242912,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733384510
+    },
+    {
+        "content": "<p>I feel like the major thing I've learned here is your system setup as far as filesystem and things can make a kind of shocking difference to Filesystem calls.</p>",
+        "id": 486243041,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733384559
+    },
+    {
+        "content": "<p>Found out why...roc std is accidentally pessimizing everything. It is worried about refcounts of the inner elements</p>",
+        "id": 486243043,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384560
+    },
+    {
+        "content": "<p>Which there are none cause this is a list u8</p>",
+        "id": 486243067,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384570
+    },
+    {
+        "content": "<blockquote>\n<p>your system setup</p>\n</blockquote>\n<p>My system is pretty crazy to be fair. Everything is automatically compressed and decompressed when reading/writing. Zfs uses the arc instead of (along with?) the normal linux filesystem cache. My system snapshots like every 15 minutes and I can teleport the entire system back to an older version.</p>",
+        "id": 486243591,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733384790
+    },
+    {
+        "content": "<p>Hahaha, when I started that, I thought \"can't be that crazy\" I was absolutely mistaken. That's crazy <span aria-label=\"joy\" class=\"emoji emoji-1f602\" role=\"img\" title=\"joy\">:joy:</span></p>",
+        "id": 486243827,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733384906
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/302903-platform-development/topic/Returning.20a.20modified.20roc.20list.20from.20a.20rust.20platform/near/486233517\">said</a>:</p>\n<blockquote>\n<p>Spends 75% of the time in read and 25% copying bytes from the rust vector to the roc list</p>\n</blockquote>\n<p>we could cut this 25% out by skipping the Vec middleman and calling OS file APIs directly! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 486296207,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733402549
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> <br>\nI think you may have not quite understood while skimming, we did jump around a lot:</p>\n<p>What Brendan was seeing in that quote, was his uniquely odd file system, making the read super slow. </p>\n<p>The conclusion of this was that we will use the same technique as my expirimental buffered read for the full file read. <br>\nDirectly calling <code>read</code> on the File handle in rust and giving it the internal slice of a roc list as the destination for that read. </p>\n<p>Unless I'm not understanding you <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 486298127,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733403150
+    },
+    {
+        "content": "<p>ah nice! that makes sense <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 486305725,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733405483
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/302903-platform-development/topic/Returning.20a.20modified.20roc.20list.20from.20a.20rust.20platform/near/486242651\">said</a>:</p>\n<blockquote>\n<p>it spends 20% of the time reading to the rust vec and 80% of the time copying that to the roc list</p>\n</blockquote>\n<p><span class=\"user-mention\" data-user-id=\"651372\">@Eli Dowling</span>, don't forget this comment. Looks like we could cut out about 80% of the time from the rust vec middle man.</p>",
+        "id": 486346593,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733416223
+    },
+    {
+        "content": "<p>So full files read doesn't need your buffered read. They just need to not write to a rust vector</p>",
+        "id": 486346783,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733416290
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"651372\">@Eli Dowling</span> can you try this?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[no_mangle]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">roc_fx_fileReadBytes</span><span class=\"p\">(</span><span class=\"n\">roc_path</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">RocList</span><span class=\"o\">&lt;</span><span class=\"kt\">u8</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">RocResult</span><span class=\"o\">&lt;</span><span class=\"n\">RocList</span><span class=\"o\">&lt;</span><span class=\"kt\">u8</span><span class=\"o\">&gt;</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">RocStr</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">match</span><span class=\"w\"> </span><span class=\"n\">File</span><span class=\"p\">::</span><span class=\"n\">open</span><span class=\"p\">(</span><span class=\"n\">path_from_roc_path</span><span class=\"p\">(</span><span class=\"n\">roc_path</span><span class=\"p\">))</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"nb\">Ok</span><span class=\"p\">(</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">file</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">size</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">file</span>\n<span class=\"w\">                </span><span class=\"p\">.</span><span class=\"n\">metadata</span><span class=\"p\">()</span>\n<span class=\"w\">                </span><span class=\"p\">.</span><span class=\"n\">map</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">m</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"n\">m</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">())</span>\n<span class=\"w\">                </span><span class=\"p\">.</span><span class=\"n\">expect</span><span class=\"p\">(</span><span class=\"s\">\"TODO: make robust: file has not size?\"</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">buf_list</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">RocList</span><span class=\"p\">::</span><span class=\"n\">with_capacity</span><span class=\"p\">(</span><span class=\"n\">size</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">);</span>\n<span class=\"w\">            </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">buf_slice</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">u8</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"n\">std</span><span class=\"p\">::</span><span class=\"n\">slice</span><span class=\"p\">::</span><span class=\"n\">from_raw_parts_mut</span><span class=\"p\">(</span><span class=\"n\">buf_list</span><span class=\"p\">.</span><span class=\"n\">as_mut_ptr</span><span class=\"p\">(),</span><span class=\"w\"> </span><span class=\"n\">buf_list</span><span class=\"p\">.</span><span class=\"n\">capacity</span><span class=\"p\">())</span>\n<span class=\"w\">            </span><span class=\"p\">};</span>\n\n<span class=\"w\">            </span><span class=\"k\">match</span><span class=\"w\"> </span><span class=\"n\">file</span><span class=\"p\">.</span><span class=\"n\">read_exact</span><span class=\"p\">(</span><span class=\"n\">buf_slice</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"nb\">Ok</span><span class=\"p\">(())</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                    </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">out_list</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                        </span><span class=\"n\">RocList</span><span class=\"p\">::</span><span class=\"n\">from_raw_parts</span><span class=\"p\">(</span>\n<span class=\"w\">                            </span><span class=\"n\">buf_list</span><span class=\"p\">.</span><span class=\"n\">as_mut_ptr</span><span class=\"p\">(),</span>\n<span class=\"w\">                            </span><span class=\"n\">buf_list</span><span class=\"p\">.</span><span class=\"n\">capacity</span><span class=\"p\">(),</span>\n<span class=\"w\">                            </span><span class=\"n\">buf_list</span><span class=\"p\">.</span><span class=\"n\">capacity</span><span class=\"p\">(),</span>\n<span class=\"w\">                        </span><span class=\"p\">)</span>\n<span class=\"w\">                    </span><span class=\"p\">};</span>\n<span class=\"w\">                    </span><span class=\"n\">std</span><span class=\"p\">::</span><span class=\"n\">mem</span><span class=\"p\">::</span><span class=\"n\">forget</span><span class=\"p\">(</span><span class=\"n\">buf_list</span><span class=\"p\">);</span>\n\n<span class=\"w\">                    </span><span class=\"n\">RocResult</span><span class=\"p\">::</span><span class=\"n\">ok</span><span class=\"p\">(</span><span class=\"n\">out_list</span><span class=\"p\">)</span>\n<span class=\"w\">                </span><span class=\"p\">}</span>\n<span class=\"w\">                </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">err</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"n\">RocResult</span><span class=\"p\">::</span><span class=\"n\">err</span><span class=\"p\">(</span><span class=\"n\">toRocReadError</span><span class=\"p\">(</span><span class=\"n\">err</span><span class=\"p\">)),</span>\n<span class=\"w\">            </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"nb\">Err</span><span class=\"p\">(</span><span class=\"n\">err</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"n\">RocResult</span><span class=\"p\">::</span><span class=\"n\">err</span><span class=\"p\">(</span><span class=\"n\">toRocReadError</span><span class=\"p\">(</span><span class=\"n\">err</span><span class=\"p\">)),</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 486351578,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733417624
+    },
+    {
+        "content": "<p>I see this on a tmpfs:</p>\n<div class=\"codehilite\"><pre><span></span><code>enchmark 1 (69 runs): whole-file\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time          71.6ms ± 1.46ms    69.7ms … 76.7ms          4 ( 6%)        0%\n  peak_rss            412MB ± 83.8KB     412MB …  412MB          0 ( 0%)        0%\n  cpu_cycles          685K  ± 9.84K      656K  …  716K           2 ( 3%)        0%\n  instructions        425K  ± 1.62       425K  …  425K           0 ( 0%)        0%\n  cache_references   28.6K  ±  560      27.0K  … 30.6K           3 ( 4%)        0%\n  cache_misses       14.4K  ±  189      14.1K  … 14.9K           0 ( 0%)        0%\n  branch_misses      5.53K  ± 97.3      5.01K  … 5.76K           2 ( 3%)        0%\nBenchmark 2 (68 runs): buf-reuse\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time          72.1ms ± 1.33ms    70.5ms … 77.2ms          6 ( 9%)          +  0.6% ±  0.7%\n  peak_rss           3.97MB ±  102KB    3.76MB … 4.29MB          2 ( 3%)        ⚡- 99.0% ±  0.0%\n  cpu_cycles         6.93M  ±  302K     6.55M  … 8.32M           4 ( 6%)        💩+911.7% ± 10.4%\n  instructions       8.22M  ± 3.22      8.22M  … 8.22M           1 ( 1%)        💩+1832.1% ±  0.0%\n  cache_references   67.4K  ± 13.7K     43.6K  …  103K           0 ( 0%)        💩+135.4% ± 11.3%\n  cache_misses       14.5K  ±  273      14.0K  … 16.3K           1 ( 1%)          +  0.3% ±  0.5%\n  branch_misses      13.6K  ± 6.66K     5.64K  … 42.1K           4 ( 6%)        💩+146.7% ± 28.4%\n</code></pre></div>",
+        "id": 486351790,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733417684
+    },
+    {
+        "content": "<p>which matches what I expected</p>",
+        "id": 486351807,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733417690
+    },
+    {
+        "content": "<p>Basically this is saying that in a compute heavy situation, the whole file should be better (way less cycles, instructions, and branch misses). In a memory heavy situation, obviously, the reuse is better.</p>",
+        "id": 486352797,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733417938
+    },
+    {
+        "content": "<p>I'm still seeing a really large difference</p>\n<div class=\"codehilite\"><pre><span></span><code>Benchmark 1 (61 runs): ./buf-reuse\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time          81.8ms ± 3.21ms    75.2ms … 97.4ms          5 ( 8%)        0%\n  peak_rss           2.75MB ± 16.8KB    2.62MB … 2.75MB          1 ( 2%)        0%\n  cpu_cycles         6.96M  ±  336K     6.79M  … 8.70M           7 (11%)        0%\n  instructions       10.1M  ± 2.16      10.1M  … 10.1M           0 ( 0%)        0%\n  cache_references   20.6K  ±  751      17.1K  … 22.1K           1 ( 2%)        0%\n  cache_misses       12.1K  ±  623      9.00K  … 13.3K           1 ( 2%)        0%\n  branch_misses      4.75K  ±  340      3.79K  … 5.58K           3 ( 5%)        0%\nBenchmark 2 (7 runs): ./readWhole\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time           812ms ± 3.87ms     808ms …  818ms          0 ( 0%)        💩+892.2% ±  3.2%\n  peak_rss            822MB ± 70.1KB     822MB …  822MB          0 ( 0%)        💩+29773.0% ±  0.8%\n  cpu_cycles          984M  ± 8.03M      978M  … 1.00G           0 ( 0%)        💩+14037.7% ± 28.0%\n  instructions       3.28G  ± 34.8      3.28G  … 3.28G           0 ( 0%)        💩+32490.8% ±  0.0%\n  cache_references   5.89M  ± 30.8K     5.84M  … 5.94M           0 ( 0%)        💩+28474.6% ± 36.1%\n  cache_misses       1.65M  ± 9.12K     1.63M  … 1.66M           0 ( 0%)        💩+13588.0% ± 18.6%\n  branch_misses      4.93K  ±  188      4.62K  … 5.12K           0 ( 0%)          +  3.9% ±  5.5%\nBenchmark 3 (22 runs): ./readWhole-new\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time           236ms ± 4.43ms     230ms …  249ms          1 ( 5%)        💩+189.0% ±  2.2%\n  peak_rss            412MB ± 59.7KB     412MB …  412MB          0 ( 0%)        💩+14881.8% ±  0.6%\n  cpu_cycles          726K  ± 59.9K      645K  …  923K           1 ( 5%)        ⚡- 89.6% ±  2.1%\n  instructions        483K  ± 0.46       483K  …  483K           0 ( 0%)        ⚡- 95.2% ±  0.0%\n  cache_references   9.76K  ±  250      8.97K  … 10.2K           1 ( 5%)        ⚡- 52.7% ±  1.6%\n  cache_misses       7.69K  ±  320      7.03K  … 8.67K           2 ( 9%)        ⚡- 36.2% ±  2.3%\n  branch_misses      4.73K  ±  153      4.50K  … 5.17K           0 ( 0%)          -  0.5% ±  3.2%\n</code></pre></div>",
+        "id": 486357782,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733419428
+    },
+    {
+        "content": "<p>I also tried with a small 7MB file:</p>\n<div class=\"codehilite\"><pre><span></span><code>Benchmark 1 (1773 runs): ./buf-reuse\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time          2.43ms ±  257us    2.01ms … 4.02ms         84 ( 5%)        0%\n  peak_rss           2.75MB ± 18.8KB    2.49MB … 2.75MB         31 ( 2%)        0%\n  cpu_cycles          610K  ± 63.2K      536K  … 1.00M         105 ( 6%)        0%\n  instructions        808K  ± 0.47       808K  …  808K           1 ( 0%)        0%\n  cache_references   9.30K  ±  331      7.46K  … 10.6K          75 ( 4%)        0%\n  cache_misses       1.86K  ±  546      1.13K  … 7.27K         164 ( 9%)        0%\n  branch_misses      2.73K  ±  617      1.40K  … 5.40K          55 ( 3%)        0%\nBenchmark 2 (287 runs): ./readWhole\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time          16.9ms ± 6.17ms    15.5ms …  103ms         13 ( 5%)        💩+595.8% ± 11.9%\n  peak_rss           17.3MB ± 28.5KB    17.0MB … 17.3MB         11 ( 4%)        💩+528.9% ±  0.1%\n  cpu_cycles         18.7M  ± 1.21M     18.3M  … 25.7M          16 ( 6%)        💩+2969.9% ±  9.3%\n  instructions       60.7M  ± 3.39      60.7M  … 60.7M           4 ( 1%)        💩+7405.3% ±  0.0%\n  cache_references    120K  ± 1.51K      102K  …  123K           5 ( 2%)        💩+1191.7% ±  0.9%\n  cache_misses       29.1K  ± 1.90K     24.9K  … 37.1K          15 ( 5%)        💩+1463.3% ±  5.8%\n  branch_misses      3.54K  ±  512      2.44K  … 5.11K           7 ( 2%)        💩+ 30.0% ±  2.8%\nBenchmark 3 (749 runs): ./readWhole-new\n  measurement          mean ± σ            min … max           outliers         delta\n  wall_time          6.13ms ± 3.52ms    3.18ms … 30.8ms        207 (28%)        💩+152.3% ±  6.8%\n  peak_rss           9.83MB ±    0      9.83MB … 9.83MB          0 ( 0%)        💩+257.5% ±  0.0%\n  cpu_cycles          531K  ± 90.4K      427K  …  918K          82 (11%)        ⚡- 13.0% ±  1.0%\n  instructions        483K  ± 0.58       483K  …  483K           3 ( 0%)        ⚡- 40.2% ±  0.0%\n  cache_references   8.99K  ±  527      7.27K  … 10.0K          96 (13%)        ⚡-  3.3% ±  0.4%\n  cache_misses       2.73K  ±  822      1.54K  … 5.97K          23 ( 3%)        💩+ 46.7% ±  2.9%\n  branch_misses      3.26K  ±  769      1.70K  … 5.29K           0 ( 0%)        💩+ 19.7% ±  2.1%\n</code></pre></div>",
+        "id": 486358138,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733419538
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/302903-platform-development/topic/Returning.20a.20modified.20roc.20list.20from.20a.20rust.20platform/near/486346783\">said</a>:</p>\n<blockquote>\n<p>So full files read doesn't need your buffered read. They just need to not write to a rust vector</p>\n</blockquote>\n<p>That is what I was saying. Using a roc list as the destination for the read instead of an intermediate vec, just like my new readbytes does.</p>",
+        "id": 486359010,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733419811
+    },
+    {
+        "content": "<p>Weird that the perf still isn't good for you. <span aria-label=\"shrug\" class=\"emoji emoji-1f937\" role=\"img\" title=\"shrug\">:shrug:</span> .... If you are interested, we could dig into the perf more.<br>\nWould require a release build of the platform with debug info (edit cargo toml to have <code>debug=true</code> and comment out the <code>strip</code> line) along with building the roc app with <code>--optimize --profiling --linker legacy</code> (probably could build using the testing nightly?). Then running both scripts with a good profiler (I find samply the nicest).</p>",
+        "id": 486364014,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733421408
+    },
+    {
+        "content": "<p>I was able to steal my wife's machine for a bit and test this. Simply staying in l1 cache makes all the difference here (also munmap at the end from freeing the large buffer is slow). I would have expected the pref here to do a better job (due to pretching), but I guess not. This is a case where you would need to mmap the buffer to get equivalent perf. Probably would want to mmap in copy on write mode and pass to roc.</p>",
+        "id": 486441951,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733461366
+    },
+    {
+        "content": "<p>Still don't see the crazy 10x gain you see, but I see 3x.</p>",
+        "id": 486441993,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733461400
+    },
+    {
+        "content": "<p>So definitely a win</p>",
+        "id": 486441997,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733461405
+    },
+    {
+        "content": "<p>You must either have really slow ram/higher level caches. Or really fast l1 cache to see the 10x gain</p>",
+        "id": 486442078,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733461462
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/302903-platform-development/topic/Returning.20a.20modified.20roc.20list.20from.20a.20rust.20platform/near/486441951\">said</a>:</p>\n<blockquote>\n<p>I was able to steal my wife's machine for a bit and test this. Simply staying in l1 cache makes all the difference here (also munmap at the end from freeing the large buffer is slow). I would have expected the pref here to do a better job (due to pretching), but I guess not. This is a case where you would need to mmap the buffer to get equivalent perf. Probably would want to mmap in copy on write mode and pass to roc.</p>\n</blockquote>\n<p>This is interesting, good to have another data point</p>",
+        "id": 486573756,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733510239
+    },
+    {
+        "content": "<p>Hey, I'm having some trouble making the current setup work in a robust way with the rust platform.<br>\nI think I'm having issues because it's possible for the platform to free <code>Box&lt;()&gt;</code> representing the file handle and then also end up freeing the roc list along with it.<br>\nI can't seem to quite figure out a way to ensure the file handle and the buf stay in sync reference wise.</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"nc\">RocReader</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">internalList</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">RocList</span><span class=\"o\">&lt;</span><span class=\"kt\">u8</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">reader</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">RocBox</span><span class=\"o\">&lt;</span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"n\">RocRefcounted</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">RocReader</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">dec</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// panic!(\"oh no\")</span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">internalList</span><span class=\"p\">.</span><span class=\"n\">dec</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">reader</span><span class=\"p\">.</span><span class=\"n\">dec</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">inc</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"c1\">// panic!(\"oh no\")</span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">internalList</span><span class=\"p\">.</span><span class=\"n\">inc</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">reader</span><span class=\"p\">.</span><span class=\"n\">inc</span><span class=\"p\">();</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">is_refcounted</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">bool</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kc\">true</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>I tried wrapping them like this.. but that didn't help becasue then I couldn't pass the Box&lt;()&gt; into the heap to get the file handle out.<br>\nI'm sure I'm missing someting obvious here.</p>",
+        "id": 486579019,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733512256
+    },
+    {
+        "content": "<p>I wouldn't store the <code>internalList</code> on the rust side. I would still use your original version and pass it in. Just make the reader in roc a <code>Reader := { file: Box {}, buf: List U8 }</code></p>",
+        "id": 486582411,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733513785
+    },
+    {
+        "content": "<p>That said, I can look into the refcounting if you prefer that method.</p>",
+        "id": 486582441,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733513796
+    },
+    {
+        "content": "<p>Oh, yeah alright, that does make way more sense... Sometimes I'm in so deep that the simple and obvious solution just completely eludes me <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 486620896,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733535955
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span>  I made a PR for your branch with my changes :)<br>\n<a href=\"https://github.com/roc-lang/basic-cli/pull/278\">https://github.com/roc-lang/basic-cli/pull/278</a><br>\nLet me know if you have any changes or questions</p>",
+        "id": 486665312,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733574342
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"651372\">@Eli Dowling</span> I've only started investigating the CI failures. I suspect it's because the PI branch itself is struggling, and not your's changes. It looks like it passes everything on my aarch64 macos</p>",
+        "id": 486757808,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733654279
+    },
+    {
+        "content": "<p>I think I probably added some rust warnings. I'll double check tomorrow, but I probably have an unused import or something silly <span aria-label=\"face palm\" class=\"emoji emoji-1f926\" role=\"img\" title=\"face palm\">:face_palm:</span></p>",
+        "id": 486757901,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1733654341
+    }
+]

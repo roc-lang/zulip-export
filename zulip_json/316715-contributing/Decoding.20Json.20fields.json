@@ -1,0 +1,128 @@
+[
+    {
+        "content": "<p>How should we handle decoding field strings with characters that are not valid in Roc identifiers? I.e. capital letters, symbols <code>@</code> or <code>-</code> etc? </p>\n<p>Say we want to decode into this record <code>{ fruit: 2, owner: \"Farmer Joe\" }</code>. Using the PR branch this input will Succeed <code>\" {\\n\\\"fruit\\\"\\t:2\\n, \\\"owner\\\": \\\"Farmer Joe\\\" } \"</code> and this input will Fail <code>\" {\\n\\\"Fruit\\\"\\t:2\\n, \\\"owner\\\": \\\"Farmer Joe\\\" } \"</code>. </p>\n<p>One option I see is to actually decode into a <code>Dict Str a</code> instead and then have another method to convert the output to a record? This might also be a good way to handle input that succeeds in part.</p>\n<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span>  did you have a particular design in mind when you implemented this? I feel like there may be an obvious solution staring at me here, I'm not sure I fully grok the full capability of the below. Any assistance would be greatly appreciated.</p>\n<div class=\"codehilite\"><pre><span></span><code>## `record state stepField finalizer` decodes a record field-by-field.\n##\n## `stepField` returns a decoder for the given field in the record, or\n## `Skip` if the field is not a part of the decoded record.\n##\n## `finalizer` should produce the record value from the decoded `state`.\nrecord : state, (state, Str -&gt; [Keep (Decoder state fmt), Skip]), (state -&gt; Result val DecodeError) -&gt; Decoder val fmt | fmt has DecoderFormatting\n</code></pre></div>",
+        "id": 351161730,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1681942334
+    },
+    {
+        "content": "<p>Yeah this is hard a problem. I previously brought up something similar in <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/stream/304641-ideas/topic/Supporting.20discriminants.20when.20encoding.2Fdecoding.20unions\">#ideas &gt; Supporting discriminants when encoding/decoding unions</a></p>",
+        "id": 351168324,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1681946000
+    },
+    {
+        "content": "<p>I think for now we could have the Json config take a mapping of how fields should be renamed when the Json object is constructed</p>",
+        "id": 351168338,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1681946030
+    },
+    {
+        "content": "<p>I know we’ve also talked about allowing more kinds of cases in record field names, but I think at present that only includes allowing underscores in field names. There are other ideas like having Decode.record take a renaming strategy, or adding some language level way to say a field should be renamed (which i personally think is a bad idea), but those are all separate discussions</p>",
+        "id": 351168456,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1681946136
+    },
+    {
+        "content": "<p>anyway for now I think adding an optional mapping to the config of Json would unblock users. And folks can fall back to decoding a Dict if need be as well.</p>",
+        "id": 351168585,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1681946204
+    },
+    {
+        "content": "<p>Ok, I'll need to read this through more thoroughly. Do you have any thoughts on <a href=\"https://github.com/roc-lang/roc/issues/5294\">#5294</a>? If this is easy enough to implement with our current design, then it sounds like we can use Dicts and have users convert to a record.</p>",
+        "id": 351169294,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1681946706
+    },
+    {
+        "content": "<p>Another question, is there anything related here the proposed <a href=\"https://docs.google.com/document/d/1Jo9nZCekkoF6SaDcRqPqoPcgPaAAvlNZC7v3kgVQ3Tc/edit?usp=drivesdk\">Record Builder</a> syntax might assist with? It feels like it's similar but I'm not sure.</p>",
+        "id": 351169482,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1681946863
+    },
+    {
+        "content": "<p>I think we should add a decodeDict ability member as you describe as it would alleviate the problem</p>",
+        "id": 351169574,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1681946926
+    },
+    {
+        "content": "<p>record builder makes it easier to write effectful decoders i think but i don’t think it changes the Encode/decode api here</p>",
+        "id": 351169882,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1681947143
+    },
+    {
+        "content": "<p>Oh wait. I think decodeDict can already be implemented in terms of “record”</p>",
+        "id": 351173057,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1681949736
+    },
+    {
+        "content": "<p>Ok, so I have it working in a crude form. I'm going to play with it some more to see what API I think feels nice. Just thought I would share what I have so far.</p>\n<p>I'm thinking the map could be a Dict Str Str instead, though I thought I might try a record first as it is probably more descriptive. </p>\n<p>The current API only supports a single mapping, so I'll need to update this to a List to support multiple, or use something like a Dict.</p>\n<div class=\"codehilite\"><pre><span></span><code>DecodeOption : [\n    Default,\n\n    # e.g. map JSON Object name &quot;Fruit&quot; to Roc Record field &quot;fruit&quot;\n    DecodeMap { objectName : Str, recordField : Str },\n]\n\nJson := {\n    decodeOption : DecodeOption,\n} has [... stuff]\n\n# Create a Json decoder with options\nfromUtf8WithOptions = \\{decodeOption? Default} -&gt;\n    @Json { decodeOption }\n\n# Test decode of record with two strings ignoring whitespace\nexpect\n    input = Str.toUtf8 &quot; {\\n\\&quot;Fruit\\&quot;\\t:2\\n, \\&quot;owner\\&quot;: \\&quot;Farmer Joe\\&quot; } &quot;\n    decodeOption = DecodeMap {recordField : &quot;fruit&quot;, objectName : &quot;Fruit&quot; }\n\n    actual = Decode.fromBytesPartial input (fromUtf8WithOptions {decodeOption})\n    expected = Ok { fruit: 2, owner: &quot;Farmer Joe&quot; }\n\n    actual.result == expected\n</code></pre></div>",
+        "id": 351225859,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1681973888
+    },
+    {
+        "content": "<p>Or maybe it could take a function <code>Str -&gt; Str</code> which maps between them? Then different strategies can be thought of and implemented on the user side of the API. Like if I wanted to capitalise or canel case etc I provide a function which will take the Roc field name and tranform it to the expected Json Object name. Probably better than hard coding all the possible fields. Eventually there should be unicode packages which can help with things like <code>toCamelCase</code> <code>toKebabCase</code> etc.</p>",
+        "id": 351228884,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1681974787
+    },
+    {
+        "content": "<p>^^ this was inspired by Richard's tag name strategy linked in the previous post above. But applied to Records and Decoding instead of Tag Encoding.</p>",
+        "id": 351230033,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1681975141
+    },
+    {
+        "content": "<p>yeah I think the common strategies are:</p>\n<ul>\n<li>camelCase</li>\n<li>PascalCase</li>\n<li>kebab-case</li>\n<li>snake_case</li>\n<li>SCREAMING_SNAKE_CASE</li>\n</ul>",
+        "id": 351308466,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681993476
+    },
+    {
+        "content": "<p>if JSON had those listed as options, it feels like that would cover 99% of use cases</p>",
+        "id": 351308545,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681993499
+    },
+    {
+        "content": "<p>I could see an argument for <code>Custom (Str -&gt; Str)</code> as another option there</p>",
+        "id": 351308649,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681993524
+    },
+    {
+        "content": "<p>Thank you, I'll have a go at implementing that.</p>",
+        "id": 351310137,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1681993843
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> did you have any preference for using a Dict or would a List of these tags be the best way to go? Maybe <code>Dict Str OptionTagsHere</code> or something for configuration. The other issue is that at the moment we don't have a way to do uppercase lower case etc. I can make something quick and dirty for Basic Latin but we haven't got unicode support or anything yet.</p>",
+        "id": 351311006,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1681994035
+    },
+    {
+        "content": "<p>hm yeah good point about uppercasing being locale-specific - I forgot about that <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 351368915,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1682006524
+    },
+    {
+        "content": "<p>Just pushed some updates to that PR. It's not ready for merge as it will need the fixes <span class=\"user-mention\" data-user-id=\"431893\">@Brian Carroll</span> is working on. However thought I would share that it now has the capability to fully decode the following which is pretty neat. This includes a strategy for mapping the field names, which only supports Basic Latin (until we have a unicode package).</p>\n<div class=\"codehilite\" data-code-language=\"Elixir\"><pre><span></span><code><span class=\"c1\"># Test complex example from IETF RFC 8259 (2017)</span>\n<span class=\"n\">expect</span>\n<span class=\"w\">    </span><span class=\"n\">input</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">        </span><span class=\"sh\">\"\"\"</span>\n<span class=\"w\">        </span><span class=\"sh\">{</span>\n<span class=\"sh\">            \"Image\": {</span>\n<span class=\"sh\">                \"Width\":  800,</span>\n<span class=\"sh\">                \"Height\": 600,</span>\n<span class=\"sh\">                \"Title\":  \"View from 15th Floor\",</span>\n<span class=\"sh\">                \"Thumbnail\": {</span>\n<span class=\"sh\">                    \"Url\":    \"http://www.example.com/image/481989943\",</span>\n<span class=\"sh\">                    \"Height\": 125,</span>\n<span class=\"sh\">                    \"Width\":  100</span>\n<span class=\"sh\">                },</span>\n<span class=\"sh\">                \"Animated\" : false,</span>\n<span class=\"sh\">                \"Ids\": [116, 943, 234, 38793]</span>\n<span class=\"sh\">            }</span>\n<span class=\"sh\">        }</span>\n<span class=\"w\">        </span><span class=\"sh\">\"\"\"</span>\n<span class=\"w\">        </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nc\">Str</span><span class=\"o\">.</span><span class=\"n\">toUtf8</span>\n\n<span class=\"w\">    </span><span class=\"n\">decoder</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">jsonWithOptions</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"ss\">fieldNameMapping</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">PascalCase</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"n\">actual</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nc\">Decode</span><span class=\"o\">.</span><span class=\"n\">fromBytes</span><span class=\"w\"> </span><span class=\"n\">input</span><span class=\"w\"> </span><span class=\"n\">decoder</span>\n<span class=\"w\">    </span><span class=\"n\">expected</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nc\">Ok</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"ss\">image</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"ss\">width</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"mi\">800</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"ss\">height</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"mi\">600</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"ss\">title</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"s2\">\"View from 15th Floor\"</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"ss\">thumbnail</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"ss\">url</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"s2\">\"http://www.example.com/image/481989943\"</span><span class=\"p\">,</span>\n<span class=\"w\">                </span><span class=\"ss\">height</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"mi\">125</span><span class=\"p\">,</span>\n<span class=\"w\">                </span><span class=\"ss\">width</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"mi\">100</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"p\">},</span>\n<span class=\"w\">            </span><span class=\"ss\">animated</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Bool</span><span class=\"o\">.</span><span class=\"no\">false</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"ss\">ids</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"mi\">116</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">943</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">234</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"mi\">38793</span><span class=\"p\">],</span>\n<span class=\"w\">        </span><span class=\"p\">},</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"n\">actual</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"n\">expected</span>\n</code></pre></div>",
+        "id": 351486756,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682039175
+    },
+    {
+        "content": "<p>abilities are crazy <span aria-label=\"mind blown\" class=\"emoji emoji-1f92f\" role=\"img\" title=\"mind blown\">:mind_blown:</span> very cool Luke!</p>",
+        "id": 351487779,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1682039861
+    }
+]

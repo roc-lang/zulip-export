@@ -1,0 +1,230 @@
+[
+    {
+        "content": "<p>I just had an idea about <a href=\"https://github.com/roc-lang/roc/issues/171\">hash flooding attacks</a> - what if we encouraged decoding HTTP headers in servers by using the <code>Decode</code> ability to directly parse only the headers you care about?</p>",
+        "id": 298903178,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663219280
+    },
+    {
+        "content": "<p>in other words, rather than doing what most languages do (parsing the header bytes into a dictionary, and then letting you access that dictionary and do further decoding kinda like you do with environment variables, where you parse individual header strings into numbers/booleans/etc as needed), the server provides some function along the lines of:</p>\n<div class=\"codehilite\" data-code-language=\"Elixir\"><pre><span></span><code><span class=\"n\">headers</span><span class=\"w\"> </span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Request</span><span class=\"w\"> </span><span class=\"o\">-&gt;</span><span class=\"w\"> </span><span class=\"n\">val</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"n\">val</span><span class=\"w\"> </span><span class=\"n\">has</span><span class=\"w\"> </span><span class=\"nc\">Decode</span><span class=\"w\"></span>\n</code></pre></div>",
+        "id": 298903301,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663219377
+    },
+    {
+        "content": "<p>and it parses the raw header bytes directly into whatever data structure you want - e.g. let's say I have a record of type <code>{ contentLength : U64, contentType : Str }</code>, the decoder could translate camelCase record field names into Capitalized-Kebab-Case, and just parse out exactly the headers I'm looking for in a single pass through the bytes</p>",
+        "id": 298903412,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663219475
+    },
+    {
+        "content": "<p>this would mean:</p>\n<ul>\n<li>there's no intermediate dictionary, so nothing is hashed and no hash flooding attack is possible</li>\n<li>the ergonomics are nicer because you don't have to parse things out of an intermediate dictionary one by one</li>\n<li>it runs way faster</li>\n</ul>",
+        "id": 298903444,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663219519
+    },
+    {
+        "content": "<p>alternatively, if you need to access all the headers (because for whatever reason you want to iterate over them) you can always ask for them as a plain <code>List</code>, which is both the most efficient way to do that and also not vulnerable to hash flooding either</p>",
+        "id": 298903592,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663219672
+    },
+    {
+        "content": "<p>How does the decode ability work with ignoring data? Also, how does decode work with scanning once while ignoring field ordering? Just haven't thought about those depths of it</p>",
+        "id": 298907330,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1663222541
+    },
+    {
+        "content": "<p>I really like the idea extemporalgenome shared on GH: parse the common ones into a struct (constant time lookups, yay!) and hold the rest in some other data structure.</p>\n<p>That said, I don't see how the \"other data structure\" with this signature can be something other than either an array of bytes or a linked list, both of which are gonna exhibit the perf characteristics that we wanted to avoid. (Unless the initial scan pass just found byte offsets? How would this actually work?)</p>",
+        "id": 298941799,
+        "sender_full_name": "Brian Hicks",
+        "timestamp": 1663238112
+    },
+    {
+        "content": "<p>yeah and the hashing required just to do the insertions alone can be enough for the attack to succeed</p>",
+        "id": 298945293,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663239665
+    },
+    {
+        "content": "<p>Due to deciding on index map as the base of our dict, the hashing alg doesn't matter, correct? As such, to stop has flooding, we just need to seed the alg with random data when creating a dict and then it becomes super hard to flood due to being unique. Flooding requires knowing the target. Also, setting practically limits on where to stop loading headers should help.</p>",
+        "id": 298983492,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1663252594
+    },
+    {
+        "content": "<p>Just like it is normal to set limits to number of bytes to load from a request</p>",
+        "id": 298983540,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1663252612
+    },
+    {
+        "content": "<p>that's a possibility, but seeding the algorithm with random data slows down the performance of all hashmaps - e.g. SipHash is a lot slower than Wyhash pretty much across the board</p>",
+        "id": 298997473,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663256632
+    },
+    {
+        "content": "<p>a lot of languages pay that cost, but I'd rather not make all hashmaps slow just for the sake of this one use case (HTTP headers in web servers) if we can avoid it, especially when it seems that hash flooding can be mitigated in server-specific code without affecting all other users of the stdlib!</p>",
+        "id": 298997709,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663256688
+    },
+    {
+        "content": "<p>You can still use wyhash</p>",
+        "id": 299018395,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1663263159
+    },
+    {
+        "content": "<p>It would add the cost of a few extra bitwise operations</p>",
+        "id": 299018492,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1663263190
+    },
+    {
+        "content": "<p>The cost is storing an extra integer</p>",
+        "id": 299018552,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1663263214
+    },
+    {
+        "content": "<p>Since hashing tends to be the fast part and the lookup is slow, this should have minimal costs</p>",
+        "id": 299018723,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1663263275
+    },
+    {
+        "content": "<p>interesting!</p>",
+        "id": 299023195,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663264853
+    },
+    {
+        "content": "<p>I'm still overall skeptical that it's even necessary, but good to know it's an option!</p>",
+        "id": 299023245,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663264876
+    },
+    {
+        "content": "<p>interesting writeup of hash flooding attack defense in the most popular Haskell JSON parsing library: <a href=\"https://frasertweedale.github.io/blog-fp/posts/2021-10-12-aeson-hash-flooding-protection.html\">https://frasertweedale.github.io/blog-fp/posts/2021-10-12-aeson-hash-flooding-protection.html</a></p>",
+        "id": 299270093,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663387240
+    },
+    {
+        "content": "<p>the <a href=\"https://cs-syd.eu/posts/2021-09-11-json-vulnerability\">linked writeup</a> (which is super detailed and includes examples of how to test a server for hash flooding susceptibility!) includes one of the mitigations we talked about early on here: don't alter the hash function itself, but rather have the collision resolution use something with a nonlinear traversal time, e.g. another hash map with a different hashing algorithm</p>\n<blockquote>\n<p>As party of our investigation, we have come up with a new-ish approach to dealing with collisions. Instead of using linear chaining on collisions, we could instead recursively have the hashmap contain another hashmap that uses a different salt. This approach has been fully implemented and was ready to merge. The solution would strictly improve performance, at the cost of a minimal amount of extra memory in the case of a lot of collisions, without breaking backwards compatibility. However, it was rejected (privately) by two maintainers at the time because it does not come with a proof that it does not have any other vulnerabilities.</p>\n</blockquote>",
+        "id": 299270226,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663387367
+    },
+    {
+        "content": "<p>that reason for rejection sounds disappointing to me; the original talk introducing hash flooding explicitly cites this category of mitigation (improving the asymptotics of collision resolution) as an effective defense, and its seems like their testing harness is a pretty effective way of testing out whether the attack is still reproducible!</p>",
+        "id": 299270311,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663387449
+    },
+    {
+        "content": "<p>JSON dictionaries are perhaps a stronger case than HTTP headers for having the stdlib <code>Dict</code> be resistant to hash flooding</p>",
+        "id": 299270339,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663387507
+    },
+    {
+        "content": "<p>because certainly decoding JSON into a <code>Dict</code> will be something people will want to do, and often that JSON will be coming from an untrusted input (e.g. HTTP request)</p>",
+        "id": 299270352,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663387553
+    },
+    {
+        "content": "<p>and in that scenario, it seems like the only way someone could mitigate this (assuming <code>Dict</code> itself didn't) would be to cap the input size to a small enough number of bytes that executing the attack would be infeasible</p>",
+        "id": 299270433,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663387639
+    },
+    {
+        "content": "<p>but of course that limitation might not be compatible with their use case; it might be important that they allow untrusted inputs large enough to perform a successful hash flood attack</p>",
+        "id": 299270443,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663387675
+    },
+    {
+        "content": "<p>so putting all that together, maybe the best design is:</p>\n<ul>\n<li><code>IndexMap</code> with a fast hash</li>\n<li>when inputs collide, resolve a very small number of collisions (e.g. up to 4) in the normal way, and then if there are more collisions than that, fall back on storing them in a separate hash map</li>\n<li>make sure it's infeasible to make keys that collide in both the main hash map and also the separate hash map for collisions</li>\n</ul>",
+        "id": 299270599,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663387885
+    },
+    {
+        "content": "<p>with a careful enough design of the fallback mechanism, it seems plausible that it would never affect performance in any noticeable way if an attack is not happening, while still being able to effectively mitigate an attack</p>",
+        "id": 299270666,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663387998
+    },
+    {
+        "content": "<p>relatedly, I'm not sure that the fallback map would need to use randomness; if it used a different hashing algorithm from the main map, and especially if it used one that was good at minimizing collisions (at the expense of hashing speed, say), it seems like it could potentially be infeasible for an attacker to find a set of keys that would actually collide on both hashing algorithms in practice</p>",
+        "id": 299270762,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663388148
+    },
+    {
+        "content": "<p>but if it needed to, as Brendan noted earlier, it would always be possible to do that; after the 4 \"normal\" collisions (or whatever number), it could generate a random seed on the fly and store that on the heap for future collision resolution. I'd like to avoid that if possible though, because we'd need to introduce another primitive for all hosts to implement (e.g. <code>roc_random</code> or something, similar to <code>roc_alloc</code>) unless we maybe used something like heap pointers as seeds - which of course would vary by <code>Dict</code>, but wouldn't be terribly random</p>",
+        "id": 299270897,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663388313
+    },
+    {
+        "content": "<p>I am very confused, how does the second hash map \"strictly improve performance\". Haven't read the write up yet, but that just does not sound possible.</p>\n<p>EDIT: after reading the article, i think they mean strictly improve performance in the case of a hash collision attack, I do no think they mean improve performance in the general case.</p>",
+        "id": 299273724,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1663392075
+    },
+    {
+        "content": "<p>Also, if we are already using indexmap because of ordering, salting would not affect the roc app at all. It would not be visible in roc user space at all. This means that the more complex solution of multiple hash maps shouldn't be needed in our case.</p>\n<p>Also, depending on the goal, it could be a per compile random value instead of a new random value (that would avoid host additions at the cost of some security). </p>\n<p>Long term, I think that host functions of this sort are of little cost because they should be possible to make into a library in the host language and shared. Even without a library, it is likely about 5 lines of code.</p>",
+        "id": 299275241,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1663393944
+    },
+    {
+        "content": "<blockquote>\n<p>if it used a different hashing algorithm from the main map, and especially if it used one that was good at minimizing collisions (at the expense of hashing speed, say)</p>\n</blockquote>\n<p>I don't think you can have a slow hashing algorithm for the second hashing algorithm. I am pretty sure every miss in the first map needs to check the second map. As such, if the second hashing function is slow, lookup time for items not in the map would be very slow.</p>",
+        "id": 299275526,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1663394292
+    },
+    {
+        "content": "<p>added some more thoughts to <a href=\"https://github.com/roc-lang/roc/issues/171#issuecomment-1250136235\">the issue</a></p>",
+        "id": 299361246,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1663446897
+    },
+    {
+        "content": "<p>For the fun of it, I just did a hash flooding attack on the Roc Set:</p>\n<p><a href=\"/user_uploads/22008/KQ9ygZyoe4H-T55kM7sz5r6f/hash_flooding_str.png\">hash_flooding_str.png</a> <br>\n<a href=\"/user_uploads/22008/6FrtWxgGtGAHBaXSSp1vDMv5/hash_flooding_u128.png\">hash_flooding_u128.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/KQ9ygZyoe4H-T55kM7sz5r6f/hash_flooding_str.png\" title=\"hash_flooding_str.png\"><img src=\"/user_uploads/22008/KQ9ygZyoe4H-T55kM7sz5r6f/hash_flooding_str.png\"></a></div><div class=\"message_inline_image\"><a href=\"/user_uploads/22008/6FrtWxgGtGAHBaXSSp1vDMv5/hash_flooding_u128.png\" title=\"hash_flooding_u128.png\"><img src=\"/user_uploads/22008/6FrtWxgGtGAHBaXSSp1vDMv5/hash_flooding_u128.png\"></a></div>",
+        "id": 339491356,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677907333
+    },
+    {
+        "content": "<p><del>hmm...my graphs uploaded weird...one sec...</del></p>",
+        "id": 339491373,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677907356
+    },
+    {
+        "content": "<p>Ok. fixed.</p>",
+        "id": 339491504,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677907465
+    },
+    {
+        "content": "<p>U128 has the expected exponential time cost when has flooding. Every time we insert double the number of elements, it takes 4 times longer to perform the operation.</p>",
+        "id": 339491620,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677907582
+    },
+    {
+        "content": "<p>For Str, since we have to allocate and copying into a List in order to get at the bytes, hashing takes a ton of time. As such, the cost of hashing overshadows the cost of the probing for inserts. So until we have seemless slices, I guess hash flooding doesn't make Str hashing much worse in Roc. Of course with enough elements, eventually hash flooding would effect strings as well.</p>",
+        "id": 339491747,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677907718
+    }
+]

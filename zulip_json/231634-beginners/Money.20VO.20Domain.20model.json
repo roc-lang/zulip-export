@@ -1,0 +1,164 @@
+[
+    {
+        "content": "<p>Hi everyone! <span aria-label=\"wave\" class=\"emoji emoji-1f44b\" role=\"img\" title=\"wave\">:wave:</span></p>\n<p>I'm trying to implement a type-safe <code>Money</code> value object in Roc. The goal is to catch currency mismatches at compile time when calling <code>add</code>, similar to TypeScript generics (<code>Money&lt;\"USD\"&gt;</code>) or C# phantom types (<code>Money&lt;TCurrency&gt; where TCurrency : ICurrency</code>).</p>\n<p>Ideally, <code>add : Money(c), Money(c) -&gt; Money(c)</code> should prevent adding <code>EUR</code> to <code>USD</code> at compile time/or lsp.</p>\n<p>However, if I use a single generic <code>make : Dec, currency -&gt; Try(Money(currency), [NegativeAmount])</code>, passing <code>EUR</code> or <code>USD</code> as tags creates open tag unions (<code>[EUR, ..]</code>), causing type widening. As a result, <code>eur.add(usd)</code> unifies the types to <code>Money([EUR, USD, ..])</code> and compiles successfully.</p>\n<p>The only way I’ve managed to strictly enforce compile-time separation is by defining separate constructor functions for every single currency (e.g., <code>makeEUR</code>, <code>makeUSD</code>):</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>Money(currency) := { amount : Dec, currency : currency }.{\n\n    makeEUR : Dec -&gt; Try((Money([EUR])), [NegativeAmount])\n    makeEUR = |amount| {\n        make(amount, EUR)\n    }\n\n    makeUSD : Dec -&gt; Try((Money([USD])), [NegativeAmount])\n    makeUSD = |amount| {\n        make(amount, USD)\n    }\n\n    amount : Money(currency) -&gt; Dec\n    amount = |Money.(m)| m.amount\n\n    currency : Money(currency) -&gt; currency\n    currency = |Money.(m)| m.currency\n\n    add : Money(c), Money(c) -&gt; Money(c)\n    add = |Money.(m1), Money.(m2)| {\n        Money.(\n            { amount: m1.amount + m2.amount, currency: m2.currency },\n        )\n    }\n\n    to_inspect : Money(currency) -&gt; Str\n    to_inspect = |Money.(m)| {\n        \"${Dec.to_str(m.amount)} ${Str.inspect(m.currency)}\"\n    }\n}\n\nmake : Dec, currency -&gt; Try((Money(currency)), [NegativeAmount])\nmake = |amount, currency| {\n    if amount &lt; 0 {\n        Err(NegativeAmount)\n    } else {\n        Ok(Money.({ amount: amount, currency: currency }))\n    }\n}\n\nexpect {\n    m = Money.makeEUR(1)?\n    m.currency == EUR\n}\n\nexpect {\n    m = Money.makeEUR(1)?\n    Str.inspect(m.currency) == \"EUR\"\n}\n\nexpect {\n    m1 = Money.makeEUR(1)?\n    m2 = Money.makeEUR(1)?\n    total_EUR = m1.add(m2)\n    Str.inspect(total_EUR) == \"2.0 EUR\"\n}\n\nexpect {\n    m1 = Money.makeUSD(1)?\n    m2 = Money.makeUSD(1)?\n    total_usd = m1.add(m2)\n    Str.inspect(total_usd) == \"2.0 USD\"\n}\n\n# correctly - not working with other currency\n# expect {\n#   m1 = Money.makeEUR(1)?\n#   m2 = Money.makeUSD(1)?\n#   total_EUR = m1.add(m2)\n#   Str.inspect(total_EUR) == \"2.0 USD\"\n# }\n</code></pre></div>\n<p>This works as expected (<code>m1 = Money.makeEUR(1)?</code> and <code>m2 = Money.makeUSD(1)?</code> will fail on <code>m1.add(m2)</code> at compile time), but it forces me to duplicate <code>makeXYZ</code> methods for every supported currency.</p>\n<p>Is there an idiomatic way in Roc to constrain or pin <code>currency</code> to a single closed tag/type in a generic <code>make</code> function, so we don't have to duplicate constructor methods?</p>\n<p>Thanks for any insights!</p>",
+        "id": 620018593,
+        "sender_full_name": "BearCarpenter",
+        "timestamp": 1788031584
+    },
+    {
+        "content": "<p>can you share the version with a single make function that does not work as expected?</p>\n<p>edit: oh i see it now</p>",
+        "id": 620019351,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1788032143
+    },
+    {
+        "content": "<p>i think you can constrain the input type:</p>\n<div class=\"codehilite\"><pre><span></span><code>Currency :  [USD, EUR]\n\nmake : Dec, Currency -&gt; Try((Money, Currency), [Negative])\n</code></pre></div>\n<p>since its unbound, just passing eg USD infers it as open, for it to be closed it must be explicitly closed via type sig</p>",
+        "id": 620020458,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1788032871
+    },
+    {
+        "content": "<p>you could also consider using a phantom type as well here, <code>make</code> would be the same but you would not need to store Currency at runtime</p>",
+        "id": 620020521,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1788032924
+    },
+    {
+        "content": "<p>I tried with phantom. Generally I started with:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>Money(c) := Dec.{\n    make : Dec, c -&gt; Try((Money(c)), [NegativeAmount])\n    make = |val, _tag| {\n        if val &lt; 0 {\n            Err(NegativeAmount)\n        } else {\n            Ok(Money.(val))\n        }\n    }\n\n    amount : Money(c) -&gt; Dec\n    amount = |Money.(amount)| amount\n\n    add : Money(c), Money(c) -&gt; Money(c)\n    add = |Money.(v1), Money.(v2)| {\n        Money.({ v1 + v2 })\n    }\n}\n\nclientExampleUsage = || {\n    my_money1 = Money.make(100.50, EUR)?\n    my_money2 = Money.make(20.00, EUR)?\n    _legal = my_money1.add(my_money2) # correct\n    usd_money = Money.make(50.00, USD)?\n    _illegal = my_money1.add(usd_money) # incorrect - it is possible\n    Ok({})\n}\n</code></pre></div>\n<p>but next I thought - what if library define each possible currency?</p>",
+        "id": 620020655,
+        "sender_full_name": "BearCarpenter",
+        "timestamp": 1788033018
+    },
+    {
+        "content": "<p>and this. i have no idea... Require invariance </p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>Money(c) := { amount : Dec, currency : c }.{\n    Currency : [USD, EUR]\n    make : Dec, Currency -&gt; Try((Money(Currency)), [NegativeAmount])\n    make = |amount, currency| {\n        if amount &lt; 0 {\n            Err(NegativeAmount)\n        } else {\n            m = Money.({ amount, currency })\n            Ok(m)\n        }\n    }\n\n    amount : Money(currency) -&gt; Dec\n    amount = |Money.(m)| m.amount\n\n    add : Money(currency), Money(currency) -&gt; Money(currency)\n    add = |Money.(m1), Money.(m2)| {\n        Money.(\n            {\n                amount: m1.amount + m2.amount,\n                currency: m1.currency,\n            },\n        )\n    }\n}\n\nclientExampleUsage = || {\n    # my_money0 = Money.make(100.50, GBP)? # not working - so this is correctly\n    my_money1 = Money.make(100.50, EUR)?\n    my_money2 = Money.make(20.00, EUR)?\n    _legal = my_money1.add(my_money2) # correct\n    usd_money = Money.make(50.00, USD)?\n    _illegal = my_money1.add(usd_money) # incorrect - it is possible\n    Ok({})\n}\n</code></pre></div>",
+        "id": 620024559,
+        "sender_full_name": "BearCarpenter",
+        "timestamp": 1788035891
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> <span class=\"user-mention\" data-user-id=\"341568\">@Jared Ramirez</span> <span class=\"user-mention\" data-user-id=\"361169\">@Anton</span>  <br>\nhow would you implement it?<br>\nLibrary should define huge closed set.</p>",
+        "id": 620071652,
+        "sender_full_name": "BearCarpenter",
+        "timestamp": 1788069643
+    },
+    {
+        "content": "<p>One approach would be to use separate types instead of tags for currencies, like so:</p>\n<div class=\"codehilite\"><pre><span></span><code>Currencies := {\n    EUR :: {}\n    USD :: {}\n    # ...\n}\n</code></pre></div>\n<p>You could use these as phantom types in your Money constructor - they won't unify with each other.</p>",
+        "id": 620075432,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1788072820
+    },
+    {
+        "content": "<p>I would probably start top-down and do some broader research to understand the domain model a bit more, gather the requirements and define a scope or boundary for my package. I'd look for prior-art and relevant research on the topic etc -- and then go from there.</p>",
+        "id": 620076960,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788073811
+    },
+    {
+        "content": "<p>I would also try out lots of different shapes and experiments etc. Basically like you are here.</p>",
+        "id": 620077003,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788073847
+    },
+    {
+        "content": "<p>This works, I don't know if it's a good way to do it <span aria-label=\"shrug\" class=\"emoji emoji-1f937\" role=\"img\" title=\"shrug\">:shrug:</span> </p>\n<div class=\"codehilite\"><pre><span></span><code>$ roc money.roc\nEUR total: 120.5\nUSD total: 50.0\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>EUR := {}.{\n    value = EUR.({})\n}\n\nUSD := {}.{\n    value = USD.({})\n}\n\nMoney(currency) := { amount : Dec, currency : currency }.{\n    make : Dec, currency -&gt; Try(Money(currency), [NegativeAmount])\n    make = |amount, currency| {\n        if amount &lt; 0 {\n            Err(NegativeAmount)\n        } else {\n            Ok(Money.({ amount, currency }))\n        }\n    }\n\n    amount : Money(currency) -&gt; Dec\n    amount = |Money.(money)| money.amount\n\n    add : Money(currency), Money(currency) -&gt; Money(currency)\n    add = |Money.(m1), Money.(m2)| {\n        Money.({\n            amount: m1.amount + m2.amount,\n            currency: m1.currency,\n        })\n    }\n}\n\nmain! = |_| {\n    # Money.make(100.50, GBP.value) does not work: GBP is not declared.\n    my_money1 = Money.make(100.50, EUR.value) ? |_| Exit(1)\n    my_money2 = Money.make(20.00, EUR.value) ? |_| Exit(1)\n    legal = my_money1.add(my_money2)\n\n    usd_money = Money.make(50.00, USD.value) ? |_| Exit(1)\n\n    echo!(&quot;EUR total: ${legal.amount().to_str()}\\n&quot;)\n    echo!(&quot;USD total: ${usd_money.amount().to_str()}\\n&quot;)\n\n    # Uncommenting this is illegal: Money([EUR]) and Money([USD]) differ.\n    # illegal = my_money1.add(usd_money)\n\n    Ok({})\n}\n</code></pre></div>",
+        "id": 620078482,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788074987
+    },
+    {
+        "content": "<p>The reason is doesn't work for <code>Currency : [USD, EUR]</code> is because both <code>USD</code> and <code>EUR</code> are both tags and have the same type <code>Currency</code></p>",
+        "id": 620078655,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788075068
+    },
+    {
+        "content": "<p>oh duh <span aria-label=\"face palm\" class=\"emoji emoji-1f926\" role=\"img\" title=\"face palm\">:face_palm:</span>, my example of course has the same problem. apologies, i was tired when i responded last night haha</p>",
+        "id": 620078949,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1788075292
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"477725\">Jasper Woudenberg</span> <a href=\"#narrow/channel/231634-beginners/topic/Money.20VO.20Domain.20model/near/620075432\">said</a>:</p>\n<blockquote>\n<p>One approach would be to use separate types instead of tags for currencies, like so:</p>\n<div class=\"codehilite\"><pre><span></span><code>Currencies := {\n    EUR :: {}\n    USD :: {}\n    # ...\n}\n</code></pre></div>\n<p>You could use these as phantom types in your Money constructor - they won't unify with each other.</p>\n</blockquote>\n<p>this is how i would do it!</p>",
+        "id": 620078971,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1788075305
+    },
+    {
+        "content": "<p>yeah, but what if library define closed set? it shouldnt work:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>    # Money([Unkonwn, ..])\n    unkonwn_money = Money.make(50.00, Unkonwn)?\n    unkonwn2_money = Money.make(50.00, Unkonwn2)?\n    # Money([Unkonwn, Unkonwn2, ..])\n    incorrect_legal = unkonwn_money.add(unkonwn2_money)\n</code></pre></div>\n<p>only lib set. is makeXYZ is only one correct way?</p>",
+        "id": 620079430,
+        "sender_full_name": "BearCarpenter",
+        "timestamp": 1788075655
+    },
+    {
+        "content": "<p>yes, for constructing values you would need explicit functions, but for all other functions they just need to take and return the same <code>currency</code> type vars!</p>",
+        "id": 620082171,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1788077244
+    },
+    {
+        "content": "<p>then USD and EUR must be opaque nominal types</p>",
+        "id": 620082206,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1788077269
+    },
+    {
+        "content": "<p>Ok, I thought about something like this is possible:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>#pseudocode\nclientUsageExampleCheck = || {\n    # same is legal check\n    correct_legal_usd1 = Money.make(50.00, Lib.USD)?\n    correct_legal_usd2 = Money.make(50.00, Lib.USD)?\n    _correct_legal_sum = correct_legal_usd1 .add(correct_legal_usd2)\n\n    # mixed is illegal check\n    _correct_legal_eur = Money.make(50.00, Lib.EUR)?\n    # _illegal_mixed_currencies_sum = _correct_legal_eur.add(correct_legal_usd1)\n\n    # own is illegal check\n    # _illegal_unknown1 = Money.make(50.00, My.QWERTY)?\n    # _illegal_unknown2 = Money.make(50.00, QWERTY)?\n    Ok({})\n}\n</code></pre></div>",
+        "id": 620083313,
+        "sender_full_name": "BearCarpenter",
+        "timestamp": 1788077978
+    },
+    {
+        "content": "<p>yeah, the main limitation here is that there’s not a way in roc to create a “closed” catergory of types</p>\n<p>you could make <code>Money.make</code> generic over the currency type, but then any type you pass in would be valid. you could constrain it with a static dispatch method (eg is_currency : currency -&gt; ? or something), then define that for USD and EUR, but nothing is stopping anyone from implementing that method on their own custom type</p>",
+        "id": 620102168,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1788090258
+    },
+    {
+        "content": "<p>you could actually make is_currency (or whatever) return an opaque type only available in the Money module, so users could not define their own instance of the method and that may work!</p>",
+        "id": 620102252,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1788090324
+    },
+    {
+        "content": "<p>I think it would actually need to both accept and return different opaque types that can't be constructed outside the package - otherwise you could just call one of the existing ones to get one of those values <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 620107355,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788093453
+    },
+    {
+        "content": "<p>and you'd probably need to actually call those methods to prevent implementing those methods using <code>crash</code></p>",
+        "id": 620107425,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788093495
+    },
+    {
+        "content": "<p>that said, I haven't read the whole thread - just looking at the type questions from the end of the thread haha</p>",
+        "id": 620107702,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788093653
+    },
+    {
+        "content": "<p>Am I seeing this correctly that it’s working properly? Could you check it and look for the error?</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code># Money.roc\n\nMoney(c) := Dec.{\n    make : Dec, BrandedCurrency(c) -&gt; Try(Money(c), [NegativeAmount])\n    make = |amount, _currency| {\n        if amount &lt; 0 {\n            Err(NegativeAmount)\n        } else {\n            Ok(Money.({ amount }))\n        }\n    }\n\n    amount : Money(c) -&gt; Dec\n    amount = |Money.(amount)| amount\n\n    add : Money(c), Money(c) -&gt; Money(c)\n    add = |Money.(amount1), Money.(amount2)| {\n        Money.({ amount1 + amount2 })\n    }\n\n    usd : BrandedCurrency([USD])\n    usd = BrandedCurrency.({ currency: USD })\n\n    eur : BrandedCurrency([EUR])\n    eur = BrandedCurrency.({ currency: EUR })\n}\n\nBrandedCurrency(c) := { currency : c }.{}\n</code></pre></div>\n<p>and</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code># checkMoney.roc\n\nimport Money\n\nmain! = |_arg| {\n    # same is legal check\n    correct_legal_usd1 = Money.make(50.00, Money.usd)?\n    correct_legal_usd2 = Money.make(50.00, Money.usd)?\n    _correct_legal_sum = correct_legal_usd1.add(correct_legal_usd2)\n\n    # mixed is illegal check\n    correct_legal_eur = Money.make(50.00, Money.eur)?\n    _illegal_mixed_currencies_sum = correct_legal_eur.add(correct_legal_usd1)\n\n    # own is illegal check\n    # _illegal_unknown1 = Money.make(50.00, My.QWERTY)?\n    _illegal_unknown2 = Money.make(50.00, QWERTY)?\n    Ok({})\n}\n</code></pre></div>\n<p>is it posible to hack/break this? client (checkMoney.roc) does not have access to create BrandedCurrency from Money.roc?</p>",
+        "id": 620112542,
+        "sender_full_name": "BearCarpenter",
+        "timestamp": 1788097196
+    },
+    {
+        "content": "<p>oh. this will be incorrectly legal </p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code># checkMoney.roc - client\n# ...\n    m1 = Money.({ amount: 1, currency: QWERTY })\n    m2 = Money.({ amount: 1, currency: USD })\n    sum = m1.add(m2)\n\n    Ok({})\n}\n</code></pre></div>\n<p>I thought := gives private constructor.</p>",
+        "id": 620123516,
+        "sender_full_name": "BearCarpenter",
+        "timestamp": 1788104973
+    },
+    {
+        "content": "<p>it works:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code># Money.roc\n\nMoney(c) :: { amount : Dec, currency : c }.{\n    make : Dec, BrandedCurrency(c) -&gt; Try(Money(c), [NegativeAmount])\n    make = |amount, currency| {\n        if amount &lt; 0 {\n            Err(NegativeAmount)\n        } else {\n            Ok(Money.({ amount, currency: currency.currency }))\n        }\n    }\n\n    amount : Money(c) -&gt; Dec\n    amount = |Money.(m)| m.amount\n\n    add : Money(c), Money(c) -&gt; Money(c)\n    add = |Money.(m1), Money.(m2)| {\n        Money.({ amount: m1.amount + m2.amount, currency: m1.currency })\n    }\n\n    to_inspect : Money(c) -&gt; Str\n    to_inspect = |Money.(m)| {\n        \"${Dec.to_str(m.amount)} ${Str.inspect(m.currency)}\"\n    }\n\n    usd : BrandedCurrency([USD])\n    usd = BrandedCurrency.({ currency: USD })\n\n    eur : BrandedCurrency([EUR])\n    eur = BrandedCurrency.({ currency: EUR })\n}\n\nBrandedCurrency(c) := { currency : c }.{}\n\nexpect {\n    usd : Money([USD])\n    usd = Money.make(1, Money.usd)?\n    Str.inspect(usd) == \"1.0 USD\"\n}\n\nexpect {\n    usd = Money.({ amount: 1, currency: Money.usd })\n    Str.inspect(usd) == \"1.0 USD\"\n}\n\nexpect {\n    m = Money.make(1, Money.usd)?\n    m.amount == 1\n}\n\nexpect {\n    m = Money.make(1, Money.usd)?\n    m.currency == USD\n}\n\nexpect {\n    m = Money.make(1, Money.usd)?\n    Str.inspect(m.currency) == \"USD\"\n}\n\nexpect {\n    m1 = Money.make(1, Money.usd)?\n    m2 = Money.make(1, Money.usd)?\n    total_usd = m1.add(m2)\n    Str.inspect(total_usd) == \"2.0 USD\"\n}\n\nexpect {\n    m1 = Money.make(1, Money.eur)?\n    m2 = Money.make(1, Money.eur)?\n    total_EUR = m1.add(m2)\n    Str.inspect(total_EUR) == \"2.0 EUR\"\n}\n\nexpect {\n    x = 1 |&gt; Money.make(Money.usd)?\n    Str.inspect(x) == \"1.0 USD\"\n}\n\n# correctly - not working with other currency\n# expect {\n#   m1 = Money.make(1, Money.usd)?\n#   m2 = Money.make(1, Money.eur)?\n#   total_EUR = m1.add(m2) # illegal\n#   True\n# }\n\n# correctly - not working with own currencies\n# expect {\n#   m1 = Money.make(1, QWERTY)?\n#   True\n# }\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code># checkMoney.roc - client\n\nimport Money\n\nmain! = |_arg| {\n    # same is legal check\n    correct_legal_usd1 = Money.make(50.00, Money.usd)?\n    correct_legal_usd2 = Money.make(50.00, Money.usd)?\n    _correct_legal_sum = correct_legal_usd1.add(correct_legal_usd2)\n\n    # mixed is illegal check\n    correct_legal_eur = Money.make(50.00, Money.eur)?\n    _illegal_mixed_currencies_sum = correct_legal_eur.add(correct_legal_usd1) # error as expected\n\n    # own is illegal check\n    # _illegal_unknown1 = Money.make(50.00, My.QWERTY)?\n    _illegal_unknown2 = Money.make(50.00, QWERTY)? # error as expected\n\n    # client cant create own Money\n    m1 = Money.({ amount: 1, currency: QWERTY }) # error as expected\n    m2 = Money.({ amount: 1, currency: USD }) # error as expected\n\n    Ok({})\n}\n</code></pre></div>\n<p>I need read modules docs... <span aria-label=\"rolling eyes\" class=\"emoji emoji-1f644\" role=\"img\" title=\"rolling eyes\">:rolling_eyes:</span></p>",
+        "id": 620124052,
+        "sender_full_name": "BearCarpenter",
+        "timestamp": 1788105316
+    },
+    {
+        "content": "<p>nice! <span aria-label=\"grinning\" class=\"emoji emoji-1f600\" role=\"img\" title=\"grinning\">:grinning:</span></p>\n<p>unless you want to do runtime things with <code>currency</code>, can can do:</p>\n<div class=\"codehilite\"><pre><span></span><code>Money :: { amount : Dec }.{\n\n  # no negative check to keep example simple\n  make : Dec, BrandedCurrency(c) -&gt; Money(c)\n  make = |a, _| { amount: a }\n\n  usd : BrandedCurrency([USD])\n  usd = {}\n\n  eur : BrandedCurrency([EUR])\n  eur = {}\n\n  …\n}\n\nBrandedCurrency :: {}\n</code></pre></div>\n<p>this is equivalent as far as the types are concerned, without having to carry the currency as a runtime value! if you ever need an fn to operate on just eg EUR, you just constrain it in the type signature. (this is called a phantom type)</p>",
+        "id": 620129846,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1788109164
+    }
+]

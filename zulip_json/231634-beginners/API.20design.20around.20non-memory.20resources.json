@@ -1,0 +1,320 @@
+[
+    {
+        "content": "<p>Let's say I'm designing an API for a platform, and my platform offers access to the file system. Most commonly, we would have two functions:</p>\n<div class=\"codehilite\"><pre><span></span><code>readFile : Path -&gt; Task (List U8) FileError\nwriteFile : Path, List U8 -&gt; Task {} FileError\n</code></pre></div>\n<p>This is great. It is safe, easy and enough for many users.</p>\n<p>However, there are use cases when it is not enough. A file may be too big to fit into memory. Or it may be a zip or other kind of archive, and I just want to read the index and maybe parts of the content depending on what the index says, or I may want to patch a few bytes from a very big file without having to load it all to memory, write to it in memory and then write back everything again, which would be very wasteful.</p>\n<p>These sort of things are usually achieved through APIs like <code>fopen</code> in the C standard library, where you get a file handle, you work on that file handle and then you free it (<code>fclose</code>) when you are done. This lets the programmer do much more granular operations on a file than a path based API, but also poses a new problem: the file handle needs to be freed when it is not used anymore.</p>\n<p>Languages like C++ and Rust solve this by encapsulating the resource in a class with a destructor or <code>Drop</code> trait that will automatically run cleanup code when the object goes out of scope. Roc manages memory automatically, but as far as I know (please do correct me if I am wrong) doesn't let the user write arbitrary cleanup procedures.</p>\n<p>Which takes me back to the original question. What would be the idiomatic way of designing an API in Roc for such a task? I would very strongly prefer if manual <code>fclose</code> was not the answer, because it is very error prone, and because statically ensuring no leaks is a solved problem since Bjarne Stroustrup made C with classes in 1980, so Roc should be able to be at least as good.</p>\n<p>The best I can think for now is a function that takes another function as a parameter, and this inner function is the only one that will ever have access to the file handle. This way we can open the file, call the user function, close the file, and the handle is never risked to be leaked. This is a common pattern in some Rust APIs, such as <code>std::thread::scope</code>, where the thread scope object is only exposed within the user's callback function and never leaks outside.</p>\n<p>So the signature would be something like:</p>\n<div class=\"codehilite\"><pre><span></span><code>openFile : Path, (FileHandle -&gt; Task a e) -&gt; Task a e\n</code></pre></div>\n<p>This would sort of work, I think, but I am not sure that this is the ideal solution.</p>\n<p>I am very interested in what you all think about how you would design such an API.</p>",
+        "id": 406002284,
+        "sender_full_name": "Asier Elorz (he/him)",
+        "timestamp": 1701765083
+    },
+    {
+        "content": "<p>I feel like I've seen a proposal somewhere that has streams in it as an example for a platform agnostic low level API. The idea being package authors can build on top on stream operations as the primitive. I'll dig and see what I can find.</p>",
+        "id": 406010787,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1701768061
+    },
+    {
+        "content": "<p>There is an example in <a href=\"https://docs.google.com/document/d/110MwQi7Dpo1Y69ECFXyyvDWzF4OYv1BLojIm08qDTvg/edit?usp=drivesdk\">Module Params proposal</a> that includes something similar in the Sandboxing and polyfill section.</p>",
+        "id": 406011846,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1701768403
+    },
+    {
+        "content": "<p>I think the <a href=\"https://github.com/WebAssembly/wasi-filesystem/blob/main/wit/types.wit\">WASI filesystem</a> design is very similar API and could be implemented in Roc without any issues.</p>",
+        "id": 406012475,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1701768617
+    },
+    {
+        "content": "<p>The file descriptor can be an Opaque type, and I guess the platform could handle automatically cleaning things up.</p>",
+        "id": 406013002,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1701768803
+    },
+    {
+        "content": "<p>I guess another key aspect to this is the effect inerpreter. My lay man's understanding is the host builds a runtime that executes the task or effect descriptions from Roc. This part of the platforms host would be responsible for managing the resources like file descriptors, which I imagine could be represented by an index into a list of handles in the host, and in Roc application is just an Opaque type, so the app never accesses the raw file descriptor. Instead the app creates a Task passes the descriptor back to the platform which in turn unwraps the index and returns that to the host. You could provide a Task to close a file which would destroy a handle, and I imagine any future Tasks like read or write would fail. </p>\n<p>My apologies if I've butchered this description.</p>",
+        "id": 406016645,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1701770018
+    },
+    {
+        "content": "<p>I like <code>openFile : Str, (Handle -&gt; Task a b) -&gt; Task  a b</code> as a design, and I think it might fit roc quite well, since you could use backpassing:</p>\n<div class=\"codehilite\" data-code-language=\"Python\"><pre><span></span><code><span class=\"n\">fd</span> <span class=\"o\">&lt;-</span> <span class=\"n\">openFile</span> <span class=\"s2\">\"archive.zip\"</span>\n<span class=\"n\">entries</span> <span class=\"o\">&lt;-</span> <span class=\"n\">readZipDictionary</span> <span class=\"n\">fd</span> <span class=\"o\">|&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"k\">await</span>\n<span class=\"c1\"># ...</span>\n<span class=\"c1\"># file automatically closed at the end of this scope</span>\n</code></pre></div>\n<p>The platform can automatically close the file when the callback returns, and check that its refcount at that point is 0, so the user didn't try to make the <code>fd</code> escape. Ocaml has (proposed) uniqueness annotations for those kinds of things, but I think roc can do that without any type-level magic! I don't know how hard it is to keep track of those things inside of the Tasks though, especially if <code>Task</code> becomes a built-in type</p>",
+        "id": 406040585,
+        "sender_full_name": "joshi",
+        "timestamp": 1701777492
+    },
+    {
+        "content": "<blockquote>\n<p>but I think roc can do that without any type-level magic</p>\n</blockquote>\n<p>On the other hand, doesn't the compiler already keep track of that information somehow on order to be able to remove refcount increments/decrements? unique ~~ an argument whose refcount is guaranteed to be decremented by the function?</p>",
+        "id": 406044207,
+        "sender_full_name": "joshi",
+        "timestamp": 1701778789
+    },
+    {
+        "content": "<p>Maybe this is what Luke was saying, but the callback approach looks the same as a direct task approach <code>openFile : Path -&gt; Task FileHandle e</code> composed with <code>Task.await</code>. Is there a way to put the cleanup logic in <code>Task.await</code> instead so you can have a more uniform API?</p>",
+        "id": 406057044,
+        "sender_full_name": "timotree",
+        "timestamp": 1701783094
+    },
+    {
+        "content": "<p>I think of <code>Str, (Handle -&gt; Task a FileErr) -&gt; Task  a FileErr</code> compared to <code>Str -&gt; Task  Handle FileErr</code> as sort of \"inlining the <code>await</code>\" if that makes sense - it means you don't have to <code>|&gt; Task.await</code> that call because the <code>await</code> is baked into the original call</p>",
+        "id": 406058017,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701783411
+    },
+    {
+        "content": "<p>I thought about using this in a couple of places, but I decided against it because:</p>\n<ul>\n<li>The type is more complicated, so it makes the docs a bit harder to understand</li>\n<li>It kinda hurts the muscle memory/instant recognition around the typical \"every <code>&lt;-</code> should end with a <code>|&gt;</code>\" (to <code>Task.await</code> most common, but also sometimes things like <code>Result.try</code>) because now some lines need to end that way but other lines need to <em>not</em> end that way, so lines that are missing it don't jump out as much anymore</li>\n<li>It's convenient in the (common, of course) case where you want to <code>await</code>, but in the future we'll have other ways to combine tasks concurrently (e.g. \"run these two tasks, and then once they have both finished - in any order - then continue\"), and inlining <code>await</code> means that by default you're missing out on those performance benefits, and you actually have to pass in <code>Task.ok</code> to \"cancel out\" the inlined <code>await</code> and then do the more concurrent thing</li>\n</ul>",
+        "id": 406058713,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701783643
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"479448\">Asier Elorz (he/him)</span> <a href=\"#narrow/stream/231634-beginners/topic/API.20design.20around.20non-memory.20resources/near/406002284\">said</a>:</p>\n<blockquote>\n<p>Languages like C++ and Rust solve this by encapsulating the resource in a class with a destructor or <code>Drop</code> trait that will automatically run cleanup code when the object goes out of scope. Roc manages memory automatically, but as far as I know (please do correct me if I am wrong) doesn't let the user write arbitrary cleanup procedures.</p>\n</blockquote>\n<p>so it turns out that an equivalent of <code>Drop</code> can be done in the host today through clever use of <code>roc_alloc</code> and <code>roc_dealloc</code></p>",
+        "id": 406058954,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701783720
+    },
+    {
+        "content": "<p>the basic design is that you have some <code>Task</code> that opens a file handle/descriptor/stream (whatever you decide to call it! I'll just call it \"fd\" here because it's shortest, although it's probably not the best name for a real Roc API) and that fd has a Roc type of <code>Box I32</code> - meaning, it's the underlying OS file descriptor (the <code>I32</code>) but, importantly, it's boxed on the heap</p>",
+        "id": 406059446,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701783862
+    },
+    {
+        "content": "<p>in the host, it doesn't get allocated on the normal heap though. Instead, it gets allocated into a separate region of memory that's dedicated to storing only file descriptors</p>",
+        "id": 406059538,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701783897
+    },
+    {
+        "content": "<p>so because it's a <code>Box</code>, Roc will automatically reference count it, and then when the reference count gets to 0, it calls <code>roc_dealloc</code> on it as normal</p>",
+        "id": 406059606,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701783916
+    },
+    {
+        "content": "<p>then the host's <code>roc_dealloc</code> function looks at the address it was told to deallocate. If that address is in the range of the special file descriptor range, then it knows \"aha, this is a file descriptor <code>Box</code> we have here\" and it can go and <code>fclose</code> the integer before freeing up the slot in memory</p>",
+        "id": 406059739,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701783959
+    },
+    {
+        "content": "<p>so it's not a first-class <code>Drop</code> language feature, but it's a way that you can get the behavior of \"file descriptors always get closed as soon as they are no longer referenced anywhere,\" which is what <code>Drop</code> gets you in that context anyway</p>",
+        "id": 406059987,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701784037
+    },
+    {
+        "content": "<p>This makes a lot of sense. I hadn't thought about that way of implementing destructors at the platform level. It's quite clever. Thanks for the detailed answer!</p>",
+        "id": 406060235,
+        "sender_full_name": "Asier Elorz (he/him)",
+        "timestamp": 1701784114
+    },
+    {
+        "content": "<p>absolutely, thanks for diving into this! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 406060516,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701784208
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> Could <code>roc_dealloc</code> run some Roc code before freeing the resource? This could be useful for protocols implemented in pure Roc (such as Postgres). <br>\nThe platform only exposes a TCP effect so it knows how to close it, but it doesn't know the protocol-specific graceful termination procedure. <br>\nThis would work great, if I can give a \"cleanup\" callback to the initial connect function that allows me to send some messages before shutting it down for real.</p>",
+        "id": 406072070,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701787685
+    },
+    {
+        "content": "<p>My guess is that <code>roc_dealloc</code> is supposed to be sync, so maybe it couldn't just run a <code>Task</code>, but maybe it can add it to some sort of queue?</p>",
+        "id": 406072331,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701787781
+    },
+    {
+        "content": "<p>I would feel exceptionally uncomfortable if <code>roc_dealloc</code> could touch tasks at all</p>",
+        "id": 406108723,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701796577
+    },
+    {
+        "content": "<p>It means that tasks could run randomly in pure sections of code cause they drop a value</p>",
+        "id": 406108775,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701796596
+    },
+    {
+        "content": "<p>Maybe that would be hidden and ok, but it kinda allows tasks anywhere and feels like it could be abused.</p>",
+        "id": 406108895,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701796645
+    },
+    {
+        "content": "<p>That shouldn’t affect running pure functions since their input is already established</p>",
+        "id": 406143383,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701803797
+    },
+    {
+        "content": "<p>I do see your point, though. If misused this could make it hard to track down why an effect is occurring</p>",
+        "id": 406143949,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701804031
+    },
+    {
+        "content": "<p>That said, closing a file or a connection also is an effect, and with the suggested approach, it would indeed run in pure sections of code cause they drop a value</p>",
+        "id": 406144093,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701804105
+    },
+    {
+        "content": "<p>If we are ok with one, shouldn’t we be ok with the other?</p>",
+        "id": 406144675,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701804345
+    },
+    {
+        "content": "<p>I am ok with that happen in the platform side. Fundamentally the platform can do anything.</p>\n<p>But I don't like is someone could write</p>\n<div class=\"codehilite\"><pre><span></span><code>ConsumeLine := {} implements [\n    Drop {dropTask}\n]\n\ndropTask = Stdin.line |&gt; Task.await \\_ -&gt; {}\n\n\n\nSomePureFunc : OtherData, ConsumeLine -&gt; Maybe ConsumeLine\nSomePureFunc = \\data, cl -&gt;\n    if NeedsLineCleared data then\n        None\n    else\n        Some cl\n</code></pre></div>",
+        "id": 406145076,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701804502
+    },
+    {
+        "content": "<p>Do we even need language support for something like this? I’m just thinking you’d give the platform a Roc callback and it would just choose to call it as part of it being able to do anything</p>",
+        "id": 406145680,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701804762
+    },
+    {
+        "content": "<p>Oh, when you open a tcp stream, you also pass a graceful closure callback (or at some point you call something to add a graceful closure callback)?</p>",
+        "id": 406145806,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701804814
+    },
+    {
+        "content": "<p>Yeah, exactly. As part of the original task that opens it.</p>",
+        "id": 406146529,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701805109
+    },
+    {
+        "content": "<p>Yeah, I would be totally for that.</p>\n<p>I guess I just misunderstood your original prompt.</p>",
+        "id": 406147012,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701805318
+    },
+    {
+        "content": "<p>Though I guess you need to be careful of closure capture keeping something alive and stopping it from every being deallocated</p>",
+        "id": 406147100,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701805344
+    },
+    {
+        "content": "<p>Would that work with postgres? do you need to capture anything? assuming the tcp connection that is about to be cleared is passed into the lambda</p>",
+        "id": 406147761,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701805623
+    },
+    {
+        "content": "<p>I need to send a <code>Terminate</code> message. I need the connection to do that, so the platforms needs to delay closing until my task is resolved.</p>",
+        "id": 406148023,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701805747
+    },
+    {
+        "content": "<p>I wouldn’t be capturing the connection, I guess I would get it as an argument</p>",
+        "id": 406148120,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701805800
+    },
+    {
+        "content": "<p>I couldn’t even capture it because I would be defining this function before the connection is returned from the “open” task</p>",
+        "id": 406148361,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701805896
+    },
+    {
+        "content": "<p>In the case of Postgres, the termination message doesn’t need to provide any information that was established during the lifetime of the connection. It’s always the same.</p>",
+        "id": 406148714,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701806050
+    },
+    {
+        "content": "<p>Yeah, that last point is my biggest concern, but not sure how common it is.</p>",
+        "id": 406148945,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701806161
+    },
+    {
+        "content": "<p>Also, I guess there would be a weird case were you never connect but still send a termination message, but that probably doesn't really matter.</p>",
+        "id": 406149057,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701806203
+    },
+    {
+        "content": "<p>I guess if you really need state, eventually we will have <code>Stored</code> and you can give the platform a <code>Task</code> instead of a closure. That task can called <code>Stored</code>, load some state, and then generate a message as needed from that.</p>",
+        "id": 406149229,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701806283
+    },
+    {
+        "content": "<p>Couldn’t the platform just skip calling the function in that case? Presumably it wouldn’t even store the pointer to it if it fails to connect</p>",
+        "id": 406149261,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701806285
+    },
+    {
+        "content": "<p>Yeah, <code>Stored</code> would work. Or any other stateful effect that the platform might provide.</p>",
+        "id": 406149408,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701806358
+    },
+    {
+        "content": "<blockquote>\n<p>Couldn’t the platform just skip calling the function in that case? Presumably it wouldn’t even store the pointer to it if it fails to connect</p>\n</blockquote>\n<p>Not sure this truly applies to postgres, I mean some sort of state where you have a working tcp connection but haven't communicated with postgres at all. Then for some reason you drop the connection and the function runs. So from the postgres server side, it would see a tcp connection opening, a termination message, and a tcp connection closing.</p>",
+        "id": 406149489,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701806392
+    },
+    {
+        "content": "<p>Ah, I see. Yeah, that could happen.</p>",
+        "id": 406149613,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701806431
+    },
+    {
+        "content": "<p>I think in the case of Postgres that’s totally valid. You are just terminating before authenticating, but yeah, you’d need some sort of state if you had to avoid that.</p>",
+        "id": 406149822,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1701806496
+    },
+    {
+        "content": "<p>I think this is possible in an effect interpreters world</p>",
+        "id": 407286898,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702315473
+    },
+    {
+        "content": "<p>wouldn't need any special language features</p>",
+        "id": 407286933,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702315485
+    },
+    {
+        "content": "<p>the basic idea would be to start with the \"host runs some code when a particular thing gets dropped\" technique (mentioned earlier)</p>",
+        "id": 407286976,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702315505
+    },
+    {
+        "content": "<p>and then assume this API:</p>\n<p><span class=\"user-mention silent\" data-user-id=\"489294\">Agus Zubiaga</span> <a href=\"#narrow/stream/231634-beginners/topic/API.20design.20around.20non-memory.20resources/near/406145680\">said</a>:</p>\n<blockquote>\n<p>I’m just thinking you’d give the platform a Roc callback and it would just choose to call it as part of it being able to do anything</p>\n</blockquote>\n<p>so in the platform's API for opening the TCP connection, you specify a <code>Task</code> to run when it's going to get closed</p>",
+        "id": 407287077,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702315551
+    },
+    {
+        "content": "<p>the platform holds onto that task, and then when it goes to close the tcp connection, it can run that task - possibly synchronously (as in, go interpret that state machine entry right away, and don't go back to interpreting the <code>main</code> state machine until it's all done), or possibly by having an async pool of things that can run concurrently (presumably desirable for <code>map2</code> concurrency anyway) and just add it to that</p>",
+        "id": 407287535,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702315707
+    },
+    {
+        "content": "<p>Yeah, and with <code>Stored</code> the drop could load extra state if it is needed.</p>",
+        "id": 407288923,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702316125
+    }
+]
