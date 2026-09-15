@@ -1,0 +1,272 @@
+[
+    {
+        "content": "<p>Consider this code from the <a href=\"https://github.com/kili-ilo/roc-random\"><code>roc-random</code> library</a>:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>bounded_u8 : U8, U8 -&gt; Generator(U8)\nbounded_u8 = |x, y| bounded_u32_helper(x, y) |&gt; map(U32.to_u8_wrap)\n</code></pre></div>\n<p>In this case, a <code>U32</code> is being converted to a <code>U8</code>, but we know it's safe to do so because the value must be between 0 and 255, which is why we use <code>U32.to_u8_wrap</code> instead of <code>U32.to_u8_try</code>.</p>\n<p>But the truth is, we never <em>actually</em> want to <code>wrap</code> the <code>U32</code>, we're really using <code>wrap</code> to... <code>unwrap</code>.</p>\n<p>I don't mean to single out this library, it's awesome and I just wanted to show a real-life example in production (plus I've written a lot of code like this too). I think it highlights a limitation of the language: it's just too inconvenient to unwrap a value when we know that it's safe to do so, and as a result we often use various tricks that are more convenient but semantically incorrect. The most common are:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>U32.to_u8_wrap()  # wrap to unwrap\n\nU32.to_u8_try() ?? 0  # use a default value that we don't really intend to use\n\nU32.to_u8_try() ?? { crash \"Unreachable\" } # correct but painful to write\n</code></pre></div>\n<p>There are three issues with the first two solutions:</p>\n<ol>\n<li>They can be confusing because they seem to be doing something that they're not. The first one never actually wraps, and the second never actually uses the default value.</li>\n<li>If a bug is introduced in the future, the \"unreachable\" branch may be reached silently and cause problems downstream that may be hard to debug.</li>\n<li>They are not discoverable: there's no way to search in the code to find all the places where we're effectively unwrapping a value.</li>\n</ol>\n<p>I understand the original motivation for _not_ including an <code>unwrap</code> function, as it is tempting to overuse it and end up with code that doesn't do proper error management. However, I fear that the absence of <code>unwrap</code> may cause worse issues in the long run.</p>",
+        "id": 615412797,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786236640
+    },
+    {
+        "content": "<p>I feel like adding the explicit <code>crash</code> is the best option here if you need the library to model correctness at such a high level. </p>\n<p>Is your concern that this is not ergonomic and you would prefer we introduce an <code>.unwrap()</code> as opposed to adding one locally?</p>\n<p>I think when we discussed this previously the general consensus was to add a local unwrap helper and use that.</p>",
+        "id": 615414399,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1786238272
+    },
+    {
+        "content": "<p>Ah, I knew there must have been a prior discussion, but I couldn't find it. <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> </p>\n<p>Yes, I feel like the language itself should have an <code>unwrap()</code> method because it makes it unlikely that people will use potentially dangerous workarounds such as <code>wrap</code> or <code>?? 0</code>, and it makes unwrapping more discoverable: if everyone defines their own <code>unwrap</code> method, they might not name it like that.</p>\n<p>I feel like the use case I've shown is a completely legitimate use for <code>unwrap</code>, it shouldn't be discouraged at all.<br>\nThe use case that should perhaps be discouraged (at least in production) is when it replaces proper error handling.</p>\n<p>So I just thought of something: perhaps we could have two variants such as <code>assert_ok()</code> and <code>todo_ok()</code>.<br>\nThis makes unwrapping easy in both use cases, but it's trivial to find all the To-Dos. Moreover, the <code>todo_ok()</code> could be forbidden in release code (although this might encourage people to replace <code>todo_ok</code> with <code>assert_ok</code>, so maybe a warning is preferable).</p>",
+        "id": 615415174,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786239146
+    },
+    {
+        "content": "<p>Here's what it would look like:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>bounded_u8 : U8, U8 -&gt; Generator(U8)\nbounded_u8 = |x, y| bounded_u32_helper(x, y) |&gt; map(|x| x.to_u8_try().assert_ok())\n</code></pre></div>\n<p>For the second use-case, where someone is writing a quick script or a first draft of their code:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>main! = |args| {\n    arg1 = args.get(1).todo_ok()\n    ...\n}\n</code></pre></div>",
+        "id": 615415349,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786239366
+    },
+    {
+        "content": "<p>Previous discussion here <a class=\"message-link\" href=\"/#narrow/channel/231634-beginners/topic/result.20unwrap.3F/near/345918724\">#beginners &gt; result unwrap? @ 💬</a></p>",
+        "id": 615415590,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1786239727
+    },
+    {
+        "content": "<p>I dont have a strong opinion here, just linking to the discussion I found from searching the history</p>",
+        "id": 615415694,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1786239884
+    },
+    {
+        "content": "<p>so I've seen what it looks like to have a convenient \"assume no errors and crash if I'm wrong\" <a href=\"https://doc.rust-lang.org/rust-by-example/error/option_unwrap.html\">method</a>, and it is lots more crashes in production <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 615416139,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786240402
+    },
+    {
+        "content": "<p>I think making <code>crash</code> more convenient is a situation where the cure is astronomically worse than the disease, unfortunately</p>",
+        "id": 615416188,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786240447
+    },
+    {
+        "content": "<p>because it ends up being used in situations where it's both convenient and reachable in production, and the convenience leads to end users experiencing crashes</p>",
+        "id": 615416241,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786240502
+    },
+    {
+        "content": "<p>my point isn't that it's convenient, but rather that in this case inconvenience is much better than crashiness, which in practice is the alternative <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 615417062,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786241312
+    },
+    {
+        "content": "<p>I understand the motivation, really. My point is that there are alternative convenient options that are wrong (e.g., <code>wrap</code> and <code>?? 0</code>), so we're not really getting rid of the problem, just hiding it under the rug where it might be harder to find. In other words, we're replacing crashes with weird bugs.</p>",
+        "id": 615419624,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786243653
+    },
+    {
+        "content": "<p>I'll grant you that I have no idea how frequently <code>wrap</code>, <code>?? unused_default</code>, and other \"mock\" unwraps are actually used. I'll run an agent on a few Roc libraries (old and new) and see how many it can find. It might be a negligible problem.</p>",
+        "id": 615421225,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786245095
+    },
+    {
+        "content": "<p>Yeah I’ve wondered about this. If the “fail fast and crash” approach is undesirable is it a middle ground to have something that crashes in debug mode but uses a default value in release? I agree that the current convenient options probably lead to more silent bugs. Coming from the person who wrote the code in the first example sorry about that lol, in hindsight my gut would be to go with the crash approach I think? Definitely understand not wanting to take down the entire program unnecessarily, I’ve seen some people say they prefer unexpected failures to lead to some kind of graceful no-op ideally, maybe with a crash in debug builds</p>",
+        "id": 615425196,
+        "sender_full_name": "Austin Clements",
+        "timestamp": 1786248133
+    },
+    {
+        "content": "<p>I wonder if easy to use property tests would reduce the damage of the crashy approach. Looking into it it seemed like it would have to be pretty intertwined with the compiler to handle seeding and reporting failing seeds, might be over my head but I’m definitely interested in it</p>",
+        "id": 615425964,
+        "sender_full_name": "Austin Clements",
+        "timestamp": 1786248858
+    },
+    {
+        "content": "<p>I asked the agent to search across 9 different libraries, both old and new (<code>roc-random</code>, <code>roc-ray</code>, <code>roc-parser</code>, <code>roc-isodate</code>, <code>roc-ansi</code>, <code>roc-base64</code>, <code>roc-crc32</code>, <code>roc-url</code>, and <code>roc-http</code>). It found:</p>\n<ul>\n<li>60+ uses of <code>_wrap</code> that actually serve as <code>unwrap</code>. That's by far the worst offender.</li>\n<li>30+ explicit <code>match</code> with <code>Err(_) =&gt; { crash \"...\" }</code>.</li>\n<li>40+ <code>?? { crash \"...\" }</code></li>\n<li>3 uses of <code>Str.from_utf8_lossy</code> for purely ASCII code (arguably, the more correct code would be <code>from_utf8</code> followed by <code>unwrap</code>.</li>\n</ul>",
+        "id": 615436643,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786257123
+    },
+    {
+        "content": "<p>I understand the point, but I think there's some bias here to be aware of: right now we're seeing mostly instances of places where people should have used a crash but didn't, because it's not super ergonomic to crash.</p>\n<p>If it becomes more ergonomic to crash there'll be many cases of <code>crash</code> where non-crashing error handling would be more appropriate. This could be a much bigger problem because these types of cases are not limited to integer conversions, <code>unwrap</code> is convenient everywhere.</p>\n<p>I wonder what in those 60+ case's of <code>_wrap</code> used as <code>unwrap</code> is the source of the confidence that the integer conversion ought to be safe. If there's common patterns here, maybe API could be changed to provide safe conversions that account for these?</p>",
+        "id": 615438002,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1786258663
+    },
+    {
+        "content": "<p>Yes, that makes sense.</p>",
+        "id": 615439812,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786260588
+    },
+    {
+        "content": "<p>I looked at why the developers of the Roc libraries listed above were confident that they could safely unwrap. Here are the main reasons:</p>\n<ol>\n<li>\n<p>Mathematical guarantees: e.g., in <code>roc-isodate</code>, we compute <code>hours_saturated % 24</code>. We know with 100% certainty that the result fits inside an <code>I8</code>. Also, in <code>roc-crc32</code>, we calculate an array index using <code>.bitwise_and(0xFF)</code>, so we're sure to get a number between 0 and 255, and we can safely convert it to an <code>U8</code>.</p>\n</li>\n<li>\n<p>Precomputed bounds: e.g., in <code>roc-random</code>, the <code>Random.choice</code> function first generates a random number strictly between 0 and <code>list.len() - 1</code>. So when calling <code>list.get(index)</code>, we're confident that this cannot fail.</p>\n</li>\n<li>\n<p>Restricted parsing: in <code>roc-parser</code>, when we parse a specific restricted grammar (like a<br>\n1-digit XML version number), we can be confident that the result fits in an <code>U8</code>.</p>\n</li>\n<li>\n<p>ASCII text: in <code>roc-random</code>, we convert a list of ASCII characters to a <code>Str</code>. Since ASCII text is also valid UTF-8, we know that <code>Str.from_utf8</code> cannot fail. In Exercism, we call <code>Str.to_utf8</code>, we shuffle the ASCII letters (using various ciphers depending on the exercise), and we go back to <code>Str</code>. There's no way <code>Str.from_utf8</code> can ever fail since we started with valid UTF-8 and we only changed the ASCII chars.</p>\n</li>\n</ol>",
+        "id": 615447139,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786268458
+    },
+    {
+        "content": "<p>In my case (<code>roc-crc32</code>) I kind of like that the <code>crash</code> is very loud (rather than a harder to spot <code>.unwrap()</code>):</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"err\">#</span><span class=\"w\"> </span><span class=\"nv\">index</span><span class=\"w\"> </span><span class=\"nv\">is</span><span class=\"w\"> </span><span class=\"nv\">guaranteed</span><span class=\"w\"> </span><span class=\"nv\">to</span><span class=\"w\"> </span><span class=\"nv\">be</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"nf\">-</span><span class=\"mi\">255</span><span class=\"w\"> </span><span class=\"nv\">due</span><span class=\"w\"> </span><span class=\"nv\">to</span><span class=\"w\"> </span><span class=\"nv\">the</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"nv\">xFF</span><span class=\"w\"> </span><span class=\"nv\">mask</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">so</span><span class=\"w\"> </span><span class=\"nv\">the</span><span class=\"w\"> </span><span class=\"nv\">lookup</span>\n<span class=\"err\">#</span><span class=\"w\"> </span><span class=\"nv\">can</span><span class=\"w\"> </span><span class=\"nv\">never</span><span class=\"w\"> </span><span class=\"nv\">fail</span><span class=\"nf\">.</span><span class=\"w\"> </span><span class=\"kt\">If</span><span class=\"w\"> </span><span class=\"nv\">it</span><span class=\"w\"> </span><span class=\"nv\">does</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">the</span><span class=\"w\"> </span><span class=\"nv\">algorithm</span><span class=\"w\"> </span><span class=\"nv\">is</span><span class=\"w\"> </span><span class=\"nv\">broken</span><span class=\"nf\">.</span>\n<span class=\"nv\">table_value</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">    </span><span class=\"nv\">match</span><span class=\"w\"> </span><span class=\"nv\">crc32_table</span><span class=\"nf\">.</span><span class=\"nv\">get</span><span class=\"p\">(</span><span class=\"nv\">index</span><span class=\"nf\">.</span><span class=\"nv\">to_u64</span><span class=\"p\">())</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kt\">Ok</span><span class=\"p\">(</span><span class=\"nv\">value</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">=&gt;</span><span class=\"w\"> </span><span class=\"nv\">value</span>\n<span class=\"w\">        </span><span class=\"kt\">Err</span><span class=\"p\">(</span><span class=\"nv\">_</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"nv\">crash</span><span class=\"w\"> </span><span class=\"s\">\"CRC32 table lookup failed: index ${index.to_str()} out of bounds\"</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>\n<p>I felt uncomfortable writing this, because I don't like to <code>crash</code>, but it's the only way out to provide a nice API and the <code>crash</code> really made me consider if it was necessary. I find that <code>unwrap()</code> and <code>expect()</code> in Rust are often used with less rigor, more for convenience.</p>",
+        "id": 615448135,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1786269579
+    },
+    {
+        "content": "<p>I think the fact that you can chain on an <code>unwrap()</code> or <code>expect()</code> in Rust makes me more willing to use them. <code>crash</code> feels very definitive and dead-end.</p>",
+        "id": 615448502,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1786269903
+    },
+    {
+        "content": "<p>Yes, I'm totally fine with crashes (when they can't happen!), especially with a clear comment and a clear crash message.</p>\n<p>I'm more worried by <code>to_u8_wrap</code> or <code>from_lossy_utf8</code> being used as substitutes for proper error handling.</p>",
+        "id": 615448541,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786269935
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"734214\">Aurélien Geron</span> <a href=\"#narrow/channel/304641-ideas/topic/Wrap.20or.20unwrap.3F/near/615448541\">said</a>:</p>\n<blockquote>\n<p>Yes, I'm totally fine with crashes (when they can't happen!), especially with a clear comment and a clear crash message.</p>\n</blockquote>\n<p>Me too, I'm just trying to say that <em>when</em> it's necessary I prefer <code>crash</code> over <code>unwrap</code> (or <code>expect</code>), so I wouldn't be in favor of a general <code>unwrap</code> or <code>expect</code> as Rust offers.</p>\n<blockquote>\n<p>I'm more worried by <code>to_u8_wrap</code> or <code>from_lossy_utf8</code> being used as substitutes for proper error handling.</p>\n</blockquote>\n<p>Would this be solved with a specific <code>to_u8_unwrap</code> (or any <code>to_u8_crashy</code> variant)? I would still prefer <code>?? { crash \"...\" }</code> but if it's hard to guide users there then perhaps a crashy variant for common transformations makes sense? Actually, writing that out, I'm not even sure I like it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span>  I hope we can guide users toward <code>crash</code> somehow <span aria-label=\"shrug\" class=\"emoji emoji-1f937\" role=\"img\" title=\"shrug\">:shrug:</span></p>",
+        "id": 615449251,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1786270694
+    },
+    {
+        "content": "<p>From what I can tell, the <code>_wrap</code> functions are by far the biggest offenders, so I would argue that we either need <code>to_u8_crashy</code> (love the name, it sounds scary), or we need to discourage using <code>_wrap</code> as a way to unwrap.</p>",
+        "id": 615449713,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786271117
+    },
+    {
+        "content": "<p>Can we guide them to <code>?? { crash \"...\" }</code> using warnings? </p>\n<blockquote>\n<p>Not so fast bucko! It seems you're wrapping to unwrap. How about a proper <code>?? { crash \"...\" }</code>? I dare ya.</p>\n</blockquote>",
+        "id": 615450534,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1786271835
+    },
+    {
+        "content": "<p>without getting btw I think <code>?? crash \"...\"</code> works now (you used to need the <code>{ ... }</code> around it, but I think I already landed the fix for that)</p>",
+        "id": 615453302,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786274596
+    },
+    {
+        "content": "<p>unfortunately I think a warning wouldn't work, even if we could reliably detect when it would apply - there are some cases I've found where \"out-of-bounds can't happen, so do a wrapping instruction because that's just 1 CPU instruction\" optimizes better, and other cases where \"out-of-bounds can't happen, so do <code>crash</code> because LLVM uses that information to optimize surrounding things better\" optimizes better <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 615453367,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786274679
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"734214\">Aurélien Geron</span> <a href=\"#narrow/channel/304641-ideas/topic/Wrap.20or.20unwrap.3F/near/615447139\">said</a>:</p>\n<blockquote>\n<p>Mathematical guarantees: e.g., in <code>roc-isodate</code>, we compute <code>hours_saturated % 24</code>. We know with 100% certainty that the result fits inside an <code>I8</code>. Also, in <code>roc-crc32</code>, we calculate an array index using <code>.bitwise_and(0xFF)</code>, so we're sure to get a number between 0 and 255, and we can safely convert it to an <code>U8</code>.</p>\n</blockquote>\n<p>an idea that seems intuitively like a mistake to me, but which would be cool if somehow it worked: if the compiler can tell (by tracking additional numeric range information behind the scenes - we're already doing some of this for optimizations) that a conversion or bounds check couldn't possibly fail based on the operations being done, then we could let you do <code>Ok(answer) = index.bitwise_and(0xFF).to_u8_try()</code> and have the exhaustiveness checker permit it because the compiler knows the <code>Err</code> branch would be unreachable</p>",
+        "id": 615453664,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786274995
+    },
+    {
+        "content": "<p>Oh that would be nifty!</p>",
+        "id": 615453789,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786275067
+    },
+    {
+        "content": "<p>one reason it seems intuitively like a mistake is that it could be brittle and wouldn't always be possible to apply, but also I can imagine situations where crossing package boundaries with that behind-the-scenes range information would lead to things being breaking changes due to exhaustiveness changes even though all you changed was the internal implementation of a package <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 615453848,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786275130
+    },
+    {
+        "content": "<p>there might be a way to make that ok though, I'm not sure</p>",
+        "id": 615453858,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786275143
+    },
+    {
+        "content": "<p>I <em>think</em> the performance would be ok if we moved that from the optimization stage to earlier in the pipeline</p>",
+        "id": 615453882,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786275180
+    },
+    {
+        "content": "<p>Yeah, it would need to work consistently, or else it might be frustrating. Maybe not worth it.</p>",
+        "id": 615453934,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1786275235
+    },
+    {
+        "content": "<p>I guess a reason in favor of it might be that if you intuitively reach for <code>Ok(answer) = ... # call a _try method</code> and it gives you an exhaustiveness error, then from that point adding <code>Err(_) =&gt; crash \"...\"</code> is kinda the shortest distance</p>",
+        "id": 615453935,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786275236
+    },
+    {
+        "content": "<p>it might be worth trying just on the grounds that we're pre-0.1.0 and if it doesn't work out, now's the easiest time to back out the experiment <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 615454077,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786275346
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Wrap.20or.20unwrap.3F/near/615453664\">said</a>:</p>\n<blockquote>\n<p><code>Ok(answer) = index.bitwise_and(0xFF).to_u8_try()</code> and have the exhaustiveness checker permit it because the compiler knows the <code>Err</code> branch would be unreachable</p>\n</blockquote>\n<p>Is this kind of thing really any different from using <code>_wrap</code> though? Addressing two of Aurélien's first three points</p>\n<ol start=\"2\">\n<li>If <code>index : U32</code> grows outside the <code>0xFF</code> mask bounds, the behaviour is incorrect, even if the \"unwrapping\" part is safe in the eyes of the compiler. The compiler proving that it is safe to unwrap <em>after</em> masking is imo no different to using <code>_wrap()</code>. The problem is the domain before the mask, no?</li>\n<li>I don't feel it's any more discoverable to check for cases of mask then pattern match on try, than it is to see <code>_wrap()</code> or <code>_try() ?? ...</code> etc</li>\n</ol>",
+        "id": 615455498,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1786276748
+    },
+    {
+        "content": "<p>Of course if you never needed to write the bitwise_and bit because of other implicitly tracked information it would be different <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>\n<p>Edit - I had the feeling I'd missed something. I guess these are cases where you do already do the extra step and it doesn't correspond to wrapping along clean integer size boundaries, like <code>hours_saturated % 24</code>, but nevertheless provably fit within a size.</p>",
+        "id": 615456059,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1786277234
+    },
+    {
+        "content": "<p>I looked into this a bit and I think it would have more downsides than upsides, nm <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 615458249,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786279309
+    },
+    {
+        "content": "<p>Maybe compile-time evaluation of constants could be used to generate safe <code>mod_by_X</code> functions?</p>\n<div class=\"codehilite\"><pre><span></span><code>Ok(mod_by_24) = U32.mod_by_I8(24)\nexpect 2.I8 == mod_by_24(26.U32)\n</code></pre></div>\n<p>Dunno, seems complicated though.</p>",
+        "id": 615459216,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1786280407
+    },
+    {
+        "content": "<p>Wait, couldn't <code>mod_by</code> have a signature <code>mod_by : U32, num -&gt; num</code>? (example for <code>U32</code>, but the same could exist for other integer types)</p>\n<blockquote>\n<p>in <code>roc-isodate</code>, we compute <code>hours_saturated % 24</code>. We know with 100% certainty that the result fits inside an <code>I8</code>.</p>\n</blockquote>\n<div class=\"codehilite\"><pre><span></span><code>hours_saturated.mod_by(24.I8)\n</code></pre></div>\n<blockquote>\n<p>in <code>roc-crc32</code>, we calculate an array index using <code>.bitwise_and(0xFF)</code>, so we're sure to get a number between 0 and 255, and we can safely convert it to an <code>U8</code>.</p>\n</blockquote>\n<div class=\"codehilite\"><pre><span></span><code>bits.mod_by(U8.highest)\n</code></pre></div>\n<p><span aria-label=\"point up\" class=\"emoji emoji-1f446\" role=\"img\" title=\"point up\">:point_up:</span> makes me realize it doesn't work. You'd have to mod by 256 which is just out of range of the <code>U8</code>. That's such a shame.</p>",
+        "id": 615459502,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1786280608
+    },
+    {
+        "content": "<p>I was just testing this too. I think it's possible though - you can change it to be a mask and check that the mask fits in U8.</p>",
+        "id": 615460114,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1786281184
+    },
+    {
+        "content": "<p>Or it could be addressed with naming: instead of replacing <code>mod_by</code> this could be a separate function called <code>wrap_at</code>. Maybe it could replace <code>to_X_wrap</code> functions.</p>",
+        "id": 615461185,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1786282286
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"477725\">Jasper Woudenberg</span> <a href=\"#narrow/channel/304641-ideas/topic/Wrap.20or.20unwrap.3F/near/615459502\">said</a>:</p>\n<blockquote>\n<p>Wait, couldn't <code>mod_by</code> have a signature <code>mod_by : U32, num -&gt; num</code>? (example for <code>U32</code>, but the same could exist for other integer types)</p>\n<blockquote>\n<p>in <code>roc-isodate</code>, we compute <code>hours_saturated % 24</code>. We know with 100% certainty that the result fits inside an <code>I8</code>.</p>\n</blockquote>\n<div class=\"codehilite\"><pre><span></span><code>hours_saturated.mod_by(24.I8)\n</code></pre></div>\n<blockquote>\n<p>in <code>roc-crc32</code>, we calculate an array index using <code>.bitwise_and(0xFF)</code>, so we're sure to get a number between 0 and 255, and we can safely convert it to an <code>U8</code>.</p>\n</blockquote>\n<div class=\"codehilite\"><pre><span></span><code>bits.mod_by(U8.highest)\n</code></pre></div>\n<p><span aria-label=\"point up\" class=\"emoji emoji-1f446\" role=\"img\" title=\"point up\">:point_up:</span> makes me realize it doesn't work. You'd have to mod by 256 which is just out of range of the <code>U8</code>. That's such a shame.</p>\n</blockquote>\n<p>it could return a <code>Try</code> which you could exhaustively match when calling it at compile time</p>",
+        "id": 615471495,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786286736
+    },
+    {
+        "content": "<p>there may be some potential \"parse, don't validate\" opportunities for some of these</p>",
+        "id": 615473377,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1786288237
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Wrap.20or.20unwrap.3F/near/615471495\">said</a>:</p>\n<blockquote>\n<p>it could return a <code>Try</code> which you could exhaustively match when calling it at compile time</p>\n</blockquote>\n<p>But that would require knowing both operands of the <code>mod_by</code> at compile-time, right? Would be nice if you could pass the number being modulo'd in at runtime.</p>",
+        "id": 615473869,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1786288701
+    },
+    {
+        "content": "<p>If a pure function is modeled as a graph of computation, I suppose any part of the graph that is static at compilation time could be reduced? That would be exciting, but probably way too ambitious/complex?</p>",
+        "id": 615507391,
+        "sender_full_name": "Matthieu Pizenberg",
+        "timestamp": 1786316582
+    }
+]

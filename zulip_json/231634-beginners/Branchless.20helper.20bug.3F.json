@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>I've been experimenting with different ways to count the number of backslashes in a large file. I wrote a function which I hope will be branchless (but haven't checked the dissasembly yet) however it is giving me an incorrect answer and I am not sure if I am doing something wrong, or maybe we have a bug somewhere.</p>\n<p>The below seems to work ok, the below tests pass etc... however when I run it on a large file of UTF-8 bytes that I know has 1230 backslashes it gives me an incorrect answer of 24_642_180.</p>\n<p>Can anyone see anything obviously wrong with this helper?</p>\n<div class=\"codehilite\"><pre><span></span><code>countSlashesBranchlessHelp : Nat, U8 -&gt; Nat\ncountSlashesBranchlessHelp = \\count, byte -&gt;\n    byte\n    |&gt; Num.bitwiseXor &#39;\\\\&#39;          # XOR will be 0 if values are equal\n    |&gt; Num.subWrap 0b0000_0001      # MSB 1 if values are equal, 0 otherwise\n    |&gt; Num.shiftRightBy 7u8         # Shift MSB to LSB\n    |&gt; Num.toNat                    # Convert to Nat\n    |&gt; Num.addWrap count            # Add to running count\n\nexpect List.walk [&#39;1&#39;,&#39;2&#39;,&#39;3&#39;] 0 countSlashesBranchlessHelp == 0\nexpect List.walk [&#39;1&#39;,&#39;2&#39;,&#39;\\\\&#39;,&#39;3&#39;,&#39;\\\\&#39;] 0 countSlashesBranchlessHelp == 2\n</code></pre></div>",
+        "id": 384741727,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1692012540
+    },
+    {
+        "content": "<p>It could be valuable to progressively half the input file string with a function to see at which point the count starts going wrong.</p>",
+        "id": 384750357,
+        "sender_full_name": "Anton",
+        "timestamp": 1692014180
+    },
+    {
+        "content": "<p>I think the xor/subtraction logic is incorrect. For example, for <code>&lt;</code>, which is ascii code 60 <code>0b0111100</code>, the xor against <code>\\=92</code> will be <code>0b1011000 xor  0b0111100 = 0b1100100</code>. The subtraction and right shift will then end up with 1 in the LSB, if I did my math right.</p>",
+        "id": 384788507,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1692021548
+    },
+    {
+        "content": "<p>Thank you <span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> <span aria-label=\"thank you\" class=\"emoji emoji-1f64f\" role=\"img\" title=\"thank you\">:thank_you:</span></p>",
+        "id": 385033132,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1692086201
+    },
+    {
+        "content": "<p>Update to my previous. I changed it to the below which now gives the expected answer! </p>\n<div class=\"codehilite\"><pre><span></span><code>countSlashesBranchlessHelp : Nat, U8 -&gt; Nat\ncountSlashesBranchlessHelp = \\count, byte -&gt;\n\n    # XOR will be 0 if values are equal\n    a =  Num.bitwiseXor byte &#39;\\\\&#39;\n\n    # Use shifts to propogate 1&#39;s\n    b = Num.bitwiseOr a (Num.shiftRightBy a 4)\n    c = Num.bitwiseOr b (Num.shiftRightBy b 2)\n    d = Num.bitwiseOr c (Num.shiftRightBy c 1)\n\n    # Invert the bits\n    e = Num.bitwiseNot d\n\n    # Mask for the LSB\n    f = Num.bitwiseAnd e 1\n\n    # Add to running count\n    f |&gt; Num.toNat |&gt; Num.addWrap count\n</code></pre></div>",
+        "id": 385042713,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1692088562
+    },
+    {
+        "content": "<p>Unfortunately, though I think it looks nicer, if I write it out using a pipeline it is roughly 25% slower. I assume this is because it is because the lambdas are not being inlined in the function?</p>\n<div class=\"codehilite\"><pre><span></span><code>countSlashesBranchlessHelp : Nat, U8 -&gt; Nat\ncountSlashesBranchlessHelp = \\count, byte -&gt;\n    byte\n    |&gt; Num.bitwiseXor  &#39;\\\\&#39;                         # XOR will be 0 if values are equal\n    |&gt; \\c -&gt; Num.bitwiseOr c (Num.shiftRightBy c 4) # Use shifts to propogate 1&#39;s\n    |&gt; \\c -&gt; Num.bitwiseOr c (Num.shiftRightBy c 2)\n    |&gt; \\c -&gt; Num.bitwiseOr c (Num.shiftRightBy c 1)\n    |&gt; \\c -&gt; Num.bitwiseNot c                       # Invert the bits\n    |&gt; \\c -&gt; Num.bitwiseAnd c 1                     # Mask for the LSB\n    |&gt; Num.toNat                                    # Convert to Nat\n    |&gt; Num.addWrap count                            # Add to running count\n</code></pre></div>",
+        "id": 385044559,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1692088992
+    },
+    {
+        "content": "<p>I guess my question here is should I expect the pipeline version to run at the same speed? or is that unreasonable?</p>",
+        "id": 385044889,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1692089064
+    },
+    {
+        "content": "<p>we'd have to do our own inlining to guarantee it</p>",
+        "id": 385046811,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1692089479
+    },
+    {
+        "content": "<p>though LLVM should get pretty close here</p>",
+        "id": 385046887,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1692089499
+    },
+    {
+        "content": "<p>we do want to do our own inlining at some point, but it's not a priority in the near term</p>",
+        "id": 385074926,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1692095743
+    },
+    {
+        "content": "<p>Llvm not inlining this surprised me. I wonder if something else is wrong</p>",
+        "id": 385147857,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1692111030
+    }
+]

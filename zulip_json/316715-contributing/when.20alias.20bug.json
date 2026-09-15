@@ -1,0 +1,92 @@
+[
+    {
+        "content": "<p>does <a href=\"https://github.com/roc-lang/roc/issues/5174\">#5174</a> look like something that won't take too much digging to fix? I am willing to work on and fix it because having this fixed will make a program I am working on a lot nicer to write. That said, if this would be better left to someone more familiar with that area of code, I can just wait.</p>",
+        "id": 343541594,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1679442490
+    },
+    {
+        "content": "<p>Folkert probably knows best but looking at it, I dont think it would be to difficult. This kind of thing happens every so often and usually takes me &lt;1hr</p>",
+        "id": 343575741,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679460776
+    },
+    {
+        "content": "<p>yes should be relatively easy. I'd start by looking at the mono IR that is generated</p>",
+        "id": 343758833,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1679510645
+    },
+    {
+        "content": "<p>the problem is usually the mono IR, it's not an alias analysis bug</p>",
+        "id": 343758886,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1679510656
+    },
+    {
+        "content": "<p>Quick IR question: is it valid to repeat an identifier in different branches in the mono ir:</p>\n<div class=\"codehilite\"><pre><span></span><code>if `#UserApp.32` then\n  let `#UserApp.9` : I64 = 3i64;\nelse\n  let `#UserApp.9` : I64 = 3i64;\n</code></pre></div>\n<p>Or should those be unique?</p>",
+        "id": 343760973,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1679511219
+    },
+    {
+        "content": "<p>it happens a log today, so I don't think we make assumptions about it not happening</p>",
+        "id": 343761562,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1679511399
+    },
+    {
+        "content": "<p>e.g. this is in our mono tests</p>\n<div class=\"codehilite\"><pre><span></span><code>        switch Test.31:\n            case 0:\n                let Test.25 : Str = CallByName Test.9 Test.23;\n                jump Test.24 Test.25;\n\n            default:\n                let Test.25 : Str = CallByName Test.11 Test.23;\n                jump Test.24 Test.25;\n</code></pre></div>",
+        "id": 343761622,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1679511415
+    },
+    {
+        "content": "<p><span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 343761955,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1679511521
+    },
+    {
+        "content": "<p>The issue seems to be caused by this line being repeated in both branches of an if/else:</p>\n<div class=\"codehilite\"><pre><span></span><code>let `#UserApp.8` : Int1 = CallByName `Num.isLt` `#UserApp.x` `#UserApp.9`;\n</code></pre></div>\n<p>Given it has the exact same arg names and function, I think they are getting the same specialization id.</p>",
+        "id": 343768720,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1679513692
+    },
+    {
+        "content": "<p>Though that doesn't exactly explain the bug to me. What is wrong with two calls having the same <code>CalleeSpecVar</code>? Does that just mean that both functions use the same specialized version of a function? I assume I don't quite understand what the <code>CalleeSpecVar</code> means.</p>",
+        "id": 343769456,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1679513935
+    },
+    {
+        "content": "<p>multiple calls might end up resolving to the same specialization, but I believe each call must be annotated with a unique variable because morphic might or might not assign them unique specializations</p>",
+        "id": 343784312,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679518819
+    },
+    {
+        "content": "<p>by the way, <code>ROC_CHECK_MONO_IR=1</code> should catch this if that is indeed the problem</p>",
+        "id": 343784394,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679518846
+    },
+    {
+        "content": "<p>because we should create a unique CallSpecId in mono</p>",
+        "id": 343784419,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679518856
+    },
+    {
+        "content": "<p>for each call</p>",
+        "id": 343784425,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679518859
+    },
+    {
+        "content": "<p>yeah, it finds issues:</p>\n<div class=\"codehilite\"><pre><span></span><code>IR PROBLEMS FOUND:\n── DUPLICATE JOIN POINT ────────────────────────────────────────────────────────\n\nin main : () -&gt; {Str, {}} ((niche {}))\n\n18│              let `#UserApp.x` : I64 = lowlevel ListGetUnsafe `#UserApp.data` `#UserApp.15`;\n19│&gt;             joinpoint `#UserApp.7` `#UserApp.14`:\n20│                  if `#UserApp.14` then\n\nThe join point #UserApp.7 was previously defined here\n\n48│          let `#UserApp.28` : U64 = 1i64;\n49│&gt;         let `#UserApp.29` : Int1 = lowlevel NumGte `#UserApp.27` `#UserApp.28`;\n50│          if `#UserApp.29` then\n\nand is redefined here\n── DUPLICATE CALL SPEC ID ──────────────────────────────────────────────────────\n\nin main : () -&gt; {Str, {}} ((niche {}))\n\n24│              in\n25│&gt;             let `#UserApp.9` : I64 = 3i64;\n26│              let `#UserApp.8` : Int1 = CallByName `Num.isLt` `#UserApp.x` `#UserApp.9`;\n\nThis call has a specialization ID\n\n54│                  if `#UserApp.25` then\n55│&gt;                     jump `#UserApp.12`;\n56│                  else\n\n...that is the same as the specialization ID of the call here\n</code></pre></div>",
+        "id": 343789937,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1679520749
+    }
+]
