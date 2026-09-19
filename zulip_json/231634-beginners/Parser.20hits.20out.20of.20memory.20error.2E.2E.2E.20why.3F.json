@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>So I'm working on todays advent of code.<br>\nI started using <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span>'s <a href=\"https://github.com/lukewilliamboswell/roc-parser\">roc-parser</a> because it looks like it has the comfy parser stuff I want.<br>\nIt works pretty well, but it fails with an \"out of memory\" panic in some places, and I can't figure out why.<br>\nI don't think I'm doing any spooky infinite recusion stuff.</p>\n<p>The error I get on the tests that panic is:<br>\n<code>thread 'main' panicked at 'out of memory', /build/cargo-vendor-dir/bumpalo-3.14.0/src/li  \n b.rs:1854:5</code></p>\n<p>I've been going mad about this for over an hour now; I can't seem to work around it.<br>\nSo now I'm asking for help in here again <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> <br>\nI've whittled it down to some small-ish things that fail:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>Color : [Red, Green, Blue]\n\nparseColor : Parser RawStr Color\nparseColor = oneOf [\n  string \"red\" |&gt; map (\\_ -&gt; Red),\n  string \"green\" |&gt; map (\\_ -&gt; Green),\n  string \"green\" |&gt; map (\\_ -&gt; Blue)\n]\nexpect # this one works\n  in = \"red\"\n  result = parseStr parseColor in\n  result == Ok Red\n\nexpect # this one works too\n  in = \"a;a;a\"\n  parser = sepBy1 (string \"a\") (string \";\")\n  out = parseStr parser in\n  out == Ok ([\"a\", \"a\", \"a\"])\n\nexpect # this panics... why???\n  in = \"red;green;blue\"\n  parser = sepBy1 parseColor (string \";\")\n  out = parseStr parser in\n  out == Ok ([Red, Green, Blue])\n\nexpect # this works\n  in = \"a\"\n  result = parseStr (string \"a\") in\n  result == Ok \"a\"\n\nexpect # ..but this panics\n  in = \"ab\"\n  result = parseStr (string \"a\") in\n  result == Ok \"a\"\n</code></pre></div>",
+        "id": 405565536,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701550084
+    },
+    {
+        "content": "<p>Using roc from commit <code>66fa633fde6cb7067de5303445a8402c15921b3d</code> (current main), built using the nix flake.</p>",
+        "id": 405565730,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701550258
+    },
+    {
+        "content": "<p>You have <code>string \"green\" |&gt; map (\\_ -&gt; Blue)</code>, not sure if that is related to the panics though</p>",
+        "id": 405565866,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1701550407
+    },
+    {
+        "content": "<p>hahah thanks! good catch. I don't think that should cause the memory error, though.</p>",
+        "id": 405565885,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701550431
+    },
+    {
+        "content": "<p>at least I hope not</p>",
+        "id": 405565892,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701550439
+    },
+    {
+        "content": "<p>it seems to happen whenever I</p>\n<ul>\n<li>use <code>sepBy</code> or <code>sepBy1</code> on a more complicated parser (something with <code>oneOf</code> or <code>many</code>)</li>\n<li>run <code>parseStr</code> on any string that is longer than the expected input (e.g. <code>parseStr (string \"a\") \"ab\"</code>)</li>\n</ul>",
+        "id": 405566076,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701550589
+    },
+    {
+        "content": "<p>For me changing it from green to blue did actually fix the error. But I don't think it should be causing one</p>",
+        "id": 405566138,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1701550664
+    },
+    {
+        "content": "<p>I ran into the same issue when I was writing my solution</p>",
+        "id": 405566152,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1701550681
+    },
+    {
+        "content": "<p>hmm yeah that does fix the \"red;green;blue\" test I posted</p>",
+        "id": 405566211,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701550712
+    },
+    {
+        "content": "<p>maybe that's enough that I can keep going<br>\nbut <code>parseStr (string \"a\") \"ab\"</code> still panics</p>",
+        "id": 405566270,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701550792
+    },
+    {
+        "content": "<p>probably a compiler bug, right? I really feel there's no way that line should cause an \"out of memory\" error</p>",
+        "id": 405566398,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701550859
+    },
+    {
+        "content": "<p>hmm hold on; I'm not sure I can reproduce any more.</p>",
+        "id": 405566846,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701551177
+    },
+    {
+        "content": "<p>My guess either:</p>\n<ol>\n<li>we limit the size in the compiler of something and it really should be bigger</li>\n<li>some sort of infinite recursion or memory bug that actually eats memory until we crash.</li>\n</ol>\n<p>Haven't actually looked into what is going, might dig in a bit more if I have time.</p>",
+        "id": 405567031,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701551388
+    },
+    {
+        "content": "<p>I can reproduce it again. It seems to not happen if my expectation is actually correct. Maybe only happens on expectation fail?</p>\n<div class=\"codehilite\"><pre><span></span><code>expect # this succeeds. perfect\n  out = parseStr (string &quot;a&quot;) &quot;ab&quot;\n  out == Err (ParsingIncomplete &quot;b&quot;)\n\nexpect # this panics\n  out = parseStr (string &quot;a&quot;) &quot;ab&quot;\n  out == Ok &quot;a&quot;\n</code></pre></div>",
+        "id": 405567108,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701551452
+    },
+    {
+        "content": "<p>In any case I have 10+ gigs of unused memory, and it fails pretty quickly (doesn't seem like it's slowly eat up all my RAM first)</p>",
+        "id": 405567251,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701551562
+    },
+    {
+        "content": "<p>It also happens inside bumpalo, which seems to be an arena allocator? Sorry I don't know a whole lot about how that works <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 405567294,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701551620
+    },
+    {
+        "content": "<p>Yeah, my guess is it is an internal compiler buffer that has limited size</p>",
+        "id": 405567302,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701551634
+    },
+    {
+        "content": "<p>In case it's useful, this does not panic</p>\n<div class=\"codehilite\"><pre><span></span><code>expect # this does not panic\n    parseStr (string &quot;a&quot;) &quot;ab&quot; == Ok &quot;a&quot;\n</code></pre></div>",
+        "id": 405567382,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1701551709
+    },
+    {
+        "content": "<p>Do you have a full sample that I can just copy into an <code>app.roc</code> file that is a minimal-ish repro?</p>",
+        "id": 405567405,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701551748
+    },
+    {
+        "content": "<p>here:</p>\n<div class=\"codehilite\"><pre><span></span><code>app &quot;hello&quot;\n    packages {\n        pf: &quot;https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br&quot;,\n        parser: &quot;https://github.com/lukewilliamboswell/roc-parser/releases/download/0.2.0/dJQSsSmorujhiPNIvJKlQoI92RFIG_JQwUfIxZsCSwE.tar.br&quot;\n    }\n    imports [\n        pf.Stdout,\n        pf.Task.{ Task },\n        parser.String.{ string, parseStr },\n    ]\n    provides [main] to pf\n\nexpect # this works\n  out = parseStr (string &quot;a&quot;) &quot;ab&quot;\n  out == Err (ParsingIncomplete &quot;b&quot;)\n\nexpect # this runs too (but fails)\n  parseStr (string &quot;a&quot;) &quot;ab&quot; == Ok &quot;a&quot;\n\nexpect # this panics\n  out = parseStr (string &quot;a&quot;) &quot;ab&quot;\n  out == Ok &quot;a&quot;\n\nmain : Task.Task {} I32\nmain =\n  Stdout.line &quot;hi&quot;\n</code></pre></div>",
+        "id": 405567629,
+        "sender_full_name": "Asbjørn Olling",
+        "timestamp": 1701551940
+    },
+    {
+        "content": "<p>What do you mean you can't allocate a string of length: <code>9223372036854775809</code></p>",
+        "id": 405568336,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701552664
+    },
+    {
+        "content": "<p>haha</p>",
+        "id": 405568342,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701552673
+    },
+    {
+        "content": "<p>Cool, I know exactly what the bug is actually. (maybe cause I indirectly caused it <span aria-label=\"shushing face\" class=\"emoji emoji-1f92b\" role=\"img\" title=\"shushing face\">:shushing_face:</span>)</p>",
+        "id": 405568467,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701552807
+    },
+    {
+        "content": "<p>Should be fixed by <a href=\"https://github.com/roc-lang/roc/issues/6158\">#6158</a></p>",
+        "id": 405577717,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701561594
+    }
+]

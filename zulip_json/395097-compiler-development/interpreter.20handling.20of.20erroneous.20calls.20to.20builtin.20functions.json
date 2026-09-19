@@ -1,0 +1,62 @@
+[
+    {
+        "content": "<p>the other day I was playing with <code>fuzz-canonicalize</code> and found a category of programs which trigger \"unreachable code reached\"-crashes inside the new zig compiler relating to builtin-function calls inside <code>src/eval/interpreter.zig</code></p>\n<p>for example, running <code>./zig-out/bin/roc repro.roc</code> on the following file:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"c1\"># repro.roc</span>\n<span class=\"nx\">main</span><span class=\"o\">!</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">Str</span><span class=\"p\">.</span><span class=\"nx\">is_eq</span><span class=\"p\">(</span><span class=\"s\">\"a\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"s\">\"b\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"s\">\"c\"</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>results in a compiler crash (<code>reached unreachable code</code>).</p>\n<p>essentially, this error (and similar errors in the same category) boils down to <code>fn callLowLevelBuiltin</code> in <code>src/eval/interpreter.zig</code> assuming that it gets the right number of arguments for a builtin function (with <code>std.debug.assert(args.len == 2)</code>).</p>\n<p>since I could not constrain my curiosity about this, I am now here to ask:</p>\n<ul>\n<li>is this assumption intentional or just a placeholder? should <code>callLowLevelBuiltin</code> only be called once it was made sure that the <code>op</code> can really execute with <code>args</code>?<ul>\n<li>code points both ways: <code>.str_is_eq</code> assumes args count, but validates args types, <code>.str_concat</code> assumes args count and args types.</li>\n</ul>\n</li>\n<li>if it is a placeholder, should it be replaced with a check and <code>return error.TypeMismatch</code>in the future?</li>\n<li>if it is intentional, then I think (though I am very much not sure) that the <code>self.env.store.erroneous_exprs.contains</code> check in <code>fn scheduleExprEval</code> seems to be the place where the interpreter would make sure that it only evaluates valid builtin-function calls<ul>\n<li>it does seem logical to reuse type checking for such a thing, but <code>self.env.store.erroneous_exprs</code> is not really used in such a general fashion (only for \"Expressions whose type doesn't match the expected return type in their context\" in match/if branch bodies)</li>\n</ul>\n</li>\n</ul>\n<p>I appreciate the effort you guys are putting in! Thank you for creating such a delightful language!</p>",
+        "id": 590235372,
+        "sender_full_name": "ugi",
+        "timestamp": 1776870125
+    },
+    {
+        "content": "<p>Thanks for reaching out <span class=\"user-mention\" data-user-id=\"631212\">@ugi</span>.<br>\nFor this code we do throw the \"TOO MANY ARGS\" error:</p>\n<div class=\"codehilite\"><pre><span></span><code>main! = |_args| {\n    echo!(Str.inspect(Str.is_eq(&quot;a&quot;, &quot;b&quot;, &quot;c&quot;)))\n    Ok({})\n}\n</code></pre></div>\n<p>So I am going to start my search with checking why that is not the case for your repro.roc</p>",
+        "id": 590245737,
+        "sender_full_name": "Anton",
+        "timestamp": 1776872417
+    },
+    {
+        "content": "<p>Interesting, it seems that your code does not trigger compile time evaluation (via interpreter) while mine does, probably because the erroneous expression is inside a closure and not a top-level-decl?</p>",
+        "id": 590252883,
+        "sender_full_name": "ugi",
+        "timestamp": 1776874052
+    },
+    {
+        "content": "<p>Also I think, that in my repro.roc, the type checker does pick up the \"TOO MANY ARGS\" error, but the interpreter ignores it and tries to run the builtin function anyway, hitting the <code>std.debug.assert(args.len == 2)</code></p>",
+        "id": 590254438,
+        "sender_full_name": "ugi",
+        "timestamp": 1776874427
+    },
+    {
+        "content": "<p>I think your analysis is correct @ugi. Two possible changes changes come to mind:</p>\n<ul>\n<li>Do not run compile time evaluation if there are type checker errors unless <code>--allow-errors</code> was passed.</li>\n<li>Do a number of args check in a central place in the <code>.call_invoke_closure</code> branch in the interpreter and <code>return error.TypeMismatch;</code> similar to ugi's suggestion.</li>\n</ul>\n<p>What do you think <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span>?</p>",
+        "id": 590265678,
+        "sender_full_name": "Anton",
+        "timestamp": 1776877546
+    },
+    {
+        "content": "<p>I would also like to mention, that this category of problems does not only contain args count validation specifically, but function signature validation generally. (but only for builtin functions, not for user-defined functions)<br>\nFor example, the following roc code would also crash with \"reached unreachable code\":</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nx\">main</span><span class=\"o\">!</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">Str</span><span class=\"p\">.</span><span class=\"nx\">concat</span><span class=\"p\">(</span><span class=\"mi\">5</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"s\">\"b\"</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>This time because the interpreter assumes (and asserts, tough implicitly with the <code>.?</code> operator) that the first arg is a Str.</p>\n<p>(NOTE: using Str.is_eq with wrong types would not trigger a crash, because in the <code>.str_is_eq</code> branch of <code>fn callLowLevelBuiltin</code> the argument types are explicitly checked, but they are not explicitly checked in the <code>.str_concat</code> branch)</p>",
+        "id": 590274227,
+        "sender_full_name": "ugi",
+        "timestamp": 1776881704
+    },
+    {
+        "content": "<p>I haven't looked into this specifically (and I'm neck-deep in some really thorny compiler backend changes right now and I'm trying to stay focused on them!) but I will say that in the long term I definitely want to aim for \"no compile-time errors block later stages of the compiler from running\" as a general design principle, and that includes compile-time evaluation of constants</p>",
+        "id": 590352078,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1776915115
+    },
+    {
+        "content": "<p>that said, I think it's okay if in the short term we don't live up to that goal yet</p>",
+        "id": 590352119,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1776915138
+    },
+    {
+        "content": "<p>so my preference regarding this option:</p>\n<blockquote>\n<p>Do not run compile time evaluation if there are type checker errors unless <code>--allow-errors</code> was passed.</p>\n</blockquote>\n<p>...would be not to have a CLI flag for it, but rather just block for now and in the future silently transition to nonblocking once we get the bugs ironed out <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 590352153,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1776915168
+    },
+    {
+        "content": "<p>With block do you mean bail out and print the errors?</p>",
+        "id": 590662866,
+        "sender_full_name": "Anton",
+        "timestamp": 1777022211
+    }
+]

@@ -1,0 +1,212 @@
+[
+    {
+        "content": "<p>As a spin off of discussion in <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/stream/304641-ideas/topic/Purity.20inference.20proposal.20v3\">#ideas &gt; Purity inference proposal v3</a> and <a href=\"#narrow/stream/304641-ideas/topic/.60crash.60.20as.20state.20machine.20entry\">#ideas&gt;&grave;crash&grave; as state machine entry</a>. I think instead of having the platform pass in explicit allocators, we should consider just having the allocation as part of the effect state machine.</p>\n<p>The platform still has the same amount of control. We no longer have to deal with passing around an extra data structure to all functions that might allocate.</p>\n<p>Benefits: Simplicity and consistency.<br>\nCost: Suspension of intermediate state at each allocation.</p>\n<hr>\n<p>This feels like something we should consider in general. It may be too heavy of a perf cost to be worthwhile. Really depends on how fast suspension can be (assuming we reuse the same buffer and minimize data movement it may not be a big deal). If allocations are in the hot loop perf is probably already rough. This could throw it over the edge. So may not be worth it.</p>\n<p>I think this would mainly be a huge boon in terms of simplicity and maintainability. But it may not be the right tradeoff for perf.</p>",
+        "id": 471146261,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726627207
+    },
+    {
+        "content": "<p>To clarify, the platform has the same amount of control cause each time it calls to roc, it is starting a state machine execution. For each of those calls it can use a different state machine with its own arena allocator or whatever other allocator design.</p>",
+        "id": 471147259,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726627431
+    },
+    {
+        "content": "<p>This would be great! We eventually want to reduce the platform authoring complexity to the point that developers feel they can implement their own platforms. I think if this was added, plus more glue being added, we could end up doing 90% of the scaffolding work for users.</p>",
+        "id": 471148614,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1726627707
+    },
+    {
+        "content": "<blockquote>\n<p>we should consider just having the allocation as part of the effect state machine</p>\n</blockquote>\n<p>Can someone explain what this means? Do we still have a <code>roc_alloc</code> that is called by roc?</p>",
+        "id": 471151390,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1726628640
+    },
+    {
+        "content": "<p>Eventual future with Effect interpretters.</p>\n<p>The platform roughly sees a single tag union:</p>\n<div class=\"codehilite\"><pre><span></span><code>Op: [\n    StdoutLine Str \\{} -&gt; Op,\n    StdinLine \\Str -&gt; Op,\n]\n</code></pre></div>\n<p>I am suggesting that we automatically add:</p>\n<div class=\"codehilite\"><pre><span></span><code>    RocAlloc U64 U32 \\Ptr -&gt; Op\n    RocDealloc Ptr \\{} -&gt; Op\n    RocEtc ...\n</code></pre></div>\n<p>The effect interpreter implemented on the host would just handle this as part of a big switch statement.</p>",
+        "id": 471151882,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726628825
+    },
+    {
+        "content": "<p>The alternative (and current plan) is explicit allocators. Where the platform creates an allocator struct and passes that into every single call to roc. Roc would implicitly thread that behind the scenes to all functions that need to allocate. The struct would be a function pointer to roc_alloc, roc_dealloc, etc. It would also be a pointer to arbitrary data (<code>void*</code>) that contains any allocator state.</p>",
+        "id": 471152111,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726628930
+    },
+    {
+        "content": "<p>This is a really neat idea!</p>",
+        "id": 471153041,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1726629411
+    },
+    {
+        "content": "<p>Yeah, definitely want good glue for tag unions with payloads, but this would simplify platform development a bit I think.</p>",
+        "id": 471153069,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1726629438
+    },
+    {
+        "content": "<blockquote>\n<p>definitely want good glue for tag unions with payload</p>\n</blockquote>\n<p>Yeah, this definitely will be required for effect interpreter in general.</p>",
+        "id": 471153190,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726629496
+    },
+    {
+        "content": "<p>Looking through the <a href=\"https://github.com/roc-lang/basic-cli/blob/main/crates/roc_host/src/lib.rs\">basic-cli host lib</a>, we still have a few functions like <code>roc_dbg</code> and <code>roc_panic</code> that aren't yet proposed for addition to the state machine. Would we want to add them as well, or is there anything that shouldn't/couldn't be supported?</p>",
+        "id": 471153333,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1726629580
+    },
+    {
+        "content": "<p>Debug and (expect_failed when we add it) do printing and are slower, so should be fine to be part of the state machine</p>\n<p>Allocations are probably fine.</p>\n<p>Panic (and crash) are probably fine if we implement exception handling for pure function hot loops with crash in them.</p>",
+        "id": 471153597,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726629700
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> <em>fine</em> here means we can support them right?</p>",
+        "id": 471154865,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1726630351
+    },
+    {
+        "content": "<p>We could make them all use the state machine.</p>\n<p>There are zero concerns with making debug and expect_failed use the state machine.</p>\n<p>There are minor concerns around perf for the allocation functions, but my guess is they probably would not be an issue if using the state machine.</p>\n<p>With crash, there are extra complexities to handle around hot loops in pure functions that call crash (those absolutely 100% need to stay fast and have essentially zero cost except if the cash is hit). That is the discussion happening in <a href=\"#narrow/stream/304641-ideas/topic/.60crash.60.20as.20state.20machine.20entry\">#ideas&gt;&grave;crash&grave; as state machine entry</a> and I think we have a path forward to making it work fine.</p>",
+        "id": 471158627,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726632038
+    },
+    {
+        "content": "<p>I think a pretty interesting argument for this direction is that there's both a perf benefit and an implementation simplification benefit to not having to thread through any kind of struct to say what all the allocators are etc</p>",
+        "id": 471159399,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726632351
+    },
+    {
+        "content": "<p>like if we can get rid of all of them and the state machine is all there is</p>",
+        "id": 471159538,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726632405
+    },
+    {
+        "content": "<p>so a potential thing we could try is switching over to just state machine on current platforms, and just see how the perf is in practice</p>",
+        "id": 471159636,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726632463
+    },
+    {
+        "content": "<p>compared to status quo</p>",
+        "id": 471159675,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726632478
+    },
+    {
+        "content": "<p>and if we're unhappy with that perf in practice, then we'd have a clear motivation to implement the other design</p>",
+        "id": 471159903,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726632593
+    },
+    {
+        "content": "<p>Yeah. I think that will be worth testing. My guess is that it will be noticably worse unless we do some smart optimizations around layout and minimizing copy of data captured in the state machine. Like the tag layout algorithm today focuses on minimizing memory usage. For the state machine, we really want to minimize data movement more than memory use (so a lifetime based api of some sort). Like if I see:</p>\n<div class=\"codehilite\"><pre><span></span><code>someTask! {}\nx = 3\nsomeTask! {}\n</code></pre></div>\n<p>I would hope that 3 is just stuck somewhere in the state machine without any other data movement. In current roc, placing the 3 in the state machine capture could lead to a shift of all data in the capture.</p>\n<p>Aside: obviously in a perfect world, we would actually never capture the 3 in this case. We would just move the definition to where it needs to be used.</p>",
+        "id": 471160133,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726632690
+    },
+    {
+        "content": "<p>yeah I also would anticipate that it would be noticeably worse</p>",
+        "id": 471160356,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726632820
+    },
+    {
+        "content": "<p>but I do wonder if there are any interesting platform designs that would otherwise be impossible</p>",
+        "id": 471160546,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726632893
+    },
+    {
+        "content": "<p>Yeah, I think this can be pretty easily seen by the amount of data movement generated by the captures in wasm4. They actually still run pretty darn fast, but they add up to a crazy amount of code bloat. Most code in a wasm4 app is spent moving data from one closure capture to the next.</p>",
+        "id": 471160550,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726632895
+    },
+    {
+        "content": "<p>hm yeah</p>",
+        "id": 471160594,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726632908
+    },
+    {
+        "content": "<p>oh yeah replacing all of those with direct ffi-style calls would be epic <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 471160673,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726632950
+    },
+    {
+        "content": "<p>bc they don't want to be async anyway, right?</p>",
+        "id": 471160762,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726632973
+    },
+    {
+        "content": "<p>Yeah, though in most cases the capture is just slowly growing, so preallocating one giant capture would also fix the issue pretty well (obviously not as well as just making everything sync).</p>",
+        "id": 471160815,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726633012
+    },
+    {
+        "content": "<p>So with reusing the same capture allocation and laying out to minimize data movement, I think it would be very very close to the sync code. But definitely still have extra overhead.</p>",
+        "id": 471161010,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726633092
+    },
+    {
+        "content": "<p>Not sure what the percentages would actually be. Very very small would be my guess.</p>",
+        "id": 471161043,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726633120
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> is there some way we could facilitate reusing the same capture allocation for async effects?</p>",
+        "id": 471161123,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726633161
+    },
+    {
+        "content": "<p>I don't see why not. I guess we would need a refcount the capture allocation as a whole to make sure the host isn't holding on to an extra copy.</p>",
+        "id": 471161295,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726633242
+    },
+    {
+        "content": "<p>eh we could just tell the host not to</p>",
+        "id": 471161633,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726633390
+    },
+    {
+        "content": "<p>there are plenty of host rules around \"don't do this or else UB\"</p>",
+        "id": 471161673,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1726633415
+    },
+    {
+        "content": "<p>What about platforms, that do not want to use tasks?</p>\n<p>Currently, it is relatively easy to write a platform, where the roc function takes some argument and returns something without doing effects. Like <code>main : \\Str -&gt; {part1: Str, part2: Str}</code> for Advent of Code. At the moment, calling roc from the host is like calling any other function, you just have to transform the memory.</p>\n<p>Would this proposal (or the effect interpreter proposal in general) mean, that this is no longer possible and you always have to handle the state machine?</p>\n<p>In any case, I like this proposal. I think it will make interesting stuff easy, like arena allocators or zero allocation calls. In go, I currently have to use <code>C.malloc</code> to make the garbage collector happy. With this proposal, it should be possible to use a native go <code>[]byte</code> for the roc memory.</p>",
+        "id": 471644620,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1726817205
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"496321\">Oskar Hahn</span> <a href=\"#narrow/stream/304641-ideas/topic/allocator.20as.20state.20machine.20entry/near/471644620\">said</a>:</p>\n<blockquote>\n<p>Would this proposal (or the effect interpreter proposal in general) mean, that this is no longer possible and you always have to handle the state machine?</p>\n</blockquote>\n<p>Yes, but I'm pretty sure that <code>Str -&gt; { part1: Str, part2: Str }</code> would need to use the effect interpreter. Cause it will be needed for allocations and such.</p>",
+        "id": 471716032,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726835301
+    },
+    {
+        "content": "<p>Though hopefully it has more consistent glue generation and other simplifications</p>",
+        "id": 471716137,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1726835333
+    }
+]
