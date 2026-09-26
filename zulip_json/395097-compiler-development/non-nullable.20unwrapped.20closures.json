@@ -1,0 +1,404 @@
+[
+    {
+        "content": "<p>So apparently closures can be recursive and their own base case, as long as \"something else\" evaluates whether it's satisfied the base case or not. This is from Nick's example in <a class=\"stream-topic\" data-stream-id=\"231634\" href=\"/#narrow/stream/231634-beginners/topic/recursive.20closures\">#beginners &gt; recursive closures</a> </p>\n<div class=\"codehilite\"><pre><span></span><code>interface A exposes [recurTest] imports []\n\nconst = \\val -&gt;\n    const1 = \\{} -&gt; Ok val\n    const1\n\nmap = \\parser, f -&gt;\n    iMap = \\input -&gt;\n        when parser input is\n            Ok a -&gt; Ok (f a)\n            Err  -&gt; Err\n    iMap\n\norElse = \\parser1, parser2 -&gt;\n    iOrElse = \\input -&gt;\n        when parser1 input is\n            Ok a -&gt; Ok a\n            Err  -&gt; parser2 input\n    iOrElse\n\ntwo = const 2u8\n\nrecurTest = two |&gt; map List.single |&gt; orElse recurTest\n\nmain =\n    when recurTest {} is\n        Ok n -&gt; n == [1u8, 2u8]\n        Err -&gt; Bool.false\n\nexpect main\n</code></pre></div>",
+        "id": 344983279,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679958172
+    },
+    {
+        "content": "<p>We can generate the layout okay, that's all good. The problem is how we generate the reference to <code>recurTest</code> in the <code>orElse</code> call</p>\n<div class=\"codehilite\"><pre><span></span><code>procedure : `A.recurTest` [&lt;rnnu&gt;C *self {U8, {}}]\nprocedure = `A.recurTest` ():\n    let `A.49` : U8 = CallByName `A.two`;\n    let `A.50` : {} = Struct {};\n    let `A.39` : {U8, {}} = CallByName `A.map` `A.49` `A.50`;\n    let `A.40` : [&lt;rnnu&gt;C *self {U8, {}}] = CallByName `A.recurTest`;\n    let `A.38` : [&lt;rnnu&gt;C *self {U8, {}}] = CallByName `A.orElse` `A.39` `A.40`;\n    ret `A.38`;\n</code></pre></div>\n<p>we unconditionally generate the lambda set for <code>recurTest</code> before we call <code>orElse</code>, since the language is eager. But of course this causes a stackoverflow</p>",
+        "id": 344983435,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679958234
+    },
+    {
+        "content": "<p>On the one hand this is programmer error because, what else could we do? The language is eager</p>",
+        "id": 344983569,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679958278
+    },
+    {
+        "content": "<p>on the other hand, the only reason this happens is because <code>recurTest</code> is defunctionalized, and so isn't entirely hidden behind the <code>\\{} -&gt; </code> - and the only way to understand that is to understand the compilation model of lambda sets</p>",
+        "id": 344983917,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679958435
+    },
+    {
+        "content": "<p>It's not clear to me how we (1) detect this a-priori or (2) how to compile it differently so that the construction of the recursive part of the lambda set is actually hidden behind an explicit forcing of the <code>recurTest</code> thunk. Like ideally it would be</p>\n<div class=\"codehilite\"><pre><span></span><code>procedure : `A.getRecurTest` {}\nprocedure = `A.getRecurTest ` ():\n  ret {}\n\nprocedure : `A.recurTest` [&lt;rnnu&gt;C *self {U8, {}}]\nprocedure = `A.recurTest` ():\n    let `A.49` : U8 = CallByName `A.two`;\n    let `A.50` : {} = Struct {};\n    let `A.39` : {U8, {}} = CallByName `A.map` `A.49` `A.50`;\n    let `A.40` : {} = CallByName `A.getRecurTest `;\n    let `A.38` : [&lt;rnnu&gt;C *self {U8, {}}] = CallByName `A.orElse` `A.39` `A.40`;\n    ret `A.38`;\n</code></pre></div>\n<p>but I'm not sure how we get here</p>",
+        "id": 344984317,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679958653
+    },
+    {
+        "content": "<p>what if we said you can only recurse with an explicit lambda?</p>",
+        "id": 345014846,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679973145
+    },
+    {
+        "content": "<p>e.g. you can write <code>x = \\anything -&gt; # goes on to reference x</code> but not <code>x = # not a lambda, goes on to reference x</code></p>",
+        "id": 345014878,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679973187
+    },
+    {
+        "content": "<p>we can detect that problem during canonicalization</p>",
+        "id": 345014901,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679973212
+    },
+    {
+        "content": "<p>so turn it into an error before lambda sets get involved in the first place</p>",
+        "id": 345014970,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679973249
+    },
+    {
+        "content": "<p>That doesn’t resolve the problem. If you wrap “recurseTest” in a thunk (“recurseTest = \\{} -&gt; …”) the issue persists</p>",
+        "id": 345015976,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679973995
+    },
+    {
+        "content": "<p>the reason being, the lambda set is the same under the thunk</p>",
+        "id": 345016024,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679974046
+    },
+    {
+        "content": "<p>Found another instance of this: <a href=\"https://github.com/roc-lang/roc/issues/4725\">https://github.com/roc-lang/roc/issues/4725</a>. The problem is the same.</p>",
+        "id": 348835096,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1681334438
+    },
+    {
+        "content": "<p>Note that the issue is a type checker bug, but after the type checker bug is resolved, the program runs into the above problem.</p>",
+        "id": 348835156,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1681334468
+    },
+    {
+        "content": "<p>Can somebody please move this thread to <a class=\"stream\" data-stream-id=\"395097\" href=\"/#narrow/stream/395097-compiler-development-.28public.29\">#compiler development (public)</a> ?</p>",
+        "id": 376829515,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689819567
+    },
+    {
+        "content": "<p>sure, done!</p>",
+        "id": 376925068,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689849115
+    },
+    {
+        "content": "<p>Thanks</p>",
+        "id": 376983257,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689860504
+    },
+    {
+        "content": "<p>We need to figure out how to solve this. I know Brendan ran into it trying effect interpreters in pure roc and <a class=\"stream-topic\" data-stream-id=\"231634\" href=\"/#narrow/stream/231634-beginners/topic/Compiler.20stack.20overflow.20on.20recursive.20parser\">#beginners &gt; Compiler stack overflow on recursive parser</a> has the same thing</p>",
+        "id": 376983465,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689860534
+    },
+    {
+        "content": "<p>I don't really know what to do. We need to force evaluation of these kinds of lambda sets as thunks rather than constructing them eagerly. But how we get there is totally unclear to me.</p>",
+        "id": 376983625,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689860577
+    },
+    {
+        "content": "<p>so regarding how to detect this scenario: can it be detected using dependencies between identifiers, e.g. using the dependency graph we build in canonicalization?</p>",
+        "id": 376985054,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689860824
+    },
+    {
+        "content": "<p>and follow up idea: if we can detect it prior to mono, we can insert a canonical IR wrapper node that explicitly forces the thunk</p>",
+        "id": 376986166,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689861034
+    },
+    {
+        "content": "<p>I don't think so. It's only applicable to these lambda sets that are self-recursive and have only one constructor. I don't see how we can detect that before inference</p>",
+        "id": 376987428,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689861294
+    },
+    {
+        "content": "<p>now, maybe we could inject a wrapper after inference, or during mono. but how exactly do we do that? it's not clear to me. we need to propogate all the information somehow, and that piece is unclear to me</p>",
+        "id": 376987684,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689861339
+    },
+    {
+        "content": "<p>we could always add the wrapper during canonicalization, but put a Variable on it to detect whether forcing is needed later during mono</p>",
+        "id": 376988541,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689861510
+    },
+    {
+        "content": "<p>so if it turns out it wasn't needed, we just make it be a no op in mono</p>",
+        "id": 376988584,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689861521
+    },
+    {
+        "content": "<p>Maybe I'm not following but then I think we have the inverse problem of having to propogate information that the wrapper should be removed</p>",
+        "id": 376988766,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689861572
+    },
+    {
+        "content": "<p>I may have misunderstood the comment about earlier about getting the layout being not a problem</p>",
+        "id": 376989587,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689861727
+    },
+    {
+        "content": "<p>so I'm assuming that if we have a variant like <code>Expr::MaybeForceBecauseRecursive(Variable, Expr)</code> and that Variable is Equal (from a constraint perspective) to the Variable for the top level value that we might need to force, then later on after that variable has been solved, we know whether it's applicable or not</p>",
+        "id": 376993282,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689862285
+    },
+    {
+        "content": "<p>so the <code>Expr::MaybeForce</code> gets added during canonicalization because it looks like we <em>might</em> have this scenario, then solving tells us the rest of the info about whether we're actually in this scenario, and then when mono encounters this expr it has all the info needed to determine whether to generate a force</p>",
+        "id": 376993942,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689862387
+    },
+    {
+        "content": "<p>How do you decide whether that Expr should be created?</p>",
+        "id": 376994696,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689862532
+    },
+    {
+        "content": "<p>if it looks like a recursive call - so the easy case would be if it's a call to a symbol that we're in the process of being declared, but if I remember right, I think we already have some dependency graph stuff in there to detect less direct recursion than that</p>",
+        "id": 376995311,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689862646
+    },
+    {
+        "content": "<p>there is no syntactically recursive function in the program <a href=\"#narrow/stream/395097-compiler-development-.28public.29/topic/non-nullable.20unwrapped.20closures/near/344983279\">https://roc.zulipchat.com/#narrow/stream/395097-compiler-development-.28public.29/topic/non-nullable.20unwrapped.20closures/near/344983279</a> though</p>",
+        "id": 376996681,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689862887
+    },
+    {
+        "content": "<p>sorry, those links don't work on mobile for some reason (I'm at the pediatrician) - what's that link go to? <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 376997145,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689862974
+    },
+    {
+        "content": "<p>the first message in the thread</p>",
+        "id": 376997585,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689863051
+    },
+    {
+        "content": "<p>ah I see - maybe syntactic self-reference then?</p>",
+        "id": 376997863,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689863095
+    },
+    {
+        "content": "<p>like it doesn't call itself, but its definition refers to itself</p>",
+        "id": 376997968,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689863112
+    },
+    {
+        "content": "<p>but the self-reference is not a function</p>",
+        "id": 376998570,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689863226
+    },
+    {
+        "content": "<p><code>iOrElse</code> is where you'd want to perform the transformation</p>",
+        "id": 376998658,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689863245
+    },
+    {
+        "content": "<p>ahh right</p>",
+        "id": 376998864,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689863279
+    },
+    {
+        "content": "<p>I'm not sure if this could help, but it came to mind: we've talked before about doing compile time evaluation of top level expressions</p>",
+        "id": 377000286,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689863457
+    },
+    {
+        "content": "<p>could that help here?</p>",
+        "id": 377000314,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689863461
+    },
+    {
+        "content": "<p>actually - working backwards, I think what we want is a different specialization of <code>iOrElse</code>, right? Like we want it to force (or not) depending on what it's passed?</p>",
+        "id": 377006315,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689864181
+    },
+    {
+        "content": "<p>which would generally mean we want multiple different specializations of it, I'd assume</p>",
+        "id": 377006613,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689864219
+    },
+    {
+        "content": "<p>yes</p>",
+        "id": 377006775,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689864241
+    },
+    {
+        "content": "<p>ok, so if that's the case, then it seems like the propagation mechanicsm would be type unification, yeah?</p>",
+        "id": 377008507,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689864467
+    },
+    {
+        "content": "<p>or at least that seems like the most natural fit</p>",
+        "id": 377008648,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689864484
+    },
+    {
+        "content": "<p>like for example maybe we do the syntax detection, insert the <code>Expr</code> node around <code>recurTest</code>, and then during constraint gen (and/or mono?), when we see that Expr node, we can take steps to propagate some extra type information from that <code>recurTest</code> argument into <code>orElse</code> at the call site, and then from there into <code>iOrElse</code></p>",
+        "id": 377011145,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689864845
+    },
+    {
+        "content": "<p>but a different call site could specialize differently, so I guess it would have to be a mono thing and not a constraint gen thing?</p>",
+        "id": 377011377,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689864878
+    },
+    {
+        "content": "<p>Yeah, the mechanics here are what I don't think is straightforward. Like, how do we go from a syntactic detection on <code>recurTest</code> to seeing that <code>iOrElse</code> needs to be fixed? And how do you actually update the variables based on each specialization site?</p>",
+        "id": 377017154,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689865771
+    },
+    {
+        "content": "<p>It might be doable in principle but in practice it seems very difficult</p>",
+        "id": 377017633,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689865848
+    },
+    {
+        "content": "<p>i feel like we should try to find the simplest possible implementation, and all the ideas so far feel very complicated. on the other hand, i have no good ideas for a simple implementation</p>",
+        "id": 377017847,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689865883
+    },
+    {
+        "content": "<p>We need to figure out a solution to this if we want to make any headway on the \"lazy function\" style bugs that are popping up more frequently from users. I still don't have any good ideas. <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span>  do you have any thoughts?</p>",
+        "id": 397863439,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1697907355
+    },
+    {
+        "content": "<p>maybe you can check it at generalization time</p>",
+        "id": 397866751,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1697910399
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> what would that look like?</p>",
+        "id": 397870156,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1697913574
+    },
+    {
+        "content": "<p>i don’t know</p>",
+        "id": 397870354,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1697913775
+    },
+    {
+        "content": "<p>should we schedule a video chat next week to brainstorm ideas?</p>",
+        "id": 397870705,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1697914091
+    },
+    {
+        "content": "<p>Sure. I’m free most times after Wednesday after <time datetime=\"2023-10-25T15:00:00Z\">2023-10-25T11:00:00-04:00</time></p>",
+        "id": 397877020,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1697921470
+    },
+    {
+        "content": "<p>I'm also available at that time, for up to 2.5 hours. After that I'm busy for the rest of the day.</p>",
+        "id": 397880249,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1697925868
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> ? and anyone else interested</p>",
+        "id": 397881153,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1697927146
+    },
+    {
+        "content": "<p>Vaguely interested, but I'll be traveling.</p>",
+        "id": 397881438,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697927396
+    },
+    {
+        "content": "<p>Should be able to make that.</p>",
+        "id": 397890870,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1697936643
+    },
+    {
+        "content": "<p>It’s prob gonna be way over my head, but I’d like to join if that’s ok, and maybe learn by osmosis <span aria-label=\"grinning\" class=\"emoji emoji-1f600\" role=\"img\" title=\"grinning\">:grinning:</span></p>",
+        "id": 397917542,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1697957548
+    },
+    {
+        "content": "<p>sure! ok let’s do the time i posted</p>",
+        "id": 397942075,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1697978495
+    },
+    {
+        "content": "<p>Ill send a meeting link at that time</p>",
+        "id": 397942088,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1697978506
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/395097-compiler-development/topic/non-nullable.20unwrapped.20closures/near/377017847\">said</a>:</p>\n<blockquote>\n<p>i feel like we should try to find the simplest possible implementation, and all the ideas so far feel very complicated. on the other hand, i have no good ideas for a simple implementation</p>\n</blockquote>\n<p>thinking ahead of what to talk about: one possible thing we could talk about is \"if we assume there's no simple solution, what's a complicated solution that we can implement incrementally?\" - e.g. \"ok now it fixes this one situation, but not all known situations\"</p>\n<p>that could (for example) get us to a point where we could fix some of the specific bugs people have been running into, potentially including recursive parsers</p>",
+        "id": 397948687,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1697985115
+    },
+    {
+        "content": "<p>@agus (and others, maybe) <a href=\"https://meet.jit.si/roc-types-bugfix-discussion\">https://meet.jit.si/roc-types-bugfix-discussion</a></p>",
+        "id": 398505706,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1698246200
+    },
+    {
+        "content": "<p>Running a few minutes late</p>",
+        "id": 398505784,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1698246218
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"489294\">@Agus Zubiaga</span> fyi!</p>",
+        "id": 398505832,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1698246235
+    }
+]

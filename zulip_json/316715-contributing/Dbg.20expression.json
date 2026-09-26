@@ -1,0 +1,98 @@
+[
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> with regard to <a href=\"#narrow/stream/304641-ideas/topic/Dbg.20expression/near/405449931\">https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/Dbg.20expression/near/405449931</a> and <a href=\"https://github.com/roc-lang/roc/issues/5894\">https://github.com/roc-lang/roc/issues/5894</a>, where should I start with this change?</p>\n<p>I made a syntax snapshot test which tries to parse <code>f (dbg 1)</code> and fails with <code>The source code for this test did not successfully parse!: \"Expr(InParens(End(@3), @2), @0)\"</code>.  That tells me that there's parsing work to do before we can desugar the expr. Where's a good place to start tracing the parser code?</p>",
+        "id": 406168138,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701814313
+    },
+    {
+        "content": "<p>good question! I'm on mobile so don't have an exact link, but I'd look for where we do <code>if</code> parsing</p>",
+        "id": 406168614,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701814544
+    },
+    {
+        "content": "<p>because that's also a case where we have a special keyword (<code>if</code> rather than <code>dbg</code>) followed by an expression, and then the whole thing ends up being an expression</p>",
+        "id": 406168745,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701814594
+    },
+    {
+        "content": "<p>yes this guy</p>\n<div class=\"codehilite\"><pre><span></span><code>fn expr_start&lt;&#39;a&gt;(options: ExprParseOptions) -&gt; impl Parser&lt;&#39;a, Loc&lt;Expr&lt;&#39;a&gt;&gt;, EExpr&lt;&#39;a&gt;&gt; {\n    one_of![\n        loc!(specialize(EExpr::If, if_expr_help(options))),\n        loc!(specialize(EExpr::When, when::expr_help(options))),\n        loc!(specialize(EExpr::Expect, expect_help(options))),\n        loc!(specialize(EExpr::Dbg, dbg_help(options))),\n        loc!(specialize(EExpr::Closure, closure_help(options))),\n        loc!(expr_operator_chain(options)),\n        fail_expr_start_e()\n    ]\n    .trace(&quot;expr_start&quot;)\n}\n</code></pre></div>\n<p>So you think we should be able to update <code>dbg_help</code> to handle both statements and expressions?</p>",
+        "id": 406168955,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701814695
+    },
+    {
+        "content": "<p>I'm not sure what the code in that function looks like offhand, but seems totally fine to make it separate if you like</p>",
+        "id": 406169234,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701814841
+    },
+    {
+        "content": "<p>Hello 9 month old thread!</p>\n<p>I picked this up again recently and made some progress. I've <a href=\"https://github.com/mulias/roc/commits/expr-dbg/\">hacked together a working solution</a> by parsing <code>dbg</code> in expression position and then using the expr body for both the message and the continuation part of <code>LowLevelDbg</code>. This works in most cases, but there's a bug where nested debugs like <code>dbg (dbg (dbg x)</code> print to the terminal an exponential number of times. This is because the print side effect is doubled for each nested dbg, since we print once in the message code and again in the continuation.</p>\n<p>The simplest solution I can think of would be to desugar the expression <code>dbg x</code> into</p>\n<div class=\"codehilite\"><pre><span></span><code>(\n    v0 = x\n    dbg v0\n    v0\n)\n</code></pre></div>\n<p>Which means <code>dbg (dbg x)</code> would be</p>\n<div class=\"codehilite\"><pre><span></span><code>(\n    v0 = (\n        v1 = x\n        dbg v1\n        v1\n    )\n    dbg v0\n    v0\n)\n</code></pre></div>\n<p>which will only print twice.</p>\n<p>Unfortunate <code>desugar_expr</code> doesn't have access to a <code>VarStore</code> so I can't generate new variables while desugaring. Is there a good reason for that? Should I try to pass the var store in during desugaring? Should I move some of the desugar code to canonicalization instead? Should I try a different solution?</p>",
+        "id": 465072617,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1724642345
+    },
+    {
+        "content": "<blockquote>\n<p>but there's a bug where nested debugs like <code>dbg (dbg (dbg x)</code> print to the terminal an exponential number of times</p>\n</blockquote>\n<p>Idk, that might be a feature.</p>",
+        "id": 465075255,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724643770
+    },
+    {
+        "content": "<p>jk...</p>\n<p>And I don't see why desugaring couldn't make a variable. That sounds like it should be a fine solution</p>",
+        "id": 465075437,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724643877
+    },
+    {
+        "content": "<p>I got some great PR feedback from <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> about handling <code>dbg</code> similar to <code>crash</code>, where we just parse the dbg keyword and then in canonicalization we pattern match on <code>Apply(Dbg, args, called_via)</code> and desugar that into a <code>LowLevelDbg</code>. Doing it this way means the parser can be more lenient, and then in canonicalization we can report if dbg was given too many or no args.</p>\n<p><strong>Question:</strong> When <code>crash</code> is called with too many or no args we continue compiling and fall-back to <code>crash \"hit a crash!\"</code>. What would be an appropriate equivalent for <code>dbg</code>? I'm leaning towards <code>dbg {}</code>.</p>\n<p>There's an argument to be made for hard-failing instead of using a default, since no matter what fallback value we use it will likely produce a type error.</p>\n<p>Here's an example with <code>{}</code> as the default</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    x = 1 + dbg + 2\n\n    Stdout.line! &quot;test&quot;\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>── TYPE MISMATCH in day_01/main.roc ────────────────────────────────────────────\n\nThis 2nd argument to + has an unexpected type:\n\n11│      x = 1 + dbg + 2\n                 ^^^\n\nThis 63 value is a:\n\n    {}\n\nBut + needs its 2nd argument to be:\n\n    Num *\n\n\n── UNAPPLIED DBG in day_01/main.roc ────────────────────────────────────────────\n\nThis dbg doesn&#39;t have a value given to it:\n\n11│      x = 1 + dbg + 2\n                 ^^^\n\ndbg must be passed a value to print at the exact place it&#39;s used. dbg\ncan&#39;t be used as a value that&#39;s passed around, like functions can be -\nit must be applied immediately!\n\n────────────────────────────────────────────────────────────────────────────────\n\n2 errors and 5 warnings found in 239 ms\n.\n\nRunning program anyway…\n\n────────────────────────────────────────────────────────────────────────────────\nRoc crashed with:\n\n    Hit an erroneous type when creating a layout for `4.IdentId(19)`\n</code></pre></div>",
+        "id": 466080329,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1724954446
+    },
+    {
+        "content": "<p>\"this 63 value\"?</p>",
+        "id": 466102264,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724961410
+    },
+    {
+        "content": "<p>Also, any way we can hide the type error and just print the debug error?</p>",
+        "id": 466102402,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724961461
+    },
+    {
+        "content": "<p>Otherwise, having a default seems fine</p>",
+        "id": 466102421,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724961470
+    },
+    {
+        "content": "<blockquote>\n<p>\"this 63 value\"?</p>\n</blockquote>\n<p>Ohhhh yeah, I figured that was an existing bug but it's actually my b, I'll fix that.</p>",
+        "id": 466102724,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1724961572
+    },
+    {
+        "content": "<p>Fixed so it will now read \"The argument is a record of type:\" instead of \"This 63 value is a:\"</p>\n<p>I'm not sure if there's a non-hacky way to hide the type error. It would involve suppressing the error for invalid calls to dbg, but leaving it if the user actually calls <code>dbg {}</code> and that's a type mismatch. I think that having these two errors next to each other isn't the worst.</p>",
+        "id": 466105520,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1724962485
+    },
+    {
+        "content": "<p>Ok</p>",
+        "id": 466120187,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724969289
+    },
+    {
+        "content": "<p>No worries</p>",
+        "id": 466120193,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724969293
+    }
+]

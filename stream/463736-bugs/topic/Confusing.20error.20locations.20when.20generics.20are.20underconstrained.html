@@ -1,0 +1,81 @@
+<html>
+<head><meta charset="utf-8"><title>Confusing error locations when generics are underconstrained · bugs · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/index.html">bugs</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Confusing.20error.20locations.20when.20generics.20are.20underconstrained.html">Confusing error locations when generics are underconstrained</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="624395790"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Confusing%20error%20locations%20when%20generics%20are%20underconstrained/near/624395790" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Confusing.20error.20locations.20when.20generics.20are.20underconstrained.html#624395790">(Sep 15 2026 at 16:18)</a>:</h4>
+<p>I have the following</p>
+<div class="codehilite"><pre><span></span><code>leaves_of_dag : List(a), (a -&gt; { id : id, depends_on : List(id) }) -&gt; List(a)
+    where [
+        id.is_eq : id, id -&gt; Bool,
+        id.to_hash : id, Hasher -&gt; Hasher,
+    ]
+leaves_of_dag = |nodes, info_fn| {
+    (names, dependencies) = unzip_with(
+        nodes,
+        |node| {
+            info = info_fn(node)
+            (info.id, info.depends_on)
+        },
+    )
+    name_set = names |&gt; Set.from_list
+    nodes_depended_on = dependencies.iter().fold(Set.empty(), |s, ds| ds.fold(s, Set.insert))
+    leaves = name_set.difference(nodes_depended_on)
+    nodes.keep_if(|node| Set.contains(leaves, info_fn(node).id))
+}
+</code></pre></div>
+<p>which is called inside another function with the signature</p>
+<div class="codehilite"><pre><span></span><code>normalise_stages : List(Stage(id, meta)) -&gt; Try(List(Stage(id, meta)), [CycleOrDangling, MultipleLeaves, EmptyFlow, ..])
+    where [id.is_eq : id, id -&gt; Bool]
+</code></pre></div>
+<p>You'll notice that the caller (<code>normalise_stages</code>) is missing the <code>to_hash</code> constraint on id that <code>leaves_of_dag</code> requires. However, when the error is reported, the location is at the final usage inside <code>leaves_of_dag</code>, despite it (in isolation) requiring <code>id</code> to have <code>to_hash</code>:</p>
+<div class="codehilite"><pre><span></span><code>This to_hash method is being called on a value whose type doesn't have that method.
+
+nodes.keep_if(|node| Set.contains(leaves, info_fn(node).id))
+                     ^^^^^^^^^^^^
+
+The value's type, which does not have a method named to_hash, is:
+
+    id where [id.is_eq : id, id -&gt; Bool]
+</code></pre></div>
+<p>This can be confusing to debug, especially with more complicated type signatures (game of spot-the-difference) or multiple calls of e.g. <code>leaves_of_dag</code>. I can create an issue if this is something that should be changed?</p>
+
+
+
+<a name="624426311"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Confusing%20error%20locations%20when%20generics%20are%20underconstrained/near/624426311" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Confusing.20error.20locations.20when.20generics.20are.20underconstrained.html#624426311">(Sep 15 2026 at 18:13)</a>:</h4>
+<p>Reading it like this, I think I prefer the currently highlighted location. But I definitely believe it can be confusing! I am not sure if it can easily be decided which would be the least confusing location to highlight for this error inside the compiler <span aria-label="thinking" class="emoji emoji-1f914" role="img" title="thinking">:thinking:</span></p>
+<p>Anyway, issues for error msg improvement are always welcome, so feel free to still open one.</p>
+
+
+
+<a name="624485501"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Confusing%20error%20locations%20when%20generics%20are%20underconstrained/near/624485501" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Confusing.20error.20locations.20when.20generics.20are.20underconstrained.html#624485501">(Sep 15 2026 at 23:03)</a>:</h4>
+<p>It's not clear to me why the lowest function in the stack (at least before builtins) is the location that is highlighted. For instance, if I had 3 functions between, the cause of the error would be even further removed.</p>
+<p>I understand that if the functions are not annotated manually, the lowest point is the most accurate, as it is the point where the constraint is actually violated. But if I have annotated my function, a violation should be noted where found not below, where the constraint is assumed to hold.</p>
+
+
+
+<a name="624485772"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Confusing%20error%20locations%20when%20generics%20are%20underconstrained/near/624485772" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Jonathan <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Confusing.20error.20locations.20when.20generics.20are.20underconstrained.html#624485772">(Sep 15 2026 at 23:06)</a>:</h4>
+<p>Because I explained that terribly, hopefully this is better:</p>
+<p><img alt="image.png" class="inline-image" data-original-content-type="image/png" data-original-dimensions="916x364" data-original-src="/user_uploads/22008/0lGTupOlRblfQwQMmb1WjGsp/image.png" src="/user_uploads/thumbnail/22008/0lGTupOlRblfQwQMmb1WjGsp/image.png/840x560.webp"></p>
+<p>I would expect <code>f1(a)</code> to error: whatever <code>a</code> is, it is has not been specialised, so we cannot say a meets <code>a.to_hash</code>.  However, the use of <code>f2</code> inside <code>f1</code> should not be an error, because the constraints specified by <code>f1</code> satisfy <code>f2</code>. Furthermore, say there was a <code>Set.insert</code> in <code>f2</code> that justified the <code>to_hash</code> requirement: there is nothing wrong with <code>f2</code>, rather with <code>f0</code>'s use of it, and so <code>f0</code> is where I would expect the error.</p>
+
+
+
+<a name="624611858"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/Confusing%20error%20locations%20when%20generics%20are%20underconstrained/near/624611858" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/Confusing.20error.20locations.20when.20generics.20are.20underconstrained.html#624611858">(Sep 16 2026 at 11:11)</a>:</h4>
+<p>Yeah, I completely agree with that, feel free to put that in an issue.</p>
+
+
+
+<hr><p>Last updated: Sep 26 2026 at 15:09 UTC</p>
+</html>

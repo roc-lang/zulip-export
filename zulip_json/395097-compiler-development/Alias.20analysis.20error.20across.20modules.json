@@ -1,0 +1,1046 @@
+[
+    {
+        "content": "<p>We are looking at this example (from <a href=\"https://github.com/roc-lang/roc/issues/5701#issuecomment-2016888604\">https://github.com/roc-lang/roc/issues/5701#issuecomment-2016888604</a>) of an alias analysis error.</p>\n<div class=\"codehilite\"><pre><span></span><code># Main.roc\ninterface Main\n    exposes []\n    imports [Helper]\n\nexpect\n    _ = Helper.f (loop {})\n    1 == 1\n\nloop = \\{} -&gt;\n    Helper.foobar \\_ -&gt;\n        if Bool.true then\n            loop {}\n        else\n            \\_ -&gt; {}\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code># Helper.roc\ninterface Helper\n    exposes [f, foobar]\n    imports []\n\nf : ({} -&gt; {}) -&gt; {}\nf = \\_ -&gt; {}\n\nfoobar : ({} -&gt; ({} -&gt; {})) -&gt; ({} -&gt; {})\nfoobar = \\fn -&gt; \\_ -&gt; (fn {}) {}\n</code></pre></div>\n<p>run</p>\n<div class=\"codehilite\"><pre><span></span><code>roc test Main.roc\n</code></pre></div>\n<p>What happens here is that <code>Main.roc</code> will call <code>foobar</code> with a particular LayoutId (really a <code>([LayoutId, Niche, LayoutId)</code>), say <code>foobar#32</code>. It will also ask <code>Helper</code> to generate an implementation of <code>foobar</code> for the particular type at the call site. <code>Helper</code> will do so, but gives it another name, e.g. <code>foobar#33</code>. This wil now fail with an alias analysis error because <code>loop</code> calls a function that does not exist.</p>\n<p>So, in effect, the same type gets two different layout ids. That causes problems down the line. We need to somehow guarantee that both parent and child module use the same LayoutId at both the definition and call site.</p>\n<p>When we put all definitions in the same module, it works. So something fails to translate between modules.</p>\n<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> any idea for how how to track this down? We've tried printing a bunch of things but it's not really telling us much besides confirming the above diagnosis </p>\n<p>cc <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span></p>",
+        "id": 436126715,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1714420207
+    },
+    {
+        "content": "<p>yeah, i don't really know how we solve this problem in general</p>",
+        "id": 436146424,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714427496
+    },
+    {
+        "content": "<p>i think i discussed this before, let me see if i can find earlier notes</p>",
+        "id": 436146578,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714427569
+    },
+    {
+        "content": "<p>this is one reason this issue can happen: <a href=\"https://github.com/roc-lang/roc/issues/5464#issuecomment-1631583439\">https://github.com/roc-lang/roc/issues/5464#issuecomment-1631583439</a>. As i mention there i have no idea how to fix it</p>",
+        "id": 436146942,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714427748
+    },
+    {
+        "content": "<p>I fixed this a while ago for some structural types via \"fixpoint fixing\", which during unifications finds if there are types that are isomorphic but whose fixpoint is not equivalent (e.g. <a href=\"#narrow/stream/231635-compiler-development-.28private.29/topic/.E2.9C.94.20alias.20references.20to.20mutually.20recursive.20types/near/300843640\">https://roc.zulipchat.com/#narrow/stream/231635-compiler-development-.28private.29/topic/.E2.9C.94.20alias.20references.20to.20mutually.20recursive.20types/near/300843640</a>). It's possible that if the type is cloned across modules, its appearance in the new module causes it to get fixpoint-fixed again into a form that produces a different layout (i.e. different fixpoint) in the new module.</p>",
+        "id": 436147559,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714428018
+    },
+    {
+        "content": "<p>this is truly the curse of structural types. Maybe we need some way to \"lock\" the structure of a type once it gets exported?</p>",
+        "id": 436148541,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714428374
+    },
+    {
+        "content": "<p>I'm not sure</p>",
+        "id": 436148549,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714428378
+    },
+    {
+        "content": "<p>if performance were no concern, is there any sort of \"brute force\" solution that would be comically inefficient but get the right answer?</p>",
+        "id": 436179860,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714444936
+    },
+    {
+        "content": "<p>\"locking\" as mentioned above would solve it</p>",
+        "id": 436182560,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714446376
+    },
+    {
+        "content": "<p>i.e. don't allow the type to change after it's exported, all other types must unify to it exactly</p>",
+        "id": 436182589,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714446393
+    },
+    {
+        "content": "<p>but that changes semantics right? Like some programs wouldn't compile anymore</p>",
+        "id": 436240019,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714472855
+    },
+    {
+        "content": "<p>or rather, they wouldn't type-check anymore, when today they would</p>",
+        "id": 436240065,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714472880
+    },
+    {
+        "content": "<p>why wouldn’t they?</p>",
+        "id": 436264459,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714481429
+    },
+    {
+        "content": "<p>I might be misunderstanding the implications of this: <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> </p>\n<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Alias.20analysis.20error.20across.20modules/near/436182589\">said</a>:</p>\n<blockquote>\n<p>i.e. don't allow the type to change after it's exported, all other types must unify to it exactly</p>\n</blockquote>\n<p>it sounds like \"all other types must unify to it exactly\" means that there would be some scenario(s) where a type gets less polymorphic</p>",
+        "id": 436269256,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714482891
+    },
+    {
+        "content": "<p>like today it would be allowed to unify into a different type which later successfully unifies with other types, but instead it would refuse to unify into that other type, and therefore might have a type mismatch with other types later</p>",
+        "id": 436269416,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714482931
+    },
+    {
+        "content": "<p>but maybe I'm misunderstanding the implications there!</p>",
+        "id": 436269456,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714482941
+    },
+    {
+        "content": "<p>is there a case where a type gets imported from a module and doesn't become less, or equivalently, polymorphic?</p>",
+        "id": 436446931,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714537446
+    },
+    {
+        "content": "<p>i guess the crux of my point is that once you find a location of a recursionpointer in a type, you must decide whether that recursionpointer's location is allowed to change in the future or not.</p>",
+        "id": 436446969,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714537499
+    },
+    {
+        "content": "<p>if the type is unique in the sense that nothing else has unified with it, it's fine for it to change.</p>",
+        "id": 436446982,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714537516
+    },
+    {
+        "content": "<p>but if it's not unique (e.g. exported to another module), it cannot change without running into the bug here.</p>",
+        "id": 436447003,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714537541
+    },
+    {
+        "content": "<p>so finding some way to encode/enforce that would be the fix.</p>",
+        "id": 436447014,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1714537552
+    },
+    {
+        "content": "<p>I'd love to try this out, and I'll actually have a week off after I get back from Milan, but I have no idea where to start with the implementation <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 438195659,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715531336
+    },
+    {
+        "content": "<p>any suggestions for how to go about doing this?</p>",
+        "id": 438195672,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715531354
+    },
+    {
+        "content": "<p>yeah, so it's probably most useful to start here with the definitions of recursive types:<br>\n<a href=\"https://github.com/roc-lang/roc/blob/e500d664fdd5b79b004ec5be4614424557b67425/crates/compiler/types/src/subs.rs#L2362-L2366\">https://github.com/roc-lang/roc/blob/e500d664fdd5b79b004ec5be4614424557b67425/crates/compiler/types/src/subs.rs#L2362-L2366</a></p>\n<p>and how fixpoint fixing works</p>\n<p><a href=\"https://github.com/roc-lang/roc/blob/e500d664fdd5b79b004ec5be4614424557b67425/crates/compiler/unify/src/fix.rs#L14\">https://github.com/roc-lang/roc/blob/e500d664fdd5b79b004ec5be4614424557b67425/crates/compiler/unify/src/fix.rs#L14</a></p>",
+        "id": 438196320,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715531994
+    },
+    {
+        "content": "<p>im realizing though this may be hard more difficult than it might seem though</p>",
+        "id": 438196409,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715532050
+    },
+    {
+        "content": "<p>if there are two recursive types that are isomorphic but not equal, imported from two different modules into the same module M, then when we compare them in M, it may be impossible to reconcile them into the same type</p>",
+        "id": 438196437,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715532096
+    },
+    {
+        "content": "<p>yeah okay i don't know how to deal with that without breaking module isolation for typechecking, lol</p>",
+        "id": 438196553,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715532191
+    },
+    {
+        "content": "<p>or compiling all recursive types as boxed at every level</p>",
+        "id": 438196616,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715532247
+    },
+    {
+        "content": "<p>to put the problem concretely: suppose we have modules A and B both importing the definitions</p>\n<div class=\"codehilite\"><pre><span></span><code>F : [FromG G]\nG : [G {lst : List F}]\n\n# the unfurled representation of these types is\n# F = [FromG [G {lst: List &lt;1&gt;}] as &lt;1&gt;\n# G = [G {lst: List [FromG &lt;2&gt;]}] as &lt;2&gt;\n# where &lt;1&gt;, &lt;2&gt; are recursion pointers\n</code></pre></div>\n<p>both expose <code>val</code> where</p>\n<div class=\"codehilite\"><pre><span></span><code># module A\nval : F\nval = FromG (G {lst: []})\n\n# module B\nval : G\nval = G {lst: []}\n</code></pre></div>\n<p>now you import both in module C and do a comparison</p>\n<div class=\"codehilite\"><pre><span></span><code>A.val == (FromG B.val)\n</code></pre></div>\n<p>In C we are comparing</p>\n<div class=\"codehilite\"><pre><span></span><code>A.val : [FromG [G {lst: List &lt;1&gt;}] as &lt;1&gt;\nto\n(FromG B.val) :  [FromG [G {lst: List [FromG &lt;2&gt;]}] as &lt;2&gt;]\n</code></pre></div>\n<p>which typechecks because these types are clearly isomorphic. But their layouts are not the same. And we cannot change the type of either <code>A.val</code> or <code>B.val</code> to be equal to the other's type without also changing the types in module <code>A</code> and <code>B</code>, respectively.</p>",
+        "id": 438197013,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715532629
+    },
+    {
+        "content": "<p>ugh. if we break module isolation, incremental compilation will become very difficult in the future.</p>",
+        "id": 438198327,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715533941
+    },
+    {
+        "content": "<p>can we not make <code>F</code> and <code>G</code> structurally the same in the defining module?</p>",
+        "id": 438198365,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1715533986
+    },
+    {
+        "content": "<p>we could, but suppose it was instead</p>\n<div class=\"codehilite\"><pre><span></span><code>F : [FromG G_]\nG_ : [G {lst : List F}]\n\nF_ : [FromG G]\nG : [G {lst : List F_}]\n</code></pre></div>\n<p>now F and G are not related in the defining module but <code>[FromG G]</code> is still isomorphic to <code>F</code></p>",
+        "id": 438198485,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715534095
+    },
+    {
+        "content": "<p>hmm yes</p>",
+        "id": 438198637,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1715534238
+    },
+    {
+        "content": "<p>I'll run this by some ocaml people</p>",
+        "id": 438198720,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715534305
+    },
+    {
+        "content": "<p>also even in the earlier example <code>F</code> and <code>G</code> could be defined in distinct modules (with slight modifications), right?</p>",
+        "id": 438198729,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1715534314
+    },
+    {
+        "content": "<p>yeah</p>",
+        "id": 438198733,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715534321
+    },
+    {
+        "content": "<p>because this is all about structural equality</p>",
+        "id": 438198737,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1715534324
+    },
+    {
+        "content": "<p>yeah, exactly</p>",
+        "id": 438198747,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715534331
+    },
+    {
+        "content": "<p>the curse of structural recursion with unboxed compilation. maybe this is why everyone uses nominal types</p>",
+        "id": 438198764,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715534357
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Alias.20analysis.20error.20across.20modules/near/438198327\">said</a>:</p>\n<blockquote>\n<p>ugh. if we break module isolation, incremental compilation will become very difficult in the future.</p>\n</blockquote>\n<p>is that necessarily true if this is the only way we break it?</p>",
+        "id": 438199058,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715534640
+    },
+    {
+        "content": "<p>for example, if what we cache is \"these are the resolved type annotations, but they can be modified further later\"</p>",
+        "id": 438199106,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715534657
+    },
+    {
+        "content": "<p>I guess we potentially have to load a lot more from disk if we need all the subs</p>",
+        "id": 438199127,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715534685
+    },
+    {
+        "content": "<p>i think the dependency graph becomes a mess, because it is no longer is DAG</p>",
+        "id": 438199134,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715534699
+    },
+    {
+        "content": "<p>If you had the graph <code>A -&gt; C &lt;- B</code>, where C depends on both A and B as in the example above, a change in A now can force a change in B</p>",
+        "id": 438199163,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715534732
+    },
+    {
+        "content": "<p>hm true</p>",
+        "id": 438199170,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715534741
+    },
+    {
+        "content": "<p>ok crazy idea. recursive types must be nominal</p>",
+        "id": 438199230,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715534782
+    },
+    {
+        "content": "<p>this is potentially a can of worms, but probably worth considering</p>",
+        "id": 438199261,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715534828
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> what about \"exposed types must be annotated\" instead?</p>",
+        "id": 438199275,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715534852
+    },
+    {
+        "content": "<p>like to expose them from a module</p>",
+        "id": 438199276,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715534860
+    },
+    {
+        "content": "<p>we still have the same problem though right? For example if <code>val</code> is annotated as F and G accordingly in both modules A and B in the example above.</p>",
+        "id": 438199331,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715534887
+    },
+    {
+        "content": "<p>yeah true</p>",
+        "id": 438199369,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715534951
+    },
+    {
+        "content": "<p>so in other words they can only be recursive if they're opaque</p>",
+        "id": 438199382,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715534970
+    },
+    {
+        "content": "<p>yes. the idea being that the name of the opaque type forces one representation of the type, and hence one layout</p>",
+        "id": 438199450,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715535011
+    },
+    {
+        "content": "<p>interesting!</p>",
+        "id": 438199476,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715535034
+    },
+    {
+        "content": "<p>can we think of cases where this would cause problems?</p>",
+        "id": 438199484,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715535049
+    },
+    {
+        "content": "<p>yeah, there's certainly some issues to figure out with that approach though. A couple off the top of my head:</p>\n<ul>\n<li>How do you generate error messages for types that are structurally recursive? It may not be obvious to the implementor that they are.</li>\n<li>How do we make something like the following work?</li>\n</ul>\n<div class=\"codehilite\"><pre><span></span><code>Op := # my opaque recursive definition\n\neq = \\@Op ob1, @Op ob2 -&gt; ob1.fieldA == ob2.fieldA &amp;&amp; ob1.fieldB == ob2.fieldB\n</code></pre></div>\n<p>inside this definition, the field accesses are structural and recursive, which we've disallowed. So some language rule to allow this needs to be defined.</p>",
+        "id": 438199597,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715535180
+    },
+    {
+        "content": "<p>Actually the second might have an easy solution - if the recursion point is named by an opaque type it's fine.</p>",
+        "id": 438199703,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715535299
+    },
+    {
+        "content": "<p>but this needs a design doc</p>",
+        "id": 438199711,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715535305
+    },
+    {
+        "content": "<p>I'm very hype about this direction! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 438199793,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715535386
+    },
+    {
+        "content": "<p>it seems like it would come up relatively rarely, and existing cases of \"recursion has to happen behind an opaque type\" haven't felt like a big burden</p>",
+        "id": 438200142,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715535809
+    },
+    {
+        "content": "<p>more of a surprise than anything</p>",
+        "id": 438200148,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715535818
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> are you up for writing a design doc on this?</p>",
+        "id": 438200365,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536001
+    },
+    {
+        "content": "<p>yeah i can</p>",
+        "id": 438200370,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715536012
+    },
+    {
+        "content": "<p>awesome, thank you so much!</p>",
+        "id": 438200457,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536093
+    },
+    {
+        "content": "<p>it would be so huge to have this working</p>",
+        "id": 438200477,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536118
+    },
+    {
+        "content": "<p>huh, I guess morphic doesn't have this problem because it's a separate pass</p>",
+        "id": 438200507,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536166
+    },
+    {
+        "content": "<p>maybe that's a relevant difference in correctness between doing it during type checking vs in a separate pass</p>",
+        "id": 438200609,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536220
+    },
+    {
+        "content": "<p>morphic only has nominal types</p>",
+        "id": 438200650,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715536249
+    },
+    {
+        "content": "<p>for recursive defs anyway</p>",
+        "id": 438200659,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715536265
+    },
+    {
+        "content": "<p>ha, til!</p>",
+        "id": 438200673,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536289
+    },
+    {
+        "content": "<p>but a separate pass would also fix the problem, right?</p>",
+        "id": 438200683,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536302
+    },
+    {
+        "content": "<p>because then \"revisiting modules\" wouldn't be a problem</p>",
+        "id": 438200731,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536331
+    },
+    {
+        "content": "<p>yes, but it would need a whole-program analysis</p>",
+        "id": 438200743,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715536341
+    },
+    {
+        "content": "<p>i.e. you would still need to examine all modules, i think</p>",
+        "id": 438200754,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715536355
+    },
+    {
+        "content": "<p>to find all instances of a type and produce one canonical form</p>",
+        "id": 438200764,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715536365
+    },
+    {
+        "content": "<p>right</p>",
+        "id": 438200868,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536457
+    },
+    {
+        "content": "<p>yeah not saying it's the right design, just something I hadn't thought of until now</p>",
+        "id": 438200908,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536520
+    },
+    {
+        "content": "<p>requiring opaque types feels like the better design to proceed with</p>",
+        "id": 438200943,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715536560
+    },
+    {
+        "content": "<p>I can't think of a reason this would be a problem, but if you define the opaque type as <code>:= _</code> does that reintroduce any issues because its (recursive) structure is being completely inferred?</p>",
+        "id": 438206802,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715542278
+    },
+    {
+        "content": "<p>i’m not sure but it probably does introduce complexity</p>",
+        "id": 438206906,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715542402
+    },
+    {
+        "content": "<p>worth thinking though I guess, since that's definitely a thing that can happen today!</p>",
+        "id": 438207601,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715543152
+    },
+    {
+        "content": "<p>huh? writing <code>O := _</code>?</p>",
+        "id": 438208045,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715543646
+    },
+    {
+        "content": "<p>pretty sure that's not allowed</p>",
+        "id": 438208052,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715543657
+    },
+    {
+        "content": "<p>it's allowed today!</p>",
+        "id": 438208290,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715543942
+    },
+    {
+        "content": "<p>and even if it weren't, if it turned out that was a problem, you'd probably have to disallow <code>_</code> from appearing in there at all, including in any type aliases it references - since type aliases can also be defined with <code>_</code> today</p>",
+        "id": 438208403,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715544025
+    },
+    {
+        "content": "<p>that said, I'm open to disallowing <code>_</code> in opaque type and/or type alias declarations if necessary to fix this (since they're allowed today but don't seem to be used significantly in practice)</p>",
+        "id": 438208605,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715544190
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>── UNBOUND TYPE VARIABLE ─────────────────────────────────────────────── B.roc ─\n\nThe definition of O has an unbound type variable:\n\n3│  O := _\n         ^\n\nTip: Type variables must be bound before the :=. Perhaps you intended\nto add a type parameter to this type?\n</code></pre></div>",
+        "id": 438208720,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715544304
+    },
+    {
+        "content": "<p>Am I doing this wrong?</p>",
+        "id": 438208727,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715544310
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>interface B exposes [] imports []\n\nO := _\n\nf = \\@O x -&gt; x + 1\n\nexpect\n    f (@O 1) == 2\n</code></pre></div>\n<p>this program doesn't compile for me</p>",
+        "id": 438208758,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715544356
+    },
+    {
+        "content": "<p>pretty sure type aliases also can't have <code>_</code></p>\n<div class=\"codehilite\"><pre><span></span><code>── UNBOUND TYPE VARIABLE in B.roc ──────────────────────────────────────────────\n\nThe definition of O has an unbound type variable:\n\n3│  O : _\n        ^\n\nTip: Type variables must be bound before the :. Perhaps you intended\nto add a type parameter to this type?\n</code></pre></div>",
+        "id": 438208854,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715544436
+    },
+    {
+        "content": "<p>Allowing <code>_</code> in type aliases would have a few UX problems too</p>",
+        "id": 438208997,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715544578
+    },
+    {
+        "content": "<p>huh, I'm on mobile and the online repl accepted it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 438209079,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715544655
+    },
+    {
+        "content": "<p>seems like a bug. im pretty sure this isn't allowed. even if it is, i think we should revisit ever supporting this</p>",
+        "id": 438209193,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715544787
+    },
+    {
+        "content": "<p>looks like the repl is deferring evaluation. if you use</p>\n<p>O := _</p>\n<p>f = \\@O x -&gt; x + 1</p>\n<p>f (@O 1)</p>\n<p>you'll see it errors out</p>",
+        "id": 438209301,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715544888
+    },
+    {
+        "content": "<p>ahh gotcha</p>",
+        "id": 438209629,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715545210
+    },
+    {
+        "content": "<p>yeah I guess we should give an error for this at the parsing stage then</p>",
+        "id": 438209649,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715545237
+    },
+    {
+        "content": "<p>for both opaque type and type alias declarations</p>",
+        "id": 438209657,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715545251
+    },
+    {
+        "content": "<p>should ability declarations also disallow it?</p>",
+        "id": 438210126,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715545706
+    },
+    {
+        "content": "<p>I'm gonna add an explicit error for it</p>",
+        "id": 438210432,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715546037
+    },
+    {
+        "content": "<p>yes, let's disallow it in abilities too</p>",
+        "id": 438210997,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715546631
+    },
+    {
+        "content": "<p>I posted a simpler, single file reduction in the issue <a href=\"https://github.com/roc-lang/roc/issues/5701#issuecomment-2106372599\">here</a>.</p>\n<div class=\"codehilite\"><pre><span></span><code>app [main] {\n    pf: platform &quot;https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br&quot;,\n}\n\nimport pf.Stdout\nimport pf.Task exposing [Task]\n\nFirst : {}\nSecond : First {}\n\nmain =\n    testFunc {}\n\ntestFunc : Second -&gt; Task {} [StdoutErr Stdout.Err]\ntestFunc = \\{} -&gt;\n    Stdout.line &quot;123&quot;\n</code></pre></div>",
+        "id": 438211934,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1715547657
+    },
+    {
+        "content": "<p>It looks (without compiler analysis) that we generate a layout for <code>First</code>, think <code>Second</code> has the same layout, but don't pass <code>First</code>'s layout to the generated <code>Task</code></p>",
+        "id": 438212038,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1715547759
+    },
+    {
+        "content": "<p>That's just a guess though</p>",
+        "id": 438212044,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1715547773
+    },
+    {
+        "content": "<p>Sorry to interrupt discussion, just figured there's more visibility on Zulip</p>",
+        "id": 438212076,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1715547830
+    },
+    {
+        "content": "<p>Thanks for the note Sam. Unfortunately I think that issue is different and the bug is that <code>Second : First {}</code> isn't caught as a type error; if I change it to <code>Second : First</code>, the program compiles.</p>",
+        "id": 438221270,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715558324
+    },
+    {
+        "content": "<p>Yes, that's true. Good to know</p>",
+        "id": 438247665,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1715578999
+    },
+    {
+        "content": "<p>btw is this related to <a href=\"https://github.com/roc-lang/roc/issues/5464#issuecomment-1631583439\">https://github.com/roc-lang/roc/issues/5464#issuecomment-1631583439</a> or is that a separate issue?</p>",
+        "id": 438383447,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715612171
+    },
+    {
+        "content": "<p>That's a separate issue</p>",
+        "id": 438383614,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715612223
+    },
+    {
+        "content": "<p>Document for consideration on this issue: <a href=\"https://github.com/roc-lang/rfcs/pull/1\">https://github.com/roc-lang/rfcs/pull/1</a>. Feedback appreciated from everyone.</p>",
+        "id": 438500819,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715661966
+    },
+    {
+        "content": "<p>Wow... That's super thorough and impressive! <br>\nAs to your proposed solution of using opaque types. I think it is another example of the fact that opaque types kind of come in two forms \"types I wish to hide the implementation of\" and \"types I need the features of opaque types for (see some of the discussion on Json decoding and enum types)\". <br>\nI do think the current setup is unergonomic for those second class of types because I generally don't actually want them to be \"opaque\" </p>\n<p>In my own codebase I tested out implementing <code>from</code> and <code>to</code> abilities for opaque types that I wnated to be less opaque. eg: <code>when from myopaqueType  is</code></p>\n<p>In summary. My only concern with solution 1 is reduced ergonomics, but I think that is already an issue that needs to be investigated.</p>",
+        "id": 438670162,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1715725549
+    },
+    {
+        "content": "<p>Thanks for the feedback Eli!</p>",
+        "id": 438671131,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1715725946
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"651372\">Eli Dowling</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Alias.20analysis.20error.20across.20modules/near/438670162\">said</a>:</p>\n<blockquote>\n<p>I think it is another example of the fact that opaque types kind of come in two forms \"types I wish to hide the implementation of\" and \"types I need the features of opaque types for (see some of the discussion on Json decoding and enum types)\". <br>\nI do think the current setup is unergonomic for those second class of types because I generally don't actually want them to be \"opaque\"</p>\n</blockquote>\n<p>I know this has come up before, but personally I really hope we can avoid introducing \"nominal but not opaque types\" to the language</p>",
+        "id": 439660641,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716232062
+    },
+    {
+        "content": "<p>that said, I just realized that this solution to the problem will create a different (much smaller) problem: I think it's important for multiple reasons that we disallow sending opaque types across the host boundary (in either direction), and this will mean that it would be disallowed to send recursive types to or from the host</p>",
+        "id": 439660851,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716232139
+    },
+    {
+        "content": "<p>obviously it would be ideal to not have that limitation somehow, but like I said, I really would prefer not to introduce the language feature of nominal types that are not opaque <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 439661005,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716232196
+    },
+    {
+        "content": "<p>so we tried the solution of making task an opaque type, but that does not (yet) work either. This code</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">interface</span><span class=\"w\"> </span><span class=\"kt\">Task</span>\n<span class=\"w\">    </span><span class=\"nv\">exposes</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">Task</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">stdoutLine</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">Op</span><span class=\"p\">]</span>\n<span class=\"w\">    </span><span class=\"nv\">imports</span><span class=\"w\"> </span><span class=\"p\">[]</span>\n\n<span class=\"kt\">Op</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">    </span><span class=\"kt\">StdoutLine</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Box</span><span class=\"w\"> </span><span class=\"p\">({}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Op</span><span class=\"p\">)),</span>\n<span class=\"w\">    </span><span class=\"kt\">StdinLine</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Box</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Op</span><span class=\"p\">)),</span>\n<span class=\"w\">    </span><span class=\"kt\">None</span><span class=\"p\">,</span>\n<span class=\"p\">]</span>\n\n<span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"nv\">ok</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"nf\">:=</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Result</span><span class=\"w\"> </span><span class=\"nv\">ok</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Op</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Op</span>\n\n<span class=\"nv\">stdoutLine</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"nv\">a</span>\n<span class=\"nv\">stdoutLine</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">helper</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">((</span><span class=\"kt\">Result</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"nv\">a</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Op</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Op</span>\n<span class=\"w\">    </span><span class=\"nv\">helper</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">        </span><span class=\"nf\">\\</span><span class=\"nv\">fromResult</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">StdoutLine</span><span class=\"w\"> </span><span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Box</span><span class=\"nf\">.</span><span class=\"nv\">box</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nv\">fromResult</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"p\">{}))</span>\n\n<span class=\"w\">    </span><span class=\"err\">@</span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"nv\">helper</span>\n</code></pre></div>\n<p>gives this error with <code>cargo run -- check examples/platform-switching/rust-platform/Task.roc</code></p>\n<div class=\"codehilite\"><pre><span></span><code>── CIRCULAR TYPE in examples/platform-switching/rust-platform/Task.roc ─────────\n\nI&#39;m inferring a weird self-referential type for stdoutLine:\n\n14│&gt;  stdoutLine = \\line -&gt;\n15│&gt;      helper: ((Result {} a) -&gt; Op) -&gt; Op\n16│&gt;      helper =\n17│&gt;          # crash &quot;foo&quot;\n18│&gt;          \\fromResult -&gt; StdoutLine line (Box.box \\{} -&gt; fromResult (Ok {}))\n19│&gt;\n20│&gt;      @Task helper\n\nHere is my best effort at writing down the type. You will see ∞ for\nparts of the type that repeat something already printed out\ninfinitely.\n\n    Str -&gt; Task {} a\n</code></pre></div>\n<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> this is no longer a module crossing problem now, is what we observe here entirely different from the original problem we're trying to solve here?</p>",
+        "id": 439665235,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1716233583
+    },
+    {
+        "content": "<p>yes that seems different</p>",
+        "id": 439668215,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716234767
+    },
+    {
+        "content": "<p>try making Op opaque too</p>",
+        "id": 439668294,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716234799
+    },
+    {
+        "content": "<p>right, we tried that next </p>\n<div class=\"codehilite\"><pre><span></span><code>Op := [\n    StdoutLine ({} -&gt; Op),\n    StdinLine ({} -&gt; Op),\n    None,\n]\n\nTask := ({} -&gt; Op) -&gt; Op\n\nstdoutLine : Task\nstdoutLine =\n    helper: ({} -&gt; Op) -&gt; Op\n    helper =\n        \\fromResult -&gt; @Op (StdoutLine ((\\{} -&gt; fromResult {})))\n\n    @Task helper\n</code></pre></div>",
+        "id": 439668600,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1716234927
+    },
+    {
+        "content": "<p>gives</p>\n<div class=\"codehilite\"><pre><span></span><code>── CIRCULAR TYPE in examples/platform-switching/rust-platform/Task.roc ─────────\n\nI&#39;m inferring a weird self-referential type for stdoutLine:\n\n14│  stdoutLine =\n     ^^^^^^^^^^\n\nHere is my best effort at writing down the type. You will see ∞ for\nparts of the type that repeat something already printed out\ninfinitely.\n\n    Task\n</code></pre></div>",
+        "id": 439668698,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1716234945
+    },
+    {
+        "content": "<p>hm</p>",
+        "id": 439668733,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716234950
+    },
+    {
+        "content": "<p>will take a look in a minute</p>",
+        "id": 439668787,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716234958
+    },
+    {
+        "content": "<p>this is some kind of bug in the occurs checking</p>",
+        "id": 439669864,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716235203
+    },
+    {
+        "content": "<p>if you remove the annotation on stdoutLine it works for me</p>",
+        "id": 439669982,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716235239
+    },
+    {
+        "content": "<p>well, it typechecks at least</p>",
+        "id": 439670011,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716235247
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>interface B exposes [main] imports []\n\n# Task.roc\nTask v op := (v -&gt; op) -&gt; op\n\nawait : Task a op, (a -&gt; Task b op) -&gt; Task b op\nawait = \\@Task fromResult, next -&gt;\n    @Task \\continue -&gt;\n        fromResult \\result -&gt;\n            @Task inner = next result\n            inner continue\n\n# StdinEffect.roc\nOpIn a b : [\n    StdinLine (Str -&gt; OpIn a b),\n    Done a,\n]b\n\n# Stdin.roc\nlineIn : Task Str (OpIn * *)\nlineIn = @Task \\toNext -&gt; StdinLine \\s -&gt; (toNext s)\n\n# StdoutEffect.roc\nOpOut a b : [\n    StdoutLine Str ({} -&gt; OpOut a b),\n    Done a,\n]b\n\n# Stdout.roc\nlineOut : Str -&gt; Task {} (OpOut * *)\nlineOut = \\s -&gt; @Task \\toNext -&gt; StdoutLine s \\{} -&gt; (toNext {})\n\n# Platform\n# really, we want a syntax like [Done a](OpIn a)(OpOut a) here\nOp a : [\n    StdinLine (Str -&gt; Op a),\n    StdoutLine Str ({} -&gt; Op a),\n    Done a,\n]\n\nmain : Task {} (Op *)\nmain =\n    lineIn\n    |&gt; await \\s -&gt; lineOut s\n</code></pre></div>",
+        "id": 439671403,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716235776
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>interface B exposes [stdoutLine] imports []\n\nOp := [\n    StdinLine (Str -&gt; Op),\n    StdoutLine Str ({} -&gt; Op),\n    Done,\n]\n\nTask := ({} -&gt; Op) -&gt; Op\n\nstdoutLine =\n    @Task \\fromResult -&gt; @Op (StdoutLine &quot;foo&quot; (\\{} -&gt; fromResult {}))\n</code></pre></div>",
+        "id": 439671717,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716235912
+    },
+    {
+        "content": "<p>Okay, I suggest as a path forward here:<br>\n-Remove lambda sets in favor of erasure, at least for the time being<br>\n-Remove anonymous recursive types as described above, or at least severely restrict them</p>",
+        "id": 439721904,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716260590
+    },
+    {
+        "content": "<p>I know this has various downsides including runtime performance. But lambda sets can be added later, in a separate pass. This will temporarily push Roc further away from its end goals, but I think the goal of making a fast compile-time and runtime language has put the implementation in a position where it’s difficult to recover from these issues we discover only years later. A functional compiler is more useful than a fast one that has bugs. And, without lambda sets or anonymous recursive types, the implementation should be much more approachable to contributors.</p>",
+        "id": 439722258,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716260781
+    },
+    {
+        "content": "<p>but, the erased version also does not work with current examples. Do you know what the problem is there?</p>",
+        "id": 439798505,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1716291847
+    },
+    {
+        "content": "<p>Almost certainly the problem of recursive types across modules</p>",
+        "id": 439818529,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716298399
+    },
+    {
+        "content": "<p>I was just rereading the doc and I wondered - would the fixpoint fixing work if we delayed it until after typechecking was done? e.g. if we did it during mono, when we’re already revisiting modules</p>",
+        "id": 439851153,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716307492
+    },
+    {
+        "content": "<p>You would still need to break module isolation during type inference</p>",
+        "id": 439856883,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716309461
+    },
+    {
+        "content": "<p>because you need to know \"what types, across all modules, are in the same strongly-connected components\"</p>",
+        "id": 439856971,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716309483
+    },
+    {
+        "content": "<p>gotcha</p>",
+        "id": 439857672,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716309721
+    },
+    {
+        "content": "<p>I really think the goal here should be to simplify, at the cost of the performance, until this works again, and then layer on optimizations as needed</p>",
+        "id": 439857949,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716309788
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> is breaking that isolation required during type inference, or only in later steps, assuming these steps</p>\n<ol>\n<li>type inference</li>\n<li>type mono</li>\n<li>lambda set inference (using graph SSC)</li>\n<li>lambda set mono</li>\n</ol>\n<p>where is the isolation breaking actually required? Intuitively it's only at step 3 that we need it, given the restriction on recursive types that was proposed earlier in this thread</p>",
+        "id": 439862212,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1716311089
+    },
+    {
+        "content": "<p>yes, if recursive types must be nominal, then</p>\n<ol>\n<li>type inference over Can AST. This can happen with module isolation.</li>\n<li>type specialization. Let's call this IR MonoTy. All code is combined into one program; there is no longer a module concept in the same way there is no module concept after the Mono IR today.</li>\n<li>lambda set inference over MonoTy</li>\n<li>lambda set specialization over MonoTy, let's say the new IR is called MonoLam</li>\n</ol>",
+        "id": 439863545,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716311501
+    },
+    {
+        "content": "<p>MonoLam = Mono IR today</p>",
+        "id": 439863658,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716311530
+    },
+    {
+        "content": "<p>can we not perform step 2 just in subs only (while traversing Can, but not materializing a whole separate AST)?</p>",
+        "id": 439863876,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1716311609
+    },
+    {
+        "content": "<p>there is probably a way, but i don't see it quite yet. one complication is abilities. if you do not materialize the call to a specific lambda in the AST you must keep the call information elsewhere. so you would need a lookaside table that associates a type specialization ID + can AST node ID =&gt; ability specialization</p>",
+        "id": 439865827,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716312325
+    },
+    {
+        "content": "<p>this could be an optimization. i suspect it will be easier to implement and debug if it's a separate AST.</p>",
+        "id": 439865909,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716312358
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Alias.20analysis.20error.20across.20modules/near/439857949\">said</a>:</p>\n<blockquote>\n<p>I really think the goal here should be to simplify, at the cost of the performance, until this works again, and then layer on optimizations as needed</p>\n</blockquote>\n<p>ok so how would we go about doing this? I remember we'd talked about this before but I don't remember the specific steps it would take <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 439913488,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716328612
+    },
+    {
+        "content": "<p>something to do with marking closures as erased maybe?</p>",
+        "id": 439913602,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716328652
+    },
+    {
+        "content": "<ol>\n<li>Replace lambda sets with type erased closures. This is already implemented for the most part. The missing pieces are reference counting and abilities.</li>\n<li>In parallel, the restriction of recursive types to be nominal can be put in place. Folkert and I discussed how to do this. The <code>RecursiveType</code> constructor needs to be adjusted to hold a symbol naming the recursive type. During can, construct recursive types from opaque type definitions as needed. Two recursive types are equal only if their RecursiveType constructors are equal in symbol name, and the arguments to their opaque type unify.<br>\nI don't have the bandwidth to implement this myself but I'm happy to provide suggestions or mentorship as needed</li>\n</ol>",
+        "id": 439922940,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716332223
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Alias.20analysis.20error.20across.20modules/near/439922940\">said</a>:</p>\n<blockquote>\n<ol>\n<li>Replace lambda sets with type erased closures. This is already implemented for the most part. The missing pieces are reference counting and abilities.</li>\n</ol>\n</blockquote>\n<p>ok cool! So where should we look for implementing type-erased closures?</p>",
+        "id": 440526487,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716562727
+    },
+    {
+        "content": "<p>more specifically, where does the refcounting need to happen? Could we reuse some logic from <code>Box</code> maybe?</p>",
+        "id": 440526844,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716562836
+    },
+    {
+        "content": "<p>also, what needs to happen with regards to abilities? Normally functions don't have any abilities, but I'm assuming there's some nuance I'm missing there <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 440526929,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716562867
+    },
+    {
+        "content": "<p>whe need to generate a function that decrements all captured values I think? and make that accessible such that a <code>dec someClosure</code> calls the corresponding function</p>",
+        "id": 440550972,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1716572258
+    },
+    {
+        "content": "<p>right?</p>",
+        "id": 440550977,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1716572260
+    },
+    {
+        "content": "<p>Like with my work for lists, can we make this lazy? Does that make sense here.</p>\n<p>As in just refcount the erased closure instead of every value in the closure? I guess it maybe makes less sense here than in lists.</p>\n<p>Fundamentally, for wrapped types, I think only refcounting the wrapper is a nice property.</p>",
+        "id": 440551519,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716572502
+    },
+    {
+        "content": "<p>Of course when loading values from the wrapper, you would need to deal with refcounts</p>",
+        "id": 440551552,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716572518
+    },
+    {
+        "content": "<p>yes sure but the generation work is mostly the same (but only runs when the rc goes from 1 to 0)</p>",
+        "id": 440551664,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1716572556
+    },
+    {
+        "content": "<p>Yep</p>",
+        "id": 440551882,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716572648
+    },
+    {
+        "content": "<p>actually, nothing needs to happen with abilities so you can disregard that</p>",
+        "id": 440556318,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716574404
+    },
+    {
+        "content": "<p>ok cool!</p>",
+        "id": 440556814,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716574583
+    },
+    {
+        "content": "<p>I wonder - is this a situation where we can split up the work by having someone knowledgeable about the low-level parts make a starting point commit like \"ok now the refcounting happens in this one place, but it also needs to happen in these N other similar situations that need to be considered individually\" and someone else can pick up that part?</p>",
+        "id": 440556913,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716574633
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> what is the memory layout supposed to be? where does that function pointer go?</p>",
+        "id": 440557006,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1716574680
+    },
+    {
+        "content": "<p>one sec, im putting up the document i wrote about this before</p>",
+        "id": 440557364,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716574818
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/rfcs/pull/4\">https://github.com/roc-lang/rfcs/pull/4</a></p>",
+        "id": 440557853,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575044
+    },
+    {
+        "content": "<p>the structure of the erased closure is</p>\n<div class=\"codehilite\"><pre><span></span><code>struct erased {\n  void* value;\n  void (*refcounter)(void*);  // NULL if value needs no refcounting\n  void* callee;  // NULL if the erased value is not a closure\n  struct ability_dictionary* abilities;  // Discussed below\n};\n</code></pre></div>",
+        "id": 440557886,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575065
+    },
+    {
+        "content": "<p>ability_dictionary is NULL for closures</p>",
+        "id": 440557909,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575076
+    },
+    {
+        "content": "<p><code>callee</code> is the function target`</p>",
+        "id": 440557918,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575081
+    },
+    {
+        "content": "<p><code>value</code> are the captures (NULL if no captures)</p>",
+        "id": 440557940,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575092
+    },
+    {
+        "content": "<p><code>refcounter</code> is a pointer to the refcounting function for the captures. the name needs to be generated/looked up whenever the erased closure is constructed.</p>",
+        "id": 440558048,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575142
+    },
+    {
+        "content": "<p>i suppose it should really be <code>void (*refcounter)(int, void*)</code> where the first parameter indicates inc or dec</p>",
+        "id": 440558208,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575201
+    },
+    {
+        "content": "<p>or split them out into separate pointers</p>",
+        "id": 440558227,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575210
+    },
+    {
+        "content": "<p>when refcounting happens for captures is the same as when refcounting happens today. you just need to lookup the refcounting function differently because it's not statically known from the caller's side</p>",
+        "id": 440558356,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575280
+    },
+    {
+        "content": "<p>fyi this memory layout is already implemented</p>",
+        "id": 440558454,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575314
+    },
+    {
+        "content": "<p>but the refcounting function is not populated</p>",
+        "id": 440558469,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575322
+    },
+    {
+        "content": "<p>nice! do you know where that code lives at the moment?</p>",
+        "id": 440558811,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716575465
+    },
+    {
+        "content": "<p>like where the refcounting fn needs to go</p>",
+        "id": 440558823,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716575470
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/blob/25f230fda81ef57387dc73cc315a15b5e383752b/crates/compiler/gen_llvm/src/llvm/erased.rs#L61-L89\">https://github.com/roc-lang/roc/blob/25f230fda81ef57387dc73cc315a15b5e383752b/crates/compiler/gen_llvm/src/llvm/erased.rs#L61-L89</a></p>",
+        "id": 440559145,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575629
+    },
+    {
+        "content": "<p>oh, well the actual implementation already refernces refcounter_inc and refcounter_dec, so it is two separate functions</p>\n<p>/// Erased is laid out like<br>\n///<br>\n/// <code>text\n/// struct Erased {\n///     value: void*,\n///     callee: void*,\n///     refcounter_inc: (void* -&gt; void) *,\n///     refcounter_dec: (void* -&gt; void) *,\n/// }\n/// </code></p>",
+        "id": 440559261,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575678
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/blob/25f230fda81ef57387dc73cc315a15b5e383752b/crates/compiler/gen_llvm/src/llvm/erased.rs#L33\">https://github.com/roc-lang/roc/blob/25f230fda81ef57387dc73cc315a15b5e383752b/crates/compiler/gen_llvm/src/llvm/erased.rs#L33</a></p>",
+        "id": 440559304,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1716575699
+    }
+]

@@ -1,0 +1,302 @@
+[
+    {
+        "content": "<p>There's currently a CI job that checks for any increase in the number of panic/unwrap/expect calls that I keep tripping over.</p>\n<p>I'm concerned that this CI check is encouraging unhelpful behavior.</p>\n<p>In the most recent instance, I added the following line:</p>\n<div class=\"codehilite\"><pre><span></span><code>let last = fields.pop().expect(&quot;must have at least one tuple field&quot;);\n</code></pre></div>\n<p>Some things to note:</p>\n<ul>\n<li>Right now, the property that the list must be non-empty is a _local_ property of the function. <code>fields</code> is parsed in the same place, so we fully control what it contains.</li>\n<li>In this particular <code>if</code> branch of the function, we're guaranteed to have parsed at least one element already. Furthermore, a <code>pop</code> here is always followed by a <code>push</code> immediately after.</li>\n<li>I could in principle separate out this <code>first</code> element in order to guarantee that we have at least one item, but that would make the code much more complicated (needlessly, IMO).</li>\n</ul>\n<p>There are a few things I could do at this juncture:</p>\n<ul>\n<li>Ask for an exception</li>\n<li>Or, change the code to copy <code>fields[fields.len() - 1]</code> and then <code>pop()</code> - which will have the same effect (including preserving the panic!)</li>\n<li>Use the recommended <code>internal_error!()</code> macros - e.g. <code>let Some(last) = fields.pop() else { internal_error!(...) };</code> (or similar)</li>\n</ul>\n<p>My main concern is that there's so much code out there that's implicitly doing bounds checks + panics on arrays (i.e. effectively that second option), that this whole effort is a boondoggle. Rust doesn't have any good tools to control that, unlike (for example) <code>wuffs</code>. (which I would not want to write a full compiler in!)</p>\n<p>I have two concerns with <code>internal_error!()</code>:</p>\n<ul>\n<li>It's non-standard, and in this case, it adds extra verbosity.</li>\n<li>It hurts testing and test-case-minimization since by default a tripped assertion brings down the whole process, rather than the test framework being able to catch the panic and keep going.</li>\n</ul>\n<p>I would like to propose:</p>\n<ul>\n<li>Allow <code>expect()</code> and <code>panic!()</code> (but only if the panic has an explanatory string), in order to force developers to actually explain themselves and make tracking down problems easier</li>\n<li>If desired, to get the same behavior as <code>internal_error</code> in the main compiler binary, compile that with <code>panic=abort</code> and install a global panic handler that prints the same message and exits.</li>\n<li>Eventually, remove all <code>internal_error!()</code> calls and replace them with <code>panic!()</code>s</li>\n</ul>\n<p>Thoughts?</p>",
+        "id": 490686571,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735053330
+    },
+    {
+        "content": "<p>Does a global panic handle work with <code>panic=abort</code>?</p>",
+        "id": 490708887,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735069455
+    },
+    {
+        "content": "<p>Also, I don't understand why <code>internal_error!</code> is any worse than <code>panic!</code> for testing. Doesn't it just call <code>panic!</code> under the hood? If not, couldn't it?</p>",
+        "id": 490708976,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735069528
+    },
+    {
+        "content": "<blockquote>\n<p>Does a global panic handle work with <code>panic=abort</code>?</p>\n</blockquote>\n<p>Yes, this works fine (we ship this way at work)</p>",
+        "id": 490709020,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735069562
+    },
+    {
+        "content": "<p>I do think there are a lot of errors that should be using <code>user_error!</code> and eventually have nice error messages wired through the compiler as a whole.</p>",
+        "id": 490709068,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735069593
+    },
+    {
+        "content": "<p>I think it is only a bit more verbose than expect. There is <code>.unwrap_or(|| internal_error!(...))</code> instead of <code>.expect(...)</code></p>",
+        "id": 490709157,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735069683
+    },
+    {
+        "content": "<blockquote>\n<p>Doesn't it just call <code>panic!</code> under the hood? If not, couldn't it?</p>\n</blockquote>\n<p>Yes and no. It used to always be an explicit call to <code>exit()</code>. Now if you call <code>set_panic_not_exit(true);</code> it'll panic instead of exiting. Which is... fine, except it's really easy to forget to do that in tests - in which case you end up with no stack trace (and no more tests run, and no printed output).</p>",
+        "id": 490709316,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735069810
+    },
+    {
+        "content": "<blockquote>\n<p>There is <code>.unwrap_or(|| internal_error!(...))</code></p>\n</blockquote>\n<p>True, that's not terrible on the verbosity front.</p>",
+        "id": 490709346,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735069850
+    },
+    {
+        "content": "<p>I still maintain that no code that's reachable from tests should explicitly be calling <code>exit</code> or <code>abort</code></p>",
+        "id": 490709377,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735069889
+    },
+    {
+        "content": "<p>100% agree on eventually converting things to nice error messages when appropriate</p>",
+        "id": 490709458,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735069954
+    },
+    {
+        "content": "<p>The original goal here was to try and record more intent. If hit, is it:</p>\n<ol>\n<li>A user error that just doesn't have a nice error message yet.</li>\n<li>Is it something we thought was impossible and definitely a bug if hit.</li>\n</ol>",
+        "id": 490709480,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735069979
+    },
+    {
+        "content": "<p>But the compiler has progressed a lot since it was added. Maybe it is less relevant nowadays</p>",
+        "id": 490709513,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735070009
+    },
+    {
+        "content": "<p>Yep, and my intent would be for <code>expect</code> / <code>panic</code> / etc to _only_ be used for (2)</p>",
+        "id": 490709597,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735070056
+    },
+    {
+        "content": "<p>a problem is that if we have that as a convention, it's really easy for new contributors to see a classic Rust <code>expect</code>/<code>panic</code>/etc and not know this</p>",
+        "id": 490709680,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735070148
+    },
+    {
+        "content": "<p>separately, I've actually been trying out a \"do not panic, ever, even for things that seem unreachable; instead, push a <code>Problem</code> onto a vec to be reported later, and recover in whatever graceful way I can find\" (e.g. returning some node that will code gen to a crash)</p>",
+        "id": 490709803,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735070242
+    },
+    {
+        "content": "<p>and it's a bit more work, but it gives me way more peace of mind that the compiler won't actually crash even if there's a bug I didn't anticipate <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 490709869,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735070285
+    },
+    {
+        "content": "<p>Hmm, in my experience Rust heavily encourages use of <code>Result</code> for category 1. I don't think rust developers who are new to Roc's codebase will make that particular mistake</p>",
+        "id": 490709872,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735070287
+    },
+    {
+        "content": "<p>maybe, but in practice our current code base has been doing that, and we definitely have a problem with end users encountering panics <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 490709915,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735070334
+    },
+    {
+        "content": "<p>The parser &amp; formatter is pretty good about only panicking for case (2), and we're driving that to zero pretty fast, with fuzzing <span aria-label=\"stuck out tongue\" class=\"emoji emoji-1f61b\" role=\"img\" title=\"stuck out tongue\">:stuck_out_tongue:</span></p>",
+        "id": 490709975,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735070389
+    },
+    {
+        "content": "<blockquote>\n<p>it gives me way more peace of mind that the compiler won't actually crash even if there's a bug I didn't anticipate</p>\n</blockquote>\n<p>True, but then it also makes the code more complicated (possibly introducing/hiding bugs!)</p>\n<p>Also keep in mind you're not going to get away from things like implicit bounds checks on arrays</p>",
+        "id": 490710071,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735070423
+    },
+    {
+        "content": "<p>sure</p>",
+        "id": 490710081,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735070432
+    },
+    {
+        "content": "<p>IMO \"panic-free\" is unrealistic without some fancier language features (e.g. dependent-types, in-language-proofs, etc)</p>",
+        "id": 490710120,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735070457
+    },
+    {
+        "content": "<p>well we do have a good bit of like \"unwrap or panic\" in the <code>soa</code> crate</p>",
+        "id": 490710143,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735070466
+    },
+    {
+        "content": "<p>anyway, I think the main thing is to make it work reliably; we can always go back and adjust styles later if desired!</p>",
+        "id": 490710233,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735070535
+    },
+    {
+        "content": "<p>I'm not sure being persnickety about introducing new calls to panic/unwrap/expect actually helps with reliability in practice</p>",
+        "id": 490710290,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735070592
+    },
+    {
+        "content": "<p>It just squeezes the problem elsewhere, often into an area that will be harder to understand/inspect</p>",
+        "id": 490710323,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735070622
+    },
+    {
+        "content": "<p>What would have been a compiler crash will turn into very hard-to-diagnose miscompilations, etc.</p>",
+        "id": 490710399,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735070654
+    },
+    {
+        "content": "<p>yeah, I guess given that I'm ok with removing the ci check, but I'd like to hear from others (some of whom won't be around in the next week or so due to holidays!) before we actually make the change</p>",
+        "id": 490715013,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735075033
+    },
+    {
+        "content": "<p>Personally, I like the enforcement, otherwise, we should just not have <code>internal_error!</code>. People won't learn to use it unless they get the CI error and we tell them to change it to <code>.unwrap_or(|| internal_error!(...))</code></p>",
+        "id": 490716425,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735076419
+    },
+    {
+        "content": "<p>Also, I think if we change the CI job, we should still ban unwrap.</p>",
+        "id": 490716595,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735076624
+    },
+    {
+        "content": "<p>Agreed on continuing to ban unwrap</p>",
+        "id": 490722284,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735082436
+    },
+    {
+        "content": "<blockquote>\n<p>otherwise, we should just not have <code>internal_error!</code></p>\n</blockquote>\n<p>I actually think that would be a good change</p>",
+        "id": 490722297,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735082462
+    },
+    {
+        "content": "<p>Internal errors are \"any panic that's not a user_error\"</p>",
+        "id": 490722314,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1735082487
+    },
+    {
+        "content": "<p>Yeah</p>",
+        "id": 490730975,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735091134
+    },
+    {
+        "content": "<blockquote>\n<p>Internal errors are \"any panic that's not a user_error\"</p>\n</blockquote>\n<p>Yeah, I think removing <code>internal_error!</code>, banning unwrap, and catching all panics so we can add on a message to file a bug sounds reasonable.</p>",
+        "id": 490731069,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735091231
+    },
+    {
+        "content": "<p>Still long term pushing towards less panics and more proper error logging</p>",
+        "id": 490731094,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735091263
+    },
+    {
+        "content": "<p><code>user_error!</code> only comes up like 10 times in the codebase. So clearly we aren't using it to label error that need to be upgraded to proper <code>Problems</code></p>",
+        "id": 490731182,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735091331
+    },
+    {
+        "content": "<p>And if we only have internal errors, there really is no gain over <code>.expect()</code></p>",
+        "id": 490731199,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735091353
+    },
+    {
+        "content": "<p>So I guess I'm for this change</p>",
+        "id": 490731207,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735091362
+    },
+    {
+        "content": "<p>The main reason why this check was introduced is because panics crash the repl and then all state is lost, which is annoying for the user.  If we want to support e.g. data science workflows that use the repl through a notebook (like Jupyter) this potential for loss of state would be a significant drawback.</p>",
+        "id": 490992055,
+        "sender_full_name": "Anton",
+        "timestamp": 1735306060
+    },
+    {
+        "content": "<p>A wrong result or a message that the compiler crashed isn’t much better, I think. In either case we still lose the intermediate state. And they are all bugs that must be resolved.</p>",
+        "id": 491009611,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735318002
+    },
+    {
+        "content": "<p>Hmm, couldn't we keep our previous state if the <a href=\"https://github.com/roc-lang/roc/blob/3c49462fdd4f50c9d476d6e3dd7d59abc1dfa436/crates/repl_cli/src/lib.rs#L88\">step function here</a> never panicked?</p>",
+        "id": 491010319,
+        "sender_full_name": "Anton",
+        "timestamp": 1735318550
+    },
+    {
+        "content": "<p>You’re probably right-but if that’s the case, that problem is much easier to solve right? Can that be wrapped in catch_unwind?</p>",
+        "id": 491011333,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735319294
+    },
+    {
+        "content": "<p>I hadn't thought of that, that could work, I'll leave some time for others to weigh in</p>",
+        "id": 491011705,
+        "sender_full_name": "Anton",
+        "timestamp": 1735319567
+    },
+    {
+        "content": "<p>patch to catch panics in repl session and print backtrace, request bug report without ending repl session: <a href=\"https://github.com/roc-lang/roc/pull/7459\">https://github.com/roc-lang/roc/pull/7459</a></p>",
+        "id": 491777941,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735920536
+    },
+    {
+        "content": "<p>i think we should remove the panic checker with this, since it solves the main issue</p>",
+        "id": 491781297,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735922191
+    },
+    {
+        "content": "<blockquote>\n<p>i think we should remove the panic checker with this, since it solves the main issue</p>\n</blockquote>\n<p>Maybe we should alter it, when people just use <code>unwrap</code> the error message is terrible for the user</p>",
+        "id": 491781942,
+        "sender_full_name": "Anton",
+        "timestamp": 1735922523
+    },
+    {
+        "content": "<p>But we can remove it and re-introduce another check in the future, the panic checker has been annoying people</p>",
+        "id": 491782853,
+        "sender_full_name": "Anton",
+        "timestamp": 1735923035
+    },
+    {
+        "content": "<p>Yeah, I like the idea of keeping an unwrap checker at a minimum</p>",
+        "id": 491805787,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735934581
+    },
+    {
+        "content": "<p>That and eventually removing internal_error! And instead adding the info via the catch unwind</p>",
+        "id": 491805861,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735934628
+    }
+]

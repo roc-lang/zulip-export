@@ -1,0 +1,260 @@
+[
+    {
+        "content": "<p>I've been experimenting with a new formatter on the side: <a href=\"https://github.com/roc-lang/roc/pull/7011\">https://github.com/roc-lang/roc/pull/7011</a></p>\n<p>Not quite ready for prime time, but far enough along that it's worth getting some feedback on.</p>\n<p>Lot's of niceties from the old parser aren't implemented yet, so beware!</p>\n<p>TL;DR:</p>\n<ul>\n<li>Instead of formatting in (essentially) one pass, first build up an intermediate tree</li>\n<li>Encode this tree in such a way that we can operate on it via linear traversals, in a way that (I hope, because I haven't benchmarked yet) is substantially faster than pointer-chasing</li>\n<li>This allows us to do things like merge lines together and reduce unnecessary vertical space in cases where it results in acceptable line widths</li>\n<li>It should also be easier to maintain, since it avoids the headache of having to separately implement <code>is_multiline</code> and <code>format_with_options</code> and keep them in sync.</li>\n</ul>\n<p>At this point, I'd be interested in having some discussion around:</p>\n<ul>\n<li>What line \"width\" limits might be best?</li>\n<li>Is it better to measure visual line length (i.e. not including indents), or try to keep to a particular column limit (i.e. including indents)?</li>\n<li>Are there key cases where we don't ever want to omit newlines?</li>\n</ul>",
+        "id": 463581377,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724126258
+    },
+    {
+        "content": "<blockquote>\n<p>Are there key cases where we don't ever want to omit newlines?</p>\n</blockquote>\n<p>Do we currently get rid of all newlines and introduce our own?</p>",
+        "id": 463630836,
+        "sender_full_name": "Anton",
+        "timestamp": 1724142812
+    },
+    {
+        "content": "<p>In most current situations, we honor the original user newlines. As a motivating example, here's something that's \"stable\" under the current formatter (i.e. it doesn't change when formatting):</p>\n<div class=\"codehilite\"><pre><span></span><code>when b is\n    1\n    | 2\n    | 3 -&gt;\n        4\n\n    5 | 6 | 7 -&gt;\n        8\n\n    9\n    | 10 -&gt; 11\n\n    12 | 13 -&gt;\n        when c is\n            14 | 15 -&gt; 16\n            17\n            | 18 -&gt; 19\n\n    20 -&gt; 21\n</code></pre></div>\n<p>And here's what the new formatter gives:</p>\n<div class=\"codehilite\"><pre><span></span><code>when b is\n    1 | 2 | 3 -&gt; 4\n    5 | 6 | 7 -&gt; 8\n    9 | 10 -&gt; 11\n    12 | 13 -&gt;\n        when c is\n            14 | 15 -&gt; 16\n            17 | 18 -&gt; 19\n    20 -&gt; 21\n</code></pre></div>",
+        "id": 463895598,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724198388
+    },
+    {
+        "content": "<p>So much neater as long as we eventually line wrap</p>",
+        "id": 463896202,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724198506
+    },
+    {
+        "content": "<p>Cause sometime 1 match per line is a lot cleaner/clearer</p>",
+        "id": 463896349,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724198529
+    },
+    {
+        "content": "<p>We do eventually line wrap. Here's what happens when I add a bunch of long numbers:</p>\n<div class=\"codehilite\"><pre><span></span><code>when b is\n    1\n    | 2\n    | 3\n    | 123412341234123412341234\n    | 123412341234\n    | 123412341234\n    | 12341234123412\n    | 123412341234 -&gt; 4\n    5 | 6 | 7 -&gt; 8\n    9 | 10 -&gt; 11\n    12 | 13 -&gt;\n        when c is\n            14 | 15 -&gt; 16\n            17 | 18 -&gt; 19\n    20 -&gt; 21\n</code></pre></div>",
+        "id": 463896884,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724198658
+    },
+    {
+        "content": "<p>Yeah, exactly that</p>",
+        "id": 463896985,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724198685
+    },
+    {
+        "content": "<p>Maybe in this case it'd be cleaner if the branch result was forced to be on its own line</p>",
+        "id": 463896991,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724198686
+    },
+    {
+        "content": "<p>(if the pattern is multiline, I mean)</p>",
+        "id": 463897033,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724198698
+    },
+    {
+        "content": "<p>Anyway - that's actually pretty simple to do in this system, if we want</p>",
+        "id": 463897077,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724198711
+    },
+    {
+        "content": "<p>Awesome!</p>",
+        "id": 463897107,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724198718
+    },
+    {
+        "content": "<p>I'm mostly thinking about our rust code around ast and symbol. We have a lot of really dense matches with various formatting that are of this style.</p>",
+        "id": 463897211,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724198748
+    },
+    {
+        "content": "<p>Personally, I really like that the current formatter honors line breaks. I remember loving that feature on elm-format after using prettier for years.</p>",
+        "id": 463898616,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1724199295
+    },
+    {
+        "content": "<p>There are definitely a few case in rust where we would prefer for the rust formatter to honor line breaks. I know of some lines in the roc code base that are just <code>//</code> with nothing else in order to force a line break.</p>",
+        "id": 463899406,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724199872
+    },
+    {
+        "content": "<p>So I get both sides for sure. I feel like this is one of the 99% of the time not honoring line breaks leads to more readable code, but that 1% can really hurt if the formatter doesn't honor line breaks</p>",
+        "id": 463899451,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1724199913
+    },
+    {
+        "content": "<p>One of the things I was planning on doing (but not implemented yet) is always honoring blank lines - i.e. if you've explicitly put one or more blank lines in your code, those will remain in the formatted output.</p>",
+        "id": 463900004,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724200319
+    },
+    {
+        "content": "<p>That's not exactly the same as \"should we honor the user's newlines\" - but it is an important subset.</p>",
+        "id": 463900071,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724200353
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"489294\">@Agus Zubiaga</span> I'd be interested to hear more about your experience. Do you have some examples you could share where the elm formatter honoring newlines was important to maintain the readability of the code?</p>",
+        "id": 463900119,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724200406
+    },
+    {
+        "content": "<p>It's not so much about the readability of a fully-written snippet of code, but about the experience for partially-written code. <br>\nI find it really annoying when I'm writing a function (or case branch, if, list, etc) that I know it's going to be long in a minute, but it currently isn't so when I save (to run tests or something) the formatter collapses it, and then I have to immediately introduce the line break again to continue writing it.</p>",
+        "id": 463902650,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1724201519
+    },
+    {
+        "content": "<p>That experience is so much better with a formatter that honors newlines because I naturally introduce them ahead of time when they're needed</p>",
+        "id": 463903096,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1724201623
+    },
+    {
+        "content": "<p>Cool, that's helpful</p>",
+        "id": 463912965,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724205546
+    },
+    {
+        "content": "<p>Spitballing for a moment...</p>",
+        "id": 463913018,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724205559
+    },
+    {
+        "content": "<p>There are two potentially significant pieces of information here: where the user put newlines, but also where the user may have intentionally _not_ put newlines. (e.g. the user may intentionally not put a line break after every element of a list, to make it more compact or to show some structure)</p>\n<p>Right now the current formatter will completely disregard any such decisions from the user.</p>",
+        "id": 463913956,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724205753
+    },
+    {
+        "content": "<p>What I'd like to find is what the right \"happy medium\" is in terms of what \"newline\" information we preserve and what we ignore.</p>",
+        "id": 463914089,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724205789
+    },
+    {
+        "content": "<p>(it could be that the best \"happy medium\" is pretty close to the current behavior - but for the sake of discussion I would like to open the possibilities a bit more)</p>",
+        "id": 463914227,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724205834
+    },
+    {
+        "content": "<p>Your point about code you're actively writing was particularly insightful</p>",
+        "id": 463914558,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724205913
+    },
+    {
+        "content": "<p>I've noticed before when coding and rust, but I might have just written a function definition with a pair of empty braces that I'm going to fill in later. But then I format the code and the formatter collapses the braces onto one line (with the function definition).</p>",
+        "id": 463914913,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724205992
+    },
+    {
+        "content": "<p>I do find that mildly annoying.</p>",
+        "id": 463914947,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724206001
+    },
+    {
+        "content": "<p>Is that the sort of thing you're thinking about?</p>",
+        "id": 463914964,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724206006
+    },
+    {
+        "content": "<p>(I have format-on-save turned on, and I decided to hit save after writing the braces)</p>",
+        "id": 463915138,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724206046
+    },
+    {
+        "content": "<p>I do like the behavior of collapsing empty braces onto the same line as the function definition when it's not in code I've just written, so it doesn't feel super clear cut.</p>",
+        "id": 463915853,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724206209
+    },
+    {
+        "content": "<p>What is the formatter had two different modes? The command line/batch mode where it does a more relaxed version of formatting preserves more of the user new lines, and an interactive mode that explicitly ignores most user new lines. The latter would explicitly require an additional input of \"where is the user's cursor \" - it would only format the surrounding definition. That can then be an explicitly triggered command: \"this code is really ugly, please clean it up for me.\"</p>",
+        "id": 463916639,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724206406
+    },
+    {
+        "content": "<p>I guess at this point this post should probably be in <a class=\"stream\" data-stream-id=\"304641\" href=\"/#narrow/stream/304641-ideas\">#ideas</a></p>",
+        "id": 463916696,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724206422
+    },
+    {
+        "content": "<p>personally my preference is:</p>\n<ul>\n<li>for automatically generated code, I want it to have some way to automatically have line breaks in reasonable places</li>\n<li>for handwritten code, I want to be able to control newlines</li>\n</ul>",
+        "id": 463918922,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1724207230
+    },
+    {
+        "content": "<p>my reason for the preference of full control over newlines in handwritten code is basically that there are some situations where I have several chunks of code that I want to treat newlines the same way (e.g. branches in a <code>when</code>), and when the formatter automatically forces one of them to look different from the others because it's slightly longer, that outcome is so bad that for me it outweighs all the upside of the feature <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 463919318,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1724207471
+    },
+    {
+        "content": "<p>the <a href=\"https://github.com/roc-lang/roc/issues/1\">#1</a> thing I like better about current <code>roc format</code> compared to <code>cargo fmt</code> is that it never enforces making code look worse like that</p>",
+        "id": 463919508,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1724207548
+    },
+    {
+        "content": "<p>that said, for generated code such as inferred types (e.g. in error messages or to display inferred types in editors), and also in a future replay debugging feature (where you can generate a .roc file which reproduces the steps you just took manually, so you can make customizable tests out of them) - I very much want it for those use cases!</p>",
+        "id": 463919962,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1724207792
+    },
+    {
+        "content": "<blockquote>\n<p>when the formatter automatically forces one of them to look different from the others because it's slightly longer</p>\n</blockquote>\n<p>This is something we could explicitly try to preserve - e.g. \"like things have similar formatting decisions\"</p>",
+        "id": 463920094,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724207874
+    },
+    {
+        "content": "<p>(that is, even if we disregard user newlines)</p>",
+        "id": 463920158,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724207892
+    },
+    {
+        "content": "<p>e.g. we decide whether branch results of a given <code>when</code> will be on the same line as the pattern or a new line, and we force that decision to be the same for all the branches of the <code>when</code>.</p>",
+        "id": 463920229,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724207943
+    },
+    {
+        "content": "<p>I'd be interested to try that!</p>",
+        "id": 463920240,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1724207954
+    },
+    {
+        "content": "<p>if we could succeed at making it feel helpful across the board, that would be awesome <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 463920282,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1724207986
+    },
+    {
+        "content": "<p>Ok, cool. So I think the right way to proceed here will be to (1) have as an initial goal that this new formatter must match the current formatter's output (potentially modulo very obscure changes), (2) prove out the improved flexibility/hackability and (hopefully) negligible perf cost, (3) get that reviewed/merged, and (4) then start experimenting with stricter formatting defaults.</p>",
+        "id": 463921084,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1724208399
+    }
+]

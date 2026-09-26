@@ -1,0 +1,188 @@
+[
+    {
+        "content": "<blockquote>\n<p>it looks like small string hashing today leads to an allocation, a copy, hashing, a free</p>\n</blockquote>\n<p>I'm not actually sure the best way to solve this. Obviously there are many, but the fact that anyone can implement the hashing ability actually makes this a bit complicated.</p>\n<p>I think that I would like to add a general: <code>Str.withUtf8BytesUnsafe: Str, (List U8 -&gt; out) -&gt; out</code>. This function would allow any roc users to access the bytes of a Str without an allocation. That said, it would have one huge caveat. If the <code>List U8</code> is still referenced after the inner lambda returns. The function will crash. It would crash with a longer message explaining why. I think this would lead to a function that in practice will only ever crash during development. It will be very easy to iron out any kinks.</p>\n<p>This could also return a result, but I think in practice the result isn't useful. If you are calling this function, you are doing so specifically for small string support. If you need small string support, you need this function to never fail.</p>\n<hr>\n<p>The big reason I think we need a more general function is that anyone can write a hasher. The hasher has control of its own internal state. As such, there is no safe way to pass a small string as a <code>List U8</code> to the hasher <code>addBytes</code> function. The implementation of that function could be:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">addBytes</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"err\">@</span><span class=\"kt\">MyHasher</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">lazyByteQueue</span><span class=\"w\"> </span><span class=\"p\">},</span><span class=\"w\"> </span><span class=\"nv\">bytes</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">     </span><span class=\"err\">@</span><span class=\"kt\">MyHasher</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">lazyByteQueue</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">queue</span><span class=\"nf\">.</span><span class=\"nv\">push</span><span class=\"w\"> </span><span class=\"kt\">LazyByteQueue</span><span class=\"w\"> </span><span class=\"nv\">bytes</span><span class=\"w\"> </span><span class=\"p\">}</span>\n</code></pre></div>\n<p>This would break any sort of guarantees around a small string that lives on the stack and temporarily is being referenced as a list. So hashing has no choice but to panic if someone were to write this hasher and it received a small string input.</p>\n<p>In practice, I think this function would rarely lead to crashes except during development. I believe this cause it is vary rare to only occasionally capture an input list in a function like this. As such, it is much more likely they either always capture or never capture. If they do occasionally capture, if any tests hit that workflow, the crash will be seen during development instead of release.</p>\n<hr>\n<p>What are peoples general thoughts on this? I think it is a useful enough tool that we should add it even with the potential crash. In the case of <a class=\"stream-topic\" data-stream-id=\"231634\" href=\"/#narrow/channel/231634-beginners/topic/performance.20question\">#beginners &gt; performance question</a> about 19% of the execution time was spent in allocating, copying, and freeing single character lists for hashing strings. About 2% of the time was spent in the actual hashing.</p>\n<p>Any other ideas? My next best solution is adding a specific special case for <code>List U8</code> that allows it to have small list optimization. It would use the one free bit on the length.</p>",
+        "id": 477970906,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729492392
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> do you have any thoughts on this?</p>",
+        "id": 478563516,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729709847
+    },
+    {
+        "content": "<p>I think there's some nicer way to do it with <code>Iter U8</code> or maybe even something bigger like <code>Iter U64</code> but I haven't thought it through all the way</p>",
+        "id": 478568174,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729711564
+    },
+    {
+        "content": "<p>In the case of hashing, I think it would be an <code>Iter U384</code> for my use case</p>",
+        "id": 478580237,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729716308
+    },
+    {
+        "content": "<p>Except it also has to degrade down to smaller size as we reach the edge of the list</p>",
+        "id": 478580405,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729716359
+    },
+    {
+        "content": "<p>And other hashing algorithms probably use different sizes, so I would be skeptical that would work out well.</p>",
+        "id": 478580522,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729716398
+    },
+    {
+        "content": "<p>yeah, overall my thought is that this seems like a scary thing to introduce to the language, and I'd really prefer to find an API that doesn't have that problem</p>",
+        "id": 478581226,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729716700
+    },
+    {
+        "content": "<p>for example, another possibility is just that we give the hasher <code>[SmallStr U64, BigStr (List U8)]</code></p>",
+        "id": 478581448,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729716784
+    },
+    {
+        "content": "<p>That doesn't quite work either. Cause a big string that is 3 bytes needs to hash the same as a small string that is 3 bytes.</p>",
+        "id": 478593021,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729722246
+    },
+    {
+        "content": "<p>we could always convert to a <code>SmallStr</code> variant in that case</p>",
+        "id": 478593954,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729722783
+    },
+    {
+        "content": "<p>like if it's a big string, before we pass it to hash, we check the length, and smallify it if appropriate</p>",
+        "id": 478593975,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729722800
+    },
+    {
+        "content": "<p>Honestly, thinking about this more, I really think we should just implement small list u8</p>",
+        "id": 478595470,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729723696
+    },
+    {
+        "content": "<p>Fully removes this issue in all cases and we have the bit laying around</p>",
+        "id": 478595509,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729723725
+    },
+    {
+        "content": "<p>that really would simplify a lot of string stuff haha</p>",
+        "id": 478596998,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729724691
+    },
+    {
+        "content": "<p>And since a u8 is too small to contain any sort of pointers, we don't have to worry about refcounting complications on small lists. I don't think I want to make a generic small list (from what I have seen in the c++ ecosystems it often isn't valuable for most types unless your list is allowed to be larger than 3 usizes) Since we are limited to 3 usizes including the 1 u8 being used for recording the size, I think it would be best to keep things simple and only special cases of 1 byte sized things.</p>",
+        "id": 478598314,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729725483
+    },
+    {
+        "content": "<p>Though I guess from c++ llvm small vector, I think that anything 32bit or smaller on a 64bit system is pretty reasonable to put in a small list as well. But making it generic makes the rules a lot more complicated for hosts (and our builtins).</p>",
+        "id": 478598438,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729725595
+    },
+    {
+        "content": "<p>So I think I want to only apply it to lists of 1 byte wide elements and keep things simple while still unblocking all things related to small strings and lists</p>",
+        "id": 478598528,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729725627
+    },
+    {
+        "content": "<p>This would mean that a Str litterally will be byte for byte a list u8</p>",
+        "id": 478598631,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729725679
+    },
+    {
+        "content": "<p>yeah that sounds reasonable</p>",
+        "id": 478600724,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729727021
+    },
+    {
+        "content": "<p>I keep trying to avoid that but it feels like it's crossed some threshold where it's worth it</p>",
+        "id": 478600739,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729727039
+    },
+    {
+        "content": "<p>what about <code>List I8</code>?</p>",
+        "id": 478600785,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1729727044
+    },
+    {
+        "content": "<p>Sounds like anything &lt;= 8 bits would be a candidate</p>",
+        "id": 478600808,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729727063
+    },
+    {
+        "content": "<p>Aka <code>U8</code>, <code>I8</code>, and <code>Bool</code></p>",
+        "id": 478600842,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729727088
+    },
+    {
+        "content": "<p>I don't expect we pack <code>Bool</code> into smaller than a byte, though. Meaning we would just apply this to any <code>List Byte</code></p>",
+        "id": 478600921,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1729727150
+    },
+    {
+        "content": "<p>Yeah, would work for anything that is a single byte with padding</p>",
+        "id": 478601763,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729727650
+    },
+    {
+        "content": "<p>Definitely adds some extra complexity costs. Will mostly be felt by host authors (or glue authors once glue is good).</p>",
+        "id": 478602411,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729728019
+    },
+    {
+        "content": "<p>I think llvm will always optimize the extra checks in zig away as long as the builtins get inlined.</p>",
+        "id": 478602520,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729728077
+    },
+    {
+        "content": "<p>Even if they don't get inlined, I think llvm has a pass were is can inline constants and generate multiple variations of a function. So it may inline element_width and optimize that away even if the function doesn't fully inline</p>",
+        "id": 478603316,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729728535
+    },
+    {
+        "content": "<p>Yeah, I think it is <a href=\"https://llvm.org/docs/Passes.html#id55\"><code>ipsccp</code>: Interprocedural Sparse Conditional Constant Propagation</a><a href=\"https://llvm.org/docs/Passes.html#ipsccp-interprocedural-sparse-conditional-constant-propagation\">https://llvm.org/docs/Passes.html#ipsccp-interprocedural-sparse-conditional-constant-propagation</a></p>",
+        "id": 478603490,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729728626
+    },
+    {
+        "content": "<p><a href=\"#narrow/channel/302903-platform-development/topic/Memory.20Layout.20of.20Lists\">It was complicated to implement the list type in <code>go</code></a>. This will make it a bit more complicated. For that reason, it would be nice, if there is a clear rule, when a list can be small. It will be complicated to make the decision with glue, since the list implementation in many host languages will probably be generic. In go, the type is <code>type RocList[t any] C.struct_RocList</code>. This type does not know, if <code>t</code> is <code>Bool</code>, <code>U8</code> or <code>I8</code>.</p>\n<p>I would propose, that a list can be a small list, if the type has a size of one byte or less. This also includes opaque types and <code>{a: U8}</code>. </p>\n<p>With a rule like this, I think, that many host languages can check the size of <code>t</code>. For example in go, I could use <code>unsafe.Sizeof</code>.</p>",
+        "id": 478639042,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1729750229
+    },
+    {
+        "content": "<p>Yeah, I think I would like to keep the rule simple. Small list optimization only happens if the size of <code>t</code> with padding is 1 byte. Small list optimization is then exactly the same as small string optimization.</p>",
+        "id": 478639969,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1729750789
+    }
+]

@@ -1,0 +1,158 @@
+[
+    {
+        "content": "<p>One attempt I have made in trying to expose the functionality of the Zig SHA256 algorithm in Roc is as a struct containing a pointer to the Zig struct , which I allocate with <code>utils.allocateWithRefcount</code>. </p>\n<p><a href=\"https://github.com/MatthewJohnHeath/rocSHA/blob/main/crates/compiler/builtins/bitcode/src/crypto.zig\">https://github.com/MatthewJohnHeath/rocSHA/blob/main/crates/compiler/builtins/bitcode/src/crypto.zig</a></p>\n<p>My initial mental model was that something, somewhere in the compiler would be tracking this  and I could think of it like a RAII smart pointer that would be cleaned up automatically when the struct was released in a Roc program.</p>\n<p>I think I had this wrong and may be leaking memory. Could someone please give me some pointers on what does and doesn't happen to the values at pointers inside a struct when the struct is released.?</p>",
+        "id": 487350808,
+        "sender_full_name": "Matthew Heath",
+        "timestamp": 1733869367
+    },
+    {
+        "content": "<p>Probably want: <code>Sha256 := { location : Box {} }</code></p>",
+        "id": 487351267,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733869612
+    },
+    {
+        "content": "<p>That will lead to roc generating code to refcount</p>",
+        "id": 487351279,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733869621
+    },
+    {
+        "content": "<p>Thank you. Am I right in thinking that makes allocating with the ref count wrong and/or redundant here? Should it just be a direct call to <code>roc_alloc</code> on the Zig side and the <code>Box</code> in the Roc handles the lifetime?</p>",
+        "id": 487351829,
+        "sender_full_name": "Matthew Heath",
+        "timestamp": 1733869923
+    },
+    {
+        "content": "<p>You still need to allocate with refcount on the zig side. Cause zig is returning the box to roc. So roc will assume the box is fully setup with refcount.</p>",
+        "id": 487355438,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733871799
+    },
+    {
+        "content": "<p>Oh also, this is probably wrong: <code>defer std.testing.allocator.destroy(empty_sha.location);</code></p>",
+        "id": 487355555,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733871852
+    },
+    {
+        "content": "<p>Cause the location points to the data, but the allocation and refcount is before the data</p>",
+        "id": 487355578,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733871869
+    },
+    {
+        "content": "<p>would be better to <code>defer utils.decref(...)</code></p>",
+        "id": 487355662,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733871932
+    },
+    {
+        "content": "<p>this is just in a zig test</p>",
+        "id": 487355684,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733871947
+    },
+    {
+        "content": "<p>Also, in the medium term (or part of this pr if you want), we should be able to optimize <code>sha256AddBytes</code>. If the refcount is unique, it can reuse the allocation.</p>",
+        "id": 487355805,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733872019
+    },
+    {
+        "content": "<p>Oh, and I think that <code>sha256AddBytes</code> probably needs to <code>defer utils.decref(...)</code> the input or it will be leaked. Though that depends on what you told the builtin mapping around ownership vs borrowing.</p>",
+        "id": 487355873,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733872076
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"727091\">@Matthew Heath</span> was this enough info for you to figure out your memory issues?</p>",
+        "id": 488146926,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733936959
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span>  I have been asleep and then at work, but I think it will be :)</p>",
+        "id": 488155207,
+        "sender_full_name": "Matthew Heath",
+        "timestamp": 1733939725
+    },
+    {
+        "content": "<p>Thanks</p>",
+        "id": 488155228,
+        "sender_full_name": "Matthew Heath",
+        "timestamp": 1733939734
+    },
+    {
+        "content": "<p>Haha, no worries. Some reason, I thought I posted this longer ago and forgot to loop back.</p>",
+        "id": 488155833,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733939955
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Help.20request.20-.20reference.20counts.20and.20pointer.20allocations/near/487355578\">said</a>:</p>\n<blockquote>\n<p>Cause the location points to the data, but the allocation and refcount is before the data</p>\n</blockquote>\n<p>As it's currently written, the allocation when testing is just calling <code>std.testing.allocator.create</code> because I wrote before I fixed the alignment of the r<code>testing_roc_alloc</code>, so destroy <em>was</em> right (I think), but won't  be after I change anything.</p>",
+        "id": 488157007,
+        "sender_full_name": "Matthew Heath",
+        "timestamp": 1733940358
+    },
+    {
+        "content": "<p>perhaps unrelated, but shouldn't sha256 be able to run without heap allocations? <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 488158685,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733940899
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Help.20request.20-.20reference.20counts.20and.20pointer.20allocations/near/488158685\">said</a>:</p>\n<blockquote>\n<p>perhaps unrelated, but shouldn't sha256 be able to run without heap allocations? <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>\n</blockquote>\n<p>Yes the Zig built-in does, and single \"hash these bytes\" function easily could, but passing the struct representing the hasher with some bytes added to it between Roc functions is proving challenging. <br>\n After a lot of attempts, I worked out how to write the bytes of a non-extern  Zig struct onto something exposed as extern and it worked as expected for Zig tests, but calling it from Roc generated llvm errors.</p>",
+        "id": 488160776,
+        "sender_full_name": "Matthew Heath",
+        "timestamp": 1733941692
+    },
+    {
+        "content": "<p>How big is the state in practice? Just 256 bits?</p>",
+        "id": 488161188,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733941835
+    },
+    {
+        "content": "<p>If my estimate is right, 112 bytes in zig. So 7 I128 in size. That probably should be on the heap in roc. Cause it will want to be mutated in place and not copied all the time</p>",
+        "id": 488162321,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733942219
+    },
+    {
+        "content": "<p>If it is made into a struct of 7 I128, it would be put on the stack, but it would also be copied for every modification.</p>",
+        "id": 488162493,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733942279
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Help.20request.20-.20reference.20counts.20and.20pointer.20allocations/near/488162321\">said</a>:</p>\n<blockquote>\n<p>If my estimate is right, 112 bytes in zig. So 7 I128 in size. That probably should be on the heap in roc. Cause it will want to be mutated in place and not copied all the time</p>\n</blockquote>\n<p>Ah you got ahead of me :). @sizeOF actually gives 128 because of padding to align</p>",
+        "id": 488162611,
+        "sender_full_name": "Matthew Heath",
+        "timestamp": 1733942310
+    },
+    {
+        "content": "<p>So 8 I128s</p>",
+        "id": 488162665,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733942337
+    },
+    {
+        "content": "<p>Yeah, my gut feeling is that this needs to be refcounted and mutated in place.</p>",
+        "id": 488162752,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733942370
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Help.20request.20-.20reference.20counts.20and.20pointer.20allocations/near/488162493\">said</a>:</p>\n<blockquote>\n<p>If it is made into a struct of 7 I128, it would be put on the stack, but it would also be copied for every modification.</p>\n</blockquote>\n<p>Yes, my reasoning was wanting to avoid that. But also when I tried to return any struct or array with more than 2 fields from Zig to Roc, it was building but then it said llvm didn't return a value. I was going to make a separate thread to ask about it when I had dealt with this....</p>",
+        "id": 488163081,
+        "sender_full_name": "Matthew Heath",
+        "timestamp": 1733942476
+    },
+    {
+        "content": "<p>Makes sense. Navigating that can be a bit tricky</p>",
+        "id": 488163223,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733942530
+    }
+]
