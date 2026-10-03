@@ -1,0 +1,98 @@
+[
+    {
+        "content": "<p>I should preface this with the fact that I struggle to understand how the parser_for machinery and encodings work, and the indirection required to thread through the encodings and formats, and how parsing is made generic over the formats. Fortunately, (until now) I haven't had to, because the simple structural and nominal structs have mapped cleanly. </p>\n<p>Here I have a case where the shape of the json can vary between multiple (2 for now) shapes, e.g., an error shape or a success shape, depending on the value of one of the fields. I.e. parsing into <code>FallibleResponse(success_data, failure_data) := [Success(success_data), Failure(failure_data)]</code>, which by default has a different mapping to/from json. </p>\n<p>It's not really clear to me from the docs how to achieve this, but I've got this far from just trying to satisfy the type checker before reaching a dead end:</p>\n<div class=\"codehilite\"><pre><span></span><code>FallibleResponse(success, failure) := [Success(success), Failure(failure)].{\n\n    parser_for : encoding -&gt; (state -&gt; Try({ value : FallibleResponse(a, b), rest : state }, []))\n        where [\n            a.parser_for : encoding -&gt; (_ -&gt; Try({ value : a, rest : _ }, _)),\n            b.parser_for : encoding -&gt; (_ -&gt; Try({ value : b, rest : _ }, _)),\n            encoding.parse : Str -&gt; Try(_out, _errs),\n        ]\n    parser_for = |encoding| |state| {\n\n        # Here I tried seeing if this method of dispatching would accept using parser_for on Peek\n        # parse_helper : encoding -&gt; (state -&gt; Try({ value : v, rest : state }, errs))\n        #   where [v.parser_for : encoding -&gt; (_ -&gt; Try({ value : v, rest : _ }, _))]\n        # parse_helper = |enc| |st| {\n        #   V : v\n        #   V.parser_for(enc)(st)\n        # }\n\n        Peek : { type : Str }\n        peeked : { value : Peek, rest : state }\n        peeked = Peek.parser_for(encoding)(state)? ## &lt;== Error here\n\n        if peeked.value.type == &quot;error&quot; {\n            B : b\n            parsed = B.parser_for(encoding)(state)?\n            Ok({ value: FallibleResponse.Failure(parsed.value), rest: parsed.rest })\n        } else {\n            A : a\n            parsed = A.parser_for(encoding)(state)?\n            Ok({ value: FallibleResponse.Success(parsed.value), rest: parsed.rest })\n        }\n    }\n}\n</code></pre></div>\n<p>The error I can't get past is <code>This parser_for method is being called on a value whose type doesn't have that method.</code> on the structural type <code>{ type : Str }</code> aka <code>Peek</code>.</p>\n<p>For now I'm going to do something simple and just test each of the variants outside of the parser_for and use parse errors as a cue to try the alternate.</p>",
+        "id": 622298071,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1788791279
+    },
+    {
+        "content": "<p>If I make <code>Peek</code> a nominal type and opt in with <code>parser_for : _</code>, the error about the missing parser_for becomes a warning: <code>This declaration has a type annotation but no implementation.</code>.</p>",
+        "id": 622299112,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1788791513
+    },
+    {
+        "content": "<p>Just realised this is on a 6 day old compiler version. (I swapped back from main because there seemed to be some cache instabilities this morning I couldn't get to reproducing, plus multi-minute <code>roc check</code>)</p>",
+        "id": 622300006,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1788791775
+    },
+    {
+        "content": "<p>Hi <span class=\"user-mention\" data-user-id=\"820027\">@Jonathan</span>,<br>\nI'm not an expert on the encoding stuff but I did get something working with Claude. Is this what you want?</p>\n<div class=\"codehilite\"><pre><span></span><code>Final :: [].{}\n\n## The wire shape a response is inspected as before choosing a variant.\nPeek : { type : Str }\n\n## A JSON response that is either a success payload or an error payload,\n## discriminated by its `type` field.\nFallibleResponse(success, failure) := [Success(success), Failure(failure)].{\n    parser_for : _ -&gt; (_ -&gt; Try({ value : FallibleResponse(a, b), rest : _ }, [InvalidJson(Str), MissingRequiredField(Str), ..errs]))\n        where [\n            a.Json.Parseable([InvalidJson(Str), MissingRequiredField(Str), ..errs]),\n            b.Json.Parseable([InvalidJson(Str), MissingRequiredField(Str), ..errs]),\n        ]\n    parser_for = |encoding| {\n        Success : a\n        Failure : b\n        parse_success = Success.parser_for(encoding)\n        parse_failure = Failure.parser_for(encoding)\n        parse_peek = Peek.parser_for(encoding)\n\n        |state| {\n            peeked = parse_peek(state)?\n            if peeked.value.type == &quot;error&quot; {\n                parsed = parse_failure(state)?\n                Ok({ value: FallibleResponse.Failure(parsed.value), rest: parsed.rest })\n            } else {\n                parsed = parse_success(state)?\n                Ok({ value: FallibleResponse.Success(parsed.value), rest: parsed.rest })\n            }\n        }\n    }\n\n    is_eq : _\n}\n\nResp : FallibleResponse({ data : Str }, { message : Str })\n\nexpect {\n    result : Try(Resp, [InvalidJson(Str), MissingRequiredField(Str)])\n    result = Json.parse(&quot;{\\&quot;type\\&quot;:\\&quot;error\\&quot;,\\&quot;message\\&quot;:\\&quot;boom\\&quot;}&quot;)\n    result == Ok(FallibleResponse.Failure({ message: &quot;boom&quot; }))\n}\n\nexpect {\n    result : Try(Resp, [InvalidJson(Str), MissingRequiredField(Str)])\n    result = Json.parse(&quot;{\\&quot;type\\&quot;:\\&quot;ok\\&quot;,\\&quot;data\\&quot;:\\&quot;hi\\&quot;}&quot;)\n    result == Ok(FallibleResponse.Success({ data: &quot;hi&quot; }))\n}\n\nexpect {\n    result : Try(Resp, [InvalidJson(Str), MissingRequiredField(Str)])\n    result = Json.parse(&quot;{\\&quot;data\\&quot;:\\&quot;hi\\&quot;}&quot;)\n    result == Err(MissingRequiredField(&quot;type&quot;))\n}\n\n# Nested inside another derived shape, the custom parser is still picked up.\nexpect {\n    result : Try({ responses : List(Resp) }, [InvalidJson(Str), MissingRequiredField(Str)])\n    result = Json.parse(&quot;{\\&quot;responses\\&quot;:[{\\&quot;type\\&quot;:\\&quot;ok\\&quot;,\\&quot;data\\&quot;:\\&quot;a\\&quot;},{\\&quot;type\\&quot;:\\&quot;error\\&quot;,\\&quot;message\\&quot;:\\&quot;b\\&quot;}]}&quot;)\n    result == Ok({ responses: [FallibleResponse.Success({ data: &quot;a&quot; }), FallibleResponse.Failure({ message: &quot;b&quot; })] })\n}\n</code></pre></div>",
+        "id": 622343706,
+        "sender_full_name": "Anton",
+        "timestamp": 1788803676
+    },
+    {
+        "content": "<p>That looks like something I tried except Peek.parser_for didn't seem to be derived for me. Perhaps because Json.Parseable makes it all click. Thanks though, I'll give it a try, but I wouldn't know why this in particular works <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 622372255,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1788816235
+    },
+    {
+        "content": "<p>On another note, I don't normally use Claude but I let it rip on the roclang repo, given the circumstances. Told me it couldn't be done - in general it's been interesting trying to get LLMs to understand the more funky static dispatch stuff.</p>",
+        "id": 622372540,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1788816409
+    },
+    {
+        "content": "<p>I went with Fable 5.1 on xhigh for this question in case it helps</p>",
+        "id": 622479616,
+        "sender_full_name": "Anton",
+        "timestamp": 1788860653
+    },
+    {
+        "content": "<p>Wow, how is Fable 5.1 xHigh? I've never tried it</p>",
+        "id": 622481559,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788861129
+    },
+    {
+        "content": "<p>Excellent so far, I have not used it much yet though. For most of my Roc things I use opus xhigh.</p>",
+        "id": 622503817,
+        "sender_full_name": "Anton",
+        "timestamp": 1788867037
+    },
+    {
+        "content": "<p>I've been trending the other direction and I basically use Low thinking for everything</p>",
+        "id": 622504202,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788867155
+    },
+    {
+        "content": "<p>I'll bust out a higher thinking setting if I'm wanting some kind of analysis, like developing a planning document</p>",
+        "id": 622504357,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788867202
+    },
+    {
+        "content": "<p>Interesting, intuitively I would expect thinking to help for debugging but I have not done any comparative tests.</p>",
+        "id": 622504857,
+        "sender_full_name": "Anton",
+        "timestamp": 1788867334
+    },
+    {
+        "content": "<p>I feel like we've crossed a threshold with these frontier models where their baseline is so good we don't need the extended reasoning.</p>",
+        "id": 622505116,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788867418
+    },
+    {
+        "content": "<p>Like I've been doing it for months now and barely notice the difference</p>",
+        "id": 622505279,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788867461
+    },
+    {
+        "content": "<p>For agentic coding on Fable 5.1 it does make a significant difference:<br>\n<img alt=\"image.png\" class=\"inline-image\" data-original-content-type=\"image/png\" data-original-dimensions=\"898x702\" data-original-src=\"/user_uploads/22008/uTBMdh_GD-VZbtp5kr9qd5Ab/image.png\" src=\"/user_uploads/thumbnail/22008/uTBMdh_GD-VZbtp5kr9qd5Ab/image.png/840x560.webp\"></p>",
+        "id": 622506466,
+        "sender_full_name": "Anton",
+        "timestamp": 1788867812
+    },
+    {
+        "content": "<p>I guess my feeling is that 65% is good enough</p>",
+        "id": 622506761,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788867857
+    }
+]

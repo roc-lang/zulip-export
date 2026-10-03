@@ -1,0 +1,254 @@
+[
+    {
+        "content": "<p>Had some good fun implementing autograd in Roc:<br>\n<a href=\"https://gist.github.com/ayazhafiz/88aec4c50b6403a9f343b13998a41886\">https://gist.github.com/ayazhafiz/88aec4c50b6403a9f343b13998a41886</a><br>\nThe TLDR behind autograd for those not already in the know is, you build up some computational expression (e.g. any function <code>y</code> depending on any number of variables), and then you can run two passes - a \"forward\" pass that computes the value of the function <code>y</code> with respect to the values of the variables, and a \"backward\" pass that computes the derivative of y with respect to each variable. If <code>y</code> is a minimizing function (a loss function), you can then update the variables to incrementally try to get the value of <code>y</code> closer and closer to zero. This is the basis for a lot of neural networks (there's a simple multi-layer NN in the example above that tries to solve <code>y = x^2 + z^2</code> with a neural net)</p>",
+        "id": 491375732,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735630341
+    },
+    {
+        "content": "<p>This is quite a simple implementation, it's not optimized, probably has bugs and doesn't support tensors (matrices) like a real library would</p>",
+        "id": 491375789,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735630393
+    },
+    {
+        "content": "<p>A few thoughts:</p>\n<ul>\n<li>expect is awesome. I didn't run into any issues except with the last expect, where the program segfaults during printing of values if the expect fails. However, with a 3-layer perceptor (e.g. [2, 3, 1]), there is no segfault. so maybe it's something about the depth of the graph</li>\n<li>the performance is nice. it takes longer to compile + run than starting the same program in python and running it, but the actual evaluation in the hot path is faster (and there is a lot to optimize, see below)</li>\n<li>I thought not having operator overloading would be inconvenient, but it wasn't too bad. it doesn't read as well as having operators, but IMO it's not bad by any means. However, my function names could use some work... lol</li>\n<li>dbg/inline expect is great.</li>\n<li>quite excited for dispatching on values directly instead of having to reference the module name</li>\n<li>quite excited for shadowing. You'll see in  a lot of cases there is binding like <code>ctx2</code>, which feels a bit silly - and when it causes an error, the error is viral and the actual issue is somewhat opaque</li>\n</ul>",
+        "id": 491376459,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735630901
+    },
+    {
+        "content": "<p>Seemingly all positive!</p>",
+        "id": 491376661,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1735631035
+    },
+    {
+        "content": "<p>A few things I struggled with:</p>\n<ul>\n<li>The language server didn't ever show types on hover, errors from <code>roc check</code>, and would frequently need a restart. I'm not sure why this is, maybe because it's a standalone module? but idk, that's likely a red herring. Anyway, it was awesome when it worked and formatted the code automatically, but otherwise I couldn't find it very useful</li>\n<li>There are a few cases where the error messages could use some love. One case is here: <a href=\"https://gist.github.com/ayazhafiz/ff1ecf664de30869a32c817d4022c267\">https://gist.github.com/ayazhafiz/ff1ecf664de30869a32c817d4022c267</a>. TLDR in a nested record there was a field mismatch, but the compiler didn't point it out (it said this anonymous record != this alias). After I extracted the nested record and explicitly annotated it, the error message included the field typo. I don't know how hard it is to look into aliases,  but if it's easy, this might be a nice QoL win. Another issue I ran into was an error along the lines of <code>[..] is not equal to [..]</code>, but I know that's already a known issue.</li>\n<li>shadowing, excited for shadowing to come soon.</li>\n<li>recursion of types - i'll get into this more later but at first I wanted a shape like <code>Graph = { value: F64, op: ... }</code> where <code>op</code> is the current definition of <code>Graph</code>. This doesn't really work because <code>Graph</code> and <code>Op</code> are mutually recursive, and then it runs into that bug about records not being able to be recursive without passing through a tag union (even though it would in this case)</li>\n</ul>",
+        "id": 491377206,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735631425
+    },
+    {
+        "content": "<p>On the bad type comparisons, I think there was a discussion of doing a git diff-like delta, e.g.</p>\n<div class=\"codehilite\"><pre><span></span><code>It seems like you have a type mismatch:\n\n  List {\n&gt;     item: Str,\n&lt;     item: U64,\n  }\n</code></pre></div>",
+        "id": 491377831,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1735631919
+    },
+    {
+        "content": "<p>Which might not be directly related to the <code>[..] is not equal to [..]</code> issue, but a rework of that code in a diffing feature push should fix that issue</p>",
+        "id": 491377896,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1735631997
+    },
+    {
+        "content": "<p>The LSP definitely feels ad hoc at the moment. The main thing I use it for is displaying warnings/errors, but I also need to keep a \"sixth sense\" as to when it has crashed and for what reason, and remember to restart in those cases</p>",
+        "id": 491378022,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1735632058
+    },
+    {
+        "content": "<p>I'd love folks' feedback on how to make this faster. In general autograd benefits heavily from in-place mutation - you do many rounds of training, and both within a training round and between them you'd like to re-use the same memory and mutate in-place. One particular problem with my implementation is stuff like this:</p>\n<div class=\"codehilite\"><pre><span></span><code>            Mul m n -&gt;\n                # x = m*n, dy/dm = dy/dx * dx/dm, dx/dm = n\n                mval = forward m xs # ouch\n                nval = forward n xs # ouch\n                grads1 = go m (dydx * nval) grads\n                grads2 = go n (dydx * mval) grads1\n                grads2\n</code></pre></div>\n<p>Basically, when computing the gradient for x, y for a function <code>z = x*y</code>, we know that <code>dz/dx = y</code> and <code>dz/dy = x</code>. That means we need to compute the value of <code>x</code> and <code>y</code>, which is why <code>forward</code> is called. But this is wasteful, because <code>forward</code> is always called before <code>backward</code>, so there's no new information gained by doing this. Especially if the computation graph/equation is very large before the particular node (pretend for example we are doing <code>x * y</code> where x and y are themselves equations of a large # of variables), this can get expensive really quickly.</p>\n<p>The alternative I was thinking of is to have a representation like</p>\n<div class=\"codehilite\"><pre><span></span><code>Graph : [\n    Const F64 F64, # forward pass value, constant value\n    Var F64 Str, # forward pass value, constant name\n    ... # etc\n]\n</code></pre></div>\n<p>and change the signature of <code>forward</code> to <code>Graph, Vars -&gt; Graph</code>, i.e. directly compute the value of the forward pass and save it in the computation graph, that way the value is pre-cached when you go to back-propogate the gradients. The issue with this is twofold. The first issue is trivial, which is that I think you would want to lift the forward-pass value out and have a record of <code>Node = {forward_pass: F64, op: Op}</code>, but that runs into the record recursion mentioned before - but that seems solvable.</p>\n<p>The second is that reconstruction of the entire AST needs to re-use memory, or else it will be quite expensive to do this over and over (imagine on the lower side a 100K parameter graph with 100K+ training rounds). And I'm not sure if there's a way to guarantee that. This gets more problematic once you introduce higher-dimensional tensors (i.e. actual matrices, and not just the scalars used here).</p>\n<p>Anyway, curious if anyone has thoughts or ideas</p>",
+        "id": 491378030,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735632062
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"461444\">Sam Mohr</span> <a href=\"#narrow/channel/304902-show-and-tell/topic/autograd.20in.20Roc/near/491376661\">said</a>:</p>\n<blockquote>\n<p>Seemingly all positive!</p>\n</blockquote>\n<p>Yep! it was great how well this worked</p>",
+        "id": 491378076,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735632095
+    },
+    {
+        "content": "<p>Yeah any time code with recursive or nested types starts coming into play the language server is pretty well useless. </p>\n<p>In my experience, this is because the compiler has a lot of bugs that causes hangs in that domain, and so the language server constantly ends up stuck with a hanging compiler.</p>\n<p>We should be able to terminate the hanging process and It is setup to do that, but I think I don't know enough about Async rust and I'm not yielding correctly or something so it can't ever kill the hanging process</p>",
+        "id": 491430502,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1735670117
+    },
+    {
+        "content": "<p>ah okay, one issue i was running into with the LS was <a class=\"message-link\" href=\"/#narrow/channel/395097-compiler-development/topic/bug.3A.20Outstanding.20references.20to.20the.20derived.20module/near/491146113\">#compiler development &gt; bug: Outstanding references to the derived module @ 💬</a> - removing the main.roc fixed it</p>",
+        "id": 491433064,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735671889
+    },
+    {
+        "content": "<blockquote>\n<p>Basically, when computing the gradient for x, y for a function <code>z = x*y</code>, we know that <code>dz/dx = y</code> and <code>dz/dy = x</code>. That means we need to compute the value of <code>x</code> and <code>y</code>, which is why <code>forward</code> is called.</p>\n</blockquote>\n<p>Couldn't you make forward take an optional grad dictionary (or a different variant of forward that takes grad)? Then just set the values during the forward pass?</p>",
+        "id": 491434735,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735673089
+    },
+    {
+        "content": "<p>Also, when you have a <code>Dict.get</code> followed by a <code>Dict.insert</code>, you can get some extra efficiency by using <code>Dict.update</code>. Avoids looking up the key twice.</p>",
+        "id": 491434798,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735673142
+    },
+    {
+        "content": "<p>Or, I guess it would be a value cache instead of a gradient cache</p>",
+        "id": 491436380,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735674341
+    },
+    {
+        "content": "<blockquote>\n<p>Couldn't you make forward take an optional grad dictionary (or a different variant of forward that takes grad)? Then just set the values during the forward pass?</p>\n</blockquote>\n<p>That would work, but I believe unique IDs would have to be created for each node in the graph then somehow. because for example if i'm at <code>x = a*b</code> where <code>b = e^c</code> (but being just at <code>x</code>, I don't know that the second operand is <code>b=e^c</code>), i need the result of <code>b</code>. but <code>b</code> is a resultant value, not a variable index</p>",
+        "id": 491436913,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735674772
+    },
+    {
+        "content": "<p><a href=\"https://gist.github.com/bhansconnect/effa61cb21e879e28b6cc816fbb2850e\">https://gist.github.com/bhansconnect/effa61cb21e879e28b6cc816fbb2850e</a></p>",
+        "id": 491438304,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735675930
+    },
+    {
+        "content": "<p>This just makes a new graph for going backwards</p>",
+        "id": 491438312,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735675938
+    },
+    {
+        "content": "<p>Solid perf gains. Definitely could be made cleaner.</p>",
+        "id": 491438330,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735675963
+    },
+    {
+        "content": "<p>That said, making new nodes instead of mutating in place definitely is not as nice as it could be.</p>",
+        "id": 491438537,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735676161
+    },
+    {
+        "content": "<p>Using your last expect and increasing to 1000 rounds of training, I see:</p>\n<div class=\"codehilite\"><pre><span></span><code>Summary\n  ./grad-new ran\n    1.53 ± 0.04 times faster than ./grad\n</code></pre></div>",
+        "id": 491438797,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735676393
+    },
+    {
+        "content": "<p>yeah that def works. my only concern is that it creates a new tree to each forward pass. but yeah def better</p>",
+        "id": 491440398,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735677794
+    },
+    {
+        "content": "<p>Yeah, not sure the best way to map this into roc.</p>",
+        "id": 491443893,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735680850
+    },
+    {
+        "content": "<p>another interesting thing is that the program spends much of its time in Dict operations. for small graphs (small # of vars) it looks like an association list is faster</p>",
+        "id": 491532461,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735769516
+    },
+    {
+        "content": "<p>Makes sense. No hashing.</p>",
+        "id": 491533139,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735770189
+    },
+    {
+        "content": "<p>Also denser memory.</p>",
+        "id": 491533144,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735770200
+    },
+    {
+        "content": "<p>Not to mention, our dict is two loads due to being a index map (hash -&gt; index -&gt; list of kv).</p>",
+        "id": 491533155,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735770228
+    },
+    {
+        "content": "<p>Also, equality can fail fast, hashing can not.</p>",
+        "id": 491533217,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735770264
+    },
+    {
+        "content": "<p>yeah</p>",
+        "id": 491533233,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735770298
+    },
+    {
+        "content": "<p>oh another thing that did come up was i was thinking of how to support arbitrary differentiable operations, like if someone wants to write a custom Sigmoid op or something. I think the best API would be an interface (e.g. abilities). But you can't hold on to opaque values of abilities (i.e. hidden behind a pointer, the concrete type is never materialized), so this doesn't work</p>",
+        "id": 491534236,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735771383
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> do you think we should support that?</p>",
+        "id": 491534779,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735771970
+    },
+    {
+        "content": "<p>idk. i think it might make sense at some point, but probably not right now</p>",
+        "id": 491534804,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735772009
+    },
+    {
+        "content": "<p>seems like it would require doing something conceptually similar to lambda sets, where we make a tag union behind the scenes of all the different instantiations that come up in practice</p>",
+        "id": 491534806,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735772016
+    },
+    {
+        "content": "<p>yeah, or you could compile it to the boxed representation</p>",
+        "id": 491534818,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735772032
+    },
+    {
+        "content": "<p>i also feel like there must be some generalization of reset-reuse to support in-place mutation of trees, e.g. when doing something like</p>\n<div class=\"codehilite\"><pre><span></span><code>Node : [\n    Const U64,\n    Add Node Node,\n    Mul Node Node,\n]\n\nsomewalk : Node -&gt; Node\nsomewalk = \\node -&gt;\n    when node is\n        Const x -&gt; Const (x + 1)\n        Add m n -&gt; Add (somewalk m) (somewalk n)\n        Mul m n -&gt; Mul (somewalk m) (somewalk n)\n</code></pre></div>\n<p>which would make it a non-issue to create and teardown trees between passes, since they're almost always unique (and this is a common operation in anything graph shaped, be it ML or compilers or whatever)</p>",
+        "id": 491534928,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735772148
+    },
+    {
+        "content": "<p>however, i'm struggling to find an intuition that holds up.</p>",
+        "id": 491534935,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735772161
+    },
+    {
+        "content": "<p>oh wait, im silly</p>",
+        "id": 491535151,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735772393
+    },
+    {
+        "content": "<p>this works fine under reset-reuse, so it is updated in place</p>",
+        "id": 491535202,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1735772405
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/channel/304902-show-and-tell/topic/autograd.20in.20Roc/near/491377206\">said</a>:</p>\n<blockquote>\n<ul>\n<li>recursion of types - i'll get into this more later but at first I wanted a shape like <code>Graph = { value: F64, op: ... }</code> where <code>op</code> is the current definition of <code>Graph</code>. This doesn't really work because <code>Graph</code> and <code>Op</code> are mutually recursive, and then it runs into that bug about records not being able to be recursive without passing through a tag union (even though it would in this case)</li>\n</ul>\n</blockquote>\n<p>I have a branch that solves this in the dev backend that got silently left behind while implementing the llvm backend. I'll revive it today as I should have done quiet some time ago.</p>",
+        "id": 491860974,
+        "sender_full_name": "Norbert Hajagos",
+        "timestamp": 1735982027
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> the bug occurs during typechecking though, i believe</p>",
+        "id": 491891234,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1736010116
+    },
+    {
+        "content": "<p>Oh, yes... I thought you meant you couldn't write tail recursive functions using tag unions where the recursive data (<code>op</code>) was inside a struct, not directly in the payload of a tag union. Realized we're talking about a completely different problem.</p>",
+        "id": 491968414,
+        "sender_full_name": "Norbert Hajagos",
+        "timestamp": 1736084939
+    },
+    {
+        "content": "<p>I haven't really used enzyme, but I wonder what the tradeoffs are between doing autograd on the roc source vs doing it on the llvm ir (or similar low-level IR)?</p>\n<p><a href=\"https://enzyme.mit.edu/\">https://enzyme.mit.edu/</a></p>",
+        "id": 494416487,
+        "sender_full_name": "shua",
+        "timestamp": 1737138517
+    }
+]

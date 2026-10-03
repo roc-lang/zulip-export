@@ -1,0 +1,212 @@
+[
+    {
+        "content": "<p>I'd like to have an effect that provides a path to a temporary directory.</p>\n<p>I propose we add an effect to basic-cli and basic-webserver like <code>Path.tmpDir : Task Str []_</code> which calls <code>std::env::temp_dir</code>.</p>\n<p>Here is an implementation;</p>\n<div class=\"codehilite\"><pre><span></span><code># Path.roc\ntmpDir : Task Str []_\ntmpDir =\n    Effect.tmpDir\n    |&gt; Effect.map Ok\n    |&gt; InternalTask.fromEffect\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code># Effect.roc\ntmpDir : Effect Str\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"c1\">// lib.rs</span>\n<span class=\"cp\">#[no_mangle]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">roc_fx_tmpDir</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">RocStr</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"fm\">format!</span><span class=\"p\">(</span><span class=\"s\">\"{}\"</span><span class=\"p\">,</span><span class=\"n\">std</span><span class=\"p\">::</span><span class=\"n\">env</span><span class=\"p\">::</span><span class=\"n\">temp_dir</span><span class=\"p\">().</span><span class=\"n\">display</span><span class=\"p\">()).</span><span class=\"n\">as_str</span><span class=\"p\">().</span><span class=\"n\">into</span><span class=\"p\">()</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 451703872,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1721117545
+    },
+    {
+        "content": "<p>If this is acceptable, I can tack onto the refactor-host PRs.</p>",
+        "id": 451704076,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1721117627
+    },
+    {
+        "content": "<p>Alternatively we might want to put it in <code>Env.tmpDir</code> instead.</p>",
+        "id": 451704234,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1721117680
+    },
+    {
+        "content": "<p>Ok, added to the branches</p>",
+        "id": 451720303,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1721122805
+    },
+    {
+        "content": "<p>If it is in the Path module, wouldn't it make more sense to have it return <code>Task Path _</code> instead of <code>Str</code>?</p>",
+        "id": 451728281,
+        "sender_full_name": "Kilian Vounckx",
+        "timestamp": 1721125247
+    },
+    {
+        "content": "<p>I moved it to <code>Env</code> due to an import cycle.</p>",
+        "id": 451728513,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1721125339
+    },
+    {
+        "content": "<p>I've been staring at basic-cli and basic-webserver a lot lately. I'm feeling too far in the weeds here to give a good objective opinion. </p>\n<p>One thing that comes to mind is we switched to e.g. File API taking a Str instead of a Path. I think that was to make it more usable.</p>",
+        "id": 451729049,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1721125536
+    },
+    {
+        "content": "<p>random thoughts on this!</p>",
+        "id": 451748740,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133306
+    },
+    {
+        "content": "<p>no operating system we target uses UTF-8 for its file names/paths</p>",
+        "id": 451748839,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133335
+    },
+    {
+        "content": "<p>(and <code>Str</code> is UTF-8)</p>",
+        "id": 451748853,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133342
+    },
+    {
+        "content": "<p>for example, valid UNIX paths can contain any byte except <code>0</code></p>",
+        "id": 451748924,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133363
+    },
+    {
+        "content": "<p>whereas UTF-8 allows <code>0</code> bytes, and also disallows certain sequences of bytes</p>",
+        "id": 451749022,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133392
+    },
+    {
+        "content": "<p>so you can't go from UNIX path to <code>Str</code> (or from <code>Str</code> to UNIX path) without a potential error occurring, which must be checked for</p>",
+        "id": 451749088,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133418
+    },
+    {
+        "content": "<p>fortunately, if I give a <code>Str</code> to a UNIX operation that wants a path, and that <code>Str</code> happens to have a <code>0</code> byte in it, the outcome will just be that the UNIX operation treats the <code>Str</code> as ending wherever that <code>0</code> byte occurred</p>",
+        "id": 451750034,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133745
+    },
+    {
+        "content": "<p>(there's probably a side discussion to be had there about whether an attacker could use that somehow; we could always guard against it by manually checking <code>Str</code> for <code>0</code> bytes before sending it to the OS, but that would be costly...although maybe if we implemented the check entirely in Roc code on the platform, with no host involvement, then LLVM would optimize it away when being used on string literals?)</p>",
+        "id": 451750251,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133816
+    },
+    {
+        "content": "<p>of course, passing a <code>Str</code> is very convenient, because I like to write <code>File.readUtf8 \"foo/bar/baz.txt\"</code></p>",
+        "id": 451750416,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133858
+    },
+    {
+        "content": "<p>so that's why the <code>File</code> APIs exist - convenience</p>",
+        "id": 451750436,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133869
+    },
+    {
+        "content": "<p>however, what happens if I'm reading a directory?</p>",
+        "id": 451750458,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133878
+    },
+    {
+        "content": "<p>e.g. I say \"UNIX, give me all the filenames in this directory\"</p>",
+        "id": 451750476,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133889
+    },
+    {
+        "content": "<p>those filenames very much might not be valid UTF-8</p>",
+        "id": 451750535,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133903
+    },
+    {
+        "content": "<p>it might not be possible to convert them to a <code>Str</code>, because they contain byte sequences that aren't valid UTF-8 (but which are totally valid in UNIX)</p>",
+        "id": 451750596,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721133924
+    },
+    {
+        "content": "<p>so what happens if I want to read all the filenames in a directory, and then read the contents of each of those files?</p>",
+        "id": 451751123,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134093
+    },
+    {
+        "content": "<p>well, if the only API we had was to convert them to <code>Str</code> first, then this just wouldn't be possible to docorrectly for some directories</p>",
+        "id": 451751193,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134119
+    },
+    {
+        "content": "<p>we'd get the filename, it wouldn't be convertible to <code>Str</code>, and then we'd be unable to <code>File.readUtf8</code> it because <code>File.readUtf8</code> takes a <code>Str</code> (for convenience, but in this case that convenience is preventing us from actually making the program work)</p>",
+        "id": 451751300,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134168
+    },
+    {
+        "content": "<p>this is where <code>Path</code> comes in</p>",
+        "id": 451751324,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134176
+    },
+    {
+        "content": "<p><code>Path</code> can represent an arbitrary sequence of bytes that we got from the OS, and it also tags it as \"I got this from the OS, so I know it's a valid OS path\"</p>",
+        "id": 451751457,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134215
+    },
+    {
+        "content": "<p>so when we read the contents of a directory, we always get back <code>Path</code> entries - never <code>Str</code>, because we can't guarantee that what we get back will actually be representable as valid <code>Str</code>s!</p>",
+        "id": 451751609,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134270
+    },
+    {
+        "content": "<p>this is also why <a href=\"https://www.roc-lang.org/packages/basic-cli/Path#display\"><code>Path.display</code></a> exists - it's so that if you want to display those paths to the user, you can render the <code>Path</code> as a <code>Str</code> with the Unicode Replacement Character (this question mark in a diamond: �) used for any invalid sequences. This <code>Str</code> should only be used for display purposes, because if you give it back to the OS for any operations, they'll fail (or do something different) due to the path itself being different</p>",
+        "id": 451752054,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134444
+    },
+    {
+        "content": "<p>so if I wanted to do \"user specifies a directory as a <code>Str</code>, I print out a list of all the files in that directory, and then read their contents\" using the current APIs, the way I'd do this is:</p>\n<ol>\n<li>Use <a href=\"https://www.roc-lang.org/packages/basic-cli/Dir#list\"><code>Dir.list</code></a> (which takes a <code>Str</code>) to get a <code>List Path</code> of directory entries</li>\n<li>Iterate over those and print them all out using <code>Path.display</code>, so the user can see as much of the path as is valid UTF-8, and then Unicode Replacement Characters for the parts that aren't displayable</li>\n<li>To read their contents, use <a href=\"https://www.roc-lang.org/packages/basic-cli/Path#readUtf8\"><code>Path.readUtf8</code></a> instead of <code>File.readUtf8</code>, because in this case what we have are the <code>Path</code>s we got back from <code>Dir.list</code>, not <code>Str</code>s. (If we used the <code>Str</code>s we got back from <code>Path.display</code>, we would have bugs!)</li>\n</ol>",
+        "id": 451752459,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134608
+    },
+    {
+        "content": "<p>incidentally, I've heard of people running into bugs around these edge cases in practice; e.g. old files that were encoded with the old JIS encoding for Japanese (which predated Unicode) just breaking programs that tried to do anything with them</p>",
+        "id": 451752765,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134719
+    },
+    {
+        "content": "<p>presumably because they contained bytes that weren't valid UTF-8 (or Widechar on Windows)</p>",
+        "id": 451752887,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134759
+    },
+    {
+        "content": "<p>bringing it back to tempdir, I think it needs to produce a <code>Path</code> and not a <code>Str</code> because the OS tempdir could be configured to be a path that isn't valid UTF-8</p>",
+        "id": 451753085,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721134810
+    },
+    {
+        "content": "<p>I'll make the change</p>",
+        "id": 451754396,
+        "sender_full_name": "Anton",
+        "timestamp": 1721135123
+    },
+    {
+        "content": "<p>it's also normal to be able to specify a suffix or something for the tempdir or tempfile name, which we might want to support</p>",
+        "id": 451755035,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721135325
+    },
+    {
+        "content": "<p>but maybe not for the first version; we can always add that later</p>",
+        "id": 451755064,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721135336
+    }
+]

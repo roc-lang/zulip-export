@@ -1,0 +1,380 @@
+[
+    {
+        "content": "<p>Currently I am working on a script in roc and I find error handling in application code a little bit hard.<br>\nIf I understand correctly right now if i wanted to log if an error happened I could either do:</p>\n<div class=\"codehilite\"><pre><span></span><code>when result is\n    Ok a -&gt; Ok a\n    Err err -&gt;\n        {} &lt;- Stdout.line &quot;Error message&quot; |&gt; await\n        Task.err err\n</code></pre></div>\n<p>or</p>\n<div class=\"codehilite\"><pre><span></span><code>err &lt;- result\n    |&gt; Task.fromResult\n    |&gt; Task.onErr\n{} &lt;- Stderr.line &quot;Error happened&quot; |&gt; await\nTask.err err\n</code></pre></div>\n<p>I feel like both of those are a little bit wordy / unnecessarily complex, but could be abstracted into functions (maybe <code>Task.logErr</code>?). Also they work only if the function already returns <code>Task</code>, otherwise I would have to change the return type.</p>\n<p>I wish there was something like rust's <code>anyhow</code> crate. Something like:</p>\n<div class=\"codehilite\"><pre><span></span><code>Error a : { msgs: [Str], source: a }\n\nError.withMsg : a, Str -&gt; Error a\nError.withContext : Error a, Str -&gt; Error a\nError.source : Error a -&gt; a\nError.log : Error a -&gt; Task {} *\n</code></pre></div>\n<p>(I'm not sure if this is correct roc code)<br>\nI will probably try to implement this, but wanted to ask first if I'm missing something about logging errors in roc or error handling in general.</p>",
+        "id": 387466221,
+        "sender_full_name": "Chris",
+        "timestamp": 1693092095
+    },
+    {
+        "content": "<p>I think most apps fail a full pipeline and then handle final error and success cases together. So remove the error handling from the local place and move it to a more centralized decision location. Though also could make a helper to log if errors happen.</p>",
+        "id": 387468041,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693093892
+    },
+    {
+        "content": "<p>Not a solution, just a comment/some context</p>",
+        "id": 387468098,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693093926
+    },
+    {
+        "content": "<p>As a clarification it would still be that same first code sample, but only used once for a full pipeline of errors. Just match the exact error and create a message. Each pipeline stage can create very rich error types if needed.</p>",
+        "id": 387468771,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693094551
+    },
+    {
+        "content": "<p>But then a <code>FileReadErr</code> somewhere up the stack doesn't say much about what went wrong and where, so every function should wrap the error in some tag? And having a huge <code>when .. is ..</code> is not really good either probably?</p>",
+        "id": 387468772,
+        "sender_full_name": "Chris",
+        "timestamp": 1693094551
+    },
+    {
+        "content": "<p>Sure, just need an error mapping function. Or make a wrapping error type. If a direct wrapping error type, just a short one liner to wrap <code>|&gt; Task.onErr WrappingErrType</code>.</p>",
+        "id": 387468975,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693094725
+    },
+    {
+        "content": "<p>Would actually be the same thing with an error conversion function, but you then also need to write the conversion function which is of course a full when is</p>",
+        "id": 387469062,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693094793
+    },
+    {
+        "content": "<p>Of course you can use any error type you want and make an anyhow style error type. Personally I would rather use tags than strings and take advantage of that richness.</p>",
+        "id": 387469150,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693094881
+    },
+    {
+        "content": "<p>Thank you for help! I'll probably try both approaches and see what fits better</p>",
+        "id": 387469300,
+        "sender_full_name": "Chris",
+        "timestamp": 1693094991
+    },
+    {
+        "content": "<p>Oh also, I don't recall the exact function name, but if you have a result and want to continue a task pipeline there should be something like <code>Task.fromResult</code> to get you back into task land.</p>",
+        "id": 387469564,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693095155
+    },
+    {
+        "content": "<p>Then no <code>when ... is</code>, just a continued pipeline.</p>",
+        "id": 387469606,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693095179
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"524729\">@ziutech</span>  we uave <a href=\"https://github.com/roc-lang/examples/blob/main/examples/TaskUsage/main.roc\">this</a> example which is an attempt to explain somwle of these ideas. I would really appreciate your thoughts on this example and if you have any ideas to improve it.</p>",
+        "id": 387526794,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1693139718
+    },
+    {
+        "content": "<p>yeah the way I personally like to do things like this is to refactor this:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">when</span><span class=\"w\"> </span><span class=\"n\">result</span><span class=\"w\"> </span><span class=\"n\">is</span>\n<span class=\"w\">    </span><span class=\"nb\">Ok</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Ok</span> <span class=\"nc\">a</span>\n<span class=\"w\">    </span><span class=\"nb\">Err</span><span class=\"w\"> </span><span class=\"n\">err</span><span class=\"w\"> </span>-&gt;\n        <span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"n\">Stdout</span><span class=\"p\">.</span><span class=\"n\">line</span><span class=\"w\"> </span><span class=\"s\">\"Error message\"</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"k\">await</span>\n<span class=\"w\">        </span><span class=\"n\">Task</span><span class=\"p\">.</span><span class=\"n\">err</span><span class=\"w\"> </span><span class=\"n\">err</span>\n</code></pre></div>\n<p>...into:</p>\n<div class=\"codehilite\"><pre><span></span><code>result\n|&gt; Result.mapErr MyCustomErr\n</code></pre></div>\n<p>this will wrap the result's <code>Err</code> type in a <code>MyCustomErr</code> tag - so for example, if I had a <code>Result Str (List Problems)</code> then now I have a <code>Result Str [MyCustomErr (List Problems)]</code></p>",
+        "id": 387551534,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693161604
+    },
+    {
+        "content": "<p>then later on, when I'm doing all my error handling in one big <code>when</code>, I can tell this apart from other, similar errors (e.g. <code>FileReadErr</code>) because of the <code>MyCustomErr</code> wrapper:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"k\">when</span><span class=\"w\"> </span><span class=\"nx\">result</span><span class=\"w\"> </span><span class=\"o\">is</span>\n<span class=\"w\">    </span><span class=\"nx\">Ok</span><span class=\"w\"> </span><span class=\"nx\">whatever</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">...</span>\n<span class=\"w\">    </span><span class=\"nx\">Err</span><span class=\"w\"> </span><span class=\"nf\">(MyCustomErr list) -&gt;</span><span class=\"w\"> </span><span class=\"p\">...</span>\n</code></pre></div>",
+        "id": 387551632,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693161688
+    },
+    {
+        "content": "<p>also worth noting: <a href=\"https://www.roc-lang.org/packages/basic-cli/0.5.0/Task#fromResult\"><code>Task.fromResult</code></a> is a handy way to get your <code>Result</code> into the same error-handling pathway as your tasks</p>",
+        "id": 387551699,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693161731
+    },
+    {
+        "content": "<p>something I'm doing with some code at work is that I have some URL parameters that have been split into a <code>Dict</code>, and then I do:</p>\n<div class=\"codehilite\" data-code-language=\"Haskell\"><pre><span></span><code><span class=\"nf\">userId</span><span class=\"w\"> </span><span class=\"ow\">&lt;-</span>\n<span class=\"w\">    </span><span class=\"kt\">Dict</span><span class=\"o\">.</span><span class=\"n\">get</span><span class=\"w\"> </span><span class=\"n\">params</span><span class=\"w\"> </span><span class=\"s\">\"userid\"</span>\n<span class=\"w\">    </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Result</span><span class=\"o\">.</span><span class=\"n\">mapErr</span><span class=\"w\"> </span><span class=\"kt\">UrlMissingUserId</span>\n<span class=\"w\">    </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"o\">.</span><span class=\"n\">fromResult</span>\n<span class=\"w\">    </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"o\">.</span><span class=\"n\">await</span>\n\n<span class=\"nf\">response</span><span class=\"w\"> </span><span class=\"ow\">&lt;-</span><span class=\"w\"> </span><span class=\"o\">#</span><span class=\"w\"> </span><span class=\"kr\">do</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"kt\">HTTP</span><span class=\"w\"> </span><span class=\"n\">request</span><span class=\"w\"> </span><span class=\"n\">here</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kr\">then</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"o\">.</span><span class=\"n\">await</span>\n</code></pre></div>\n<p>so then later on, when I'm handling all the task errors that happened in that backpassing sequence, I also handl the <code>Err UrlMissingUserId -&gt; ...</code> branch from the failed <code>Dict.get</code> right there too!</p>",
+        "id": 387551841,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693161886
+    },
+    {
+        "content": "<p>I've actually thought about adding a <code>Task.awaitResult</code> to combine <code>Task.fromResult</code> and <code>Task.await</code>, just to make it easier to use this approach <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 387551877,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693161916
+    },
+    {
+        "content": "<p>I've been thinking about error handling for scripts too, a large <code>when</code> does not feel ideal. You want to be able to easily see where something went wrong and have a stacktrace available. For scripts there is often no reason to keep running the program if an error occurs, so I was thinking about something like Rust's <code>unwrap</code> for both <code>Result</code> and <code>Task</code>. We could perhaps only allow this <code>unwrap</code> in app files. It would also help avoid all the <code>{} &lt;- ... |&gt; await</code> boilerplate like <a href=\"https://github.com/roc-lang/roc/blob/8fdb7d19d6b8f60ccf2610fe433713d05d9b6350/devtools/update-rust-version.roc#L82\">here</a>.</p>",
+        "id": 388095331,
+        "sender_full_name": "Anton",
+        "timestamp": 1693398618
+    },
+    {
+        "content": "<p>To be honest, I already write my own unwrap function in Roc that crashes when it receives an error, but I mostly use it for situations that I know are impossible but the type checker doesn't know about</p>",
+        "id": 388125086,
+        "sender_full_name": "Hannes",
+        "timestamp": 1693405915
+    },
+    {
+        "content": "<p>It's currently impossible to unwrap a <code>Task</code> though right?</p>",
+        "id": 388125561,
+        "sender_full_name": "Anton",
+        "timestamp": 1693406034
+    },
+    {
+        "content": "<p>if we did something like this, I'd want to call it like <code>okOrCrash</code> or something like that</p>",
+        "id": 388131177,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407368
+    },
+    {
+        "content": "<p>but it makes me nervous, to be honest</p>",
+        "id": 388131202,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407373
+    },
+    {
+        "content": "<p>it makes the path of least resistance be crashing</p>",
+        "id": 388131239,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407385
+    },
+    {
+        "content": "<p>and it does so without using the <code>crash</code> keyword</p>",
+        "id": 388131306,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407404
+    },
+    {
+        "content": "<p>what about this?</p>",
+        "id": 388131404,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407432
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Python\"><pre><span></span><code><span class=\"o\">|&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"n\">unwrapOr</span> \\<span class=\"n\">err</span> <span class=\"o\">-&gt;</span> <span class=\"n\">crash</span> <span class=\"s2\">\"I got this error \\(err)\"</span>\n</code></pre></div>",
+        "id": 388131474,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407448
+    },
+    {
+        "content": "<p>so it would be something like:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">unwrapOr</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"nv\">ok</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nv\">ok</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"nv\">ok</span><span class=\"w\"> </span><span class=\"nf\">*</span>\n</code></pre></div>",
+        "id": 388131759,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407505
+    },
+    {
+        "content": "<p>and then the <code>Result</code> version could be:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kt\">Result</span><span class=\"nf\">.</span><span class=\"nv\">unwrapOr</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Result</span><span class=\"w\"> </span><span class=\"nv\">ok</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nv\">ok</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nv\">ok</span>\n</code></pre></div>",
+        "id": 388131866,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407530
+    },
+    {
+        "content": "<p>(maybe there's a better name for it)</p>",
+        "id": 388131965,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407551
+    },
+    {
+        "content": "<p>but what I'd prefer about this is that you have to explicitly write out the <code>crash</code>, so it's really obvious in the code base where things might crash</p>",
+        "id": 388132106,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407580
+    },
+    {
+        "content": "<p>in Rust it's always hard to spot <code>.unwrap()</code>, which bothers me about it - sometimes I'll do an <code>unwrap()</code> as a short-term thing, intending to come back later and turn it into graceful error handling, but then sometimes I forget and there's nothing in the code base reminding me</p>",
+        "id": 388132386,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693407633
+    },
+    {
+        "content": "<blockquote>\n<p>but it makes me nervous, to be honest<br>\nit makes the path of least resistance be crashing</p>\n</blockquote>\n<p>Uhu I get it. If we go down this route it should definitely come with restrictions, like only allowing it in app modules.<br>\nI do think we need something to improve error handling for scripts.</p>",
+        "id": 388137300,
+        "sender_full_name": "Anton",
+        "timestamp": 1693408706
+    },
+    {
+        "content": "<p>I like the name <code>okOrCrash</code>.</p>",
+        "id": 388137320,
+        "sender_full_name": "Anton",
+        "timestamp": 1693408712
+    },
+    {
+        "content": "<p>For noticeability, I expect it should be possible to give it a color that stands out in the syntax highlighting of all popular roc editors.</p>",
+        "id": 388137336,
+        "sender_full_name": "Anton",
+        "timestamp": 1693408716
+    },
+    {
+        "content": "<p>Once we have a candidate we like, we should try re-writing <a href=\"https://github.com/roc-lang/roc/blob/8fdb7d19d6b8f60ccf2610fe433713d05d9b6350/devtools/update-rust-version.roc\">this script</a> with it to see how it looks/feels.</p>",
+        "id": 388138173,
+        "sender_full_name": "Anton",
+        "timestamp": 1693408932
+    },
+    {
+        "content": "<p>I'm pretty averse to the idea of having functions or keywords that only work in app modules. I think a pretty basic invariant that I don't really want to violate is that you can always take a chunk of your code and extract it into a different module (e.g. for code reuse), and restricting certain functions or keywords to only work in one type of module would break that <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 388153434,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693413188
+    },
+    {
+        "content": "<p>I don't think we should add <code>okOrCrash</code>. I think we should leave that for user apps to define</p>",
+        "id": 388154548,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693413516
+    },
+    {
+        "content": "<p>It is easy enough to write</p>",
+        "id": 388154605,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693413534
+    },
+    {
+        "content": "<p>And generally should be avoided except in short scripts</p>",
+        "id": 388154667,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693413551
+    },
+    {
+        "content": "<p>Also, I think the giant error when isn't necessarily bad as long as the app has no plans to recover. Anything that is recovered from probably should be handled more locally. That said, we should throw it in a function at the end of the file and not make it front and center. That is the main current problem for readability there.</p>",
+        "id": 388155089,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693413690
+    },
+    {
+        "content": "<p>Also, if errors always are just gonna be printed and never recovered, I think <code>Task Ok Str</code> is fine.</p>\n<p>I think we are mostly dealing with the complexities of not wanting to handle errors in smaller programs and scripts rather than something that would be a real problem as the language scales to larger codebases.</p>",
+        "id": 388155390,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693413790
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Basic.20cli.20error.20handling/near/388155089\">said</a>:</p>\n<blockquote>\n<p>Also, I think the giant error when isn't necessarily bad as long as the app has no plans to recover. Anything that is recovered from probably should be handled more locally. That said, we should throw it in a function at the end of the file and not make it front and center. That is the main current problem for readability there.</p>\n</blockquote>\n<p>yeah I like that strategy, especially using <code>_</code> in the type signature of that <code>handlErr</code> function so I don't have to list out all the errors it's receiving</p>",
+        "id": 388162549,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693416360
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Basic.20cli.20error.20handling/near/388155390\">said</a>:</p>\n<blockquote>\n<p>I think we are mostly dealing with the complexities of not wanting to handle errors in smaller programs and scripts rather than something that would be a real problem as the language scales to larger codebases.</p>\n</blockquote>\n<p>honestly, why don't we make a separate platform for this? like <code>roc-script</code> or something</p>",
+        "id": 388162647,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693416389
+    },
+    {
+        "content": "<p>that's a <code>basic-cli</code> alternative except by default every I/O function returns a <code>Task</code> with <code>*</code> for its error type, and it just crashes with some reasonable error message if there's an error</p>",
+        "id": 388162727,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693416425
+    },
+    {
+        "content": "<p>and then maybe it offers both <code>read</code> and <code>readChecked</code>, with the latter being an opt-in to normal error handling if you want it sometimes, even if it's not the default</p>",
+        "id": 388162769,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693416449
+    },
+    {
+        "content": "<p>seems like an easy choice for Advent of Code</p>",
+        "id": 388162815,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693416467
+    },
+    {
+        "content": "<p>That seems to be a great solution :)</p>",
+        "id": 388164211,
+        "sender_full_name": "Anton",
+        "timestamp": 1693417010
+    },
+    {
+        "content": "<p>Yeah, that all sounds great.</p>",
+        "id": 388187382,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693425973
+    },
+    {
+        "content": "<p>Could you just have an Unchecked module in basic-cli which exposes the effects with this signature and behaviour? All the same names etc just in an Unchecked sub-module?</p>",
+        "id": 388206248,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1693434611
+    },
+    {
+        "content": "<p>So you would use either Stdin.line or Unchecked.Stdin.line?</p>",
+        "id": 388214476,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693439857
+    },
+    {
+        "content": "<p>If you only want unchecked stuff, you could alias it to the standard names?</p>",
+        "id": 388214508,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693439880
+    },
+    {
+        "content": "<p>Yeah alias it, or even import it e.g. <code>Unchecked.Stdout.{ line }</code></p>",
+        "id": 388229381,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1693447586
+    },
+    {
+        "content": "<p>Interesting! It would avoid a lot of duplication between roc-scripts and basic-cli, as well as all the extra CI stuff that would come with a new platform. This does seem to be the best solution.</p>",
+        "id": 388482692,
+        "sender_full_name": "Anton",
+        "timestamp": 1693558977
+    },
+    {
+        "content": "<p>hm, but that would make it pretty easy for a single project to mix and match...I don't think I'd want that if I'm building a CLI for work <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 388532221,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693577743
+    },
+    {
+        "content": "<p>for professional projects, I like proper error handling being the path of least resistance</p>",
+        "id": 388532441,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1693577807
+    },
+    {
+        "content": "<p>makes sense!</p>",
+        "id": 388542839,
+        "sender_full_name": "Anton",
+        "timestamp": 1693580793
+    },
+    {
+        "content": "<p>Not that it is implemented yet, but would the new version of effects that get passed around when initializing modules fix this.</p>\n<p>In a corp app, you would only pass the checked versions from the root of the app down the chain. Access to unchecked would be impossible without editing the root app file, which could easily be written as not allowed in the code standards.</p>",
+        "id": 388552233,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693583355
+    },
+    {
+        "content": "<p>Sounds like that could enable a single platform that still has very clear access control to the unchecked versions of wanted.</p>",
+        "id": 388552281,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1693583377
+    },
+    {
+        "content": "<p>Supporting unwrapping of Tasks with the roc-script platform (not in general) seems like it has reasonable trade-offs. What do you all think?</p>",
+        "id": 392485363,
+        "sender_full_name": "Anton",
+        "timestamp": 1695377514
+    },
+    {
+        "content": "<p>personally I think what I really want there is that the default is that errors crash, and then I can opt into error handling with <code>fooChecked</code> versions of tasks.</p>\n<p>I think if I have that I'm not sure when I'd want a <code>Task.unwrap</code> because I'd just not use the <code>Checked</code> version in the first place <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 392516777,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1695388880
+    },
+    {
+        "content": "<p><code>Task.unwrap</code> would mainly be to avoid lots of <code>|&gt; Task.await</code> and backpassing, because they come with significant cognitive load.</p>",
+        "id": 392521150,
+        "sender_full_name": "Anton",
+        "timestamp": 1695390242
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> I think you still need the same amount of backpassing and <code>|&gt; Task.await</code> even if there are no errors to handle, just to chain them together</p>",
+        "id": 392615131,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1695424770
+    },
+    {
+        "content": "<p>Hmm, I'll try something out when I have time and report back</p>",
+        "id": 392660025,
+        "sender_full_name": "Anton",
+        "timestamp": 1695456866
+    }
+]

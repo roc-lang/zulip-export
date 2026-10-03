@@ -1,0 +1,530 @@
+[
+    {
+        "content": "<p>So I know that in general, Roc has decided not to have an explicit panic. I think that maybe this should be reconsidered.</p>\n<p>As I have been working on a Dict implementation in Roc, I have had many cases where I have wanted to panic due to impossible states. For example, If I ever get an <code>Err OutOfBounds</code> in any functions in the dictionary, that is definitely a bug and I want to know about it. It should not be possible. Without panic, I have to decide what to do when I receive an <code>Err OutOfBounds</code>. I could sneakily force a panice with <code>0 - 1</code> leading to a really confusing error message. I could just return some form of default value. But if someone calls <code>Dict.insert</code> and I return the old dictionary, it makes no sense. I think that panic is important for finding bugs and representing potentially impossible states that the compiler is not smart enough to optimize away.</p>\n<p>On top of that, messing around with panics can be a way to get llvm to do more optimizations. If every operation produces the same potential panic, they will potentially be able to be checked together and produce one check and jump instead of many. This is one of the things I had to fight with a lot when trying to get hot loop to run faster by merging jumps.</p>",
+        "id": 275189297,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647226516
+    },
+    {
+        "content": "<p>I feel torn on this topic. I'm open to it, but it's definitely a one-way street; once it's in the language, there's no going back. <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 275189763,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647227160
+    },
+    {
+        "content": "<p>if I'd never used Rust, I don't think I'd be open to it. But Rust is an interesting example of an ecosystem where culturally panic seems to be used sparingly in libraries, such that I don't really worry about libraries panicking on me when they shouldn't, and I can't remember really feeling burned by that in practice.</p>",
+        "id": 275189831,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647227229
+    },
+    {
+        "content": "<p>the biggest reasons I'm open to it:</p>\n<ol>\n<li>If it turns out it can unlock more performance optimizations, e.g. via LLVM. (I'm actually somewhat skeptical that it can, but maybe there's a way!)</li>\n<li>If hosts can extract stack traces from them (which is theoretically possible, but that feature would be a whole project), then in cases where you're not planning to do any graceful error recovery anyway because you think the situation should never happen, then if platforms provide application authors with some sort of way to specify error reporting when a panic happens, then (e.g. in a server application) it can send an actual stack trace back to the developers - which could help more effectively track down bugs.</li>\n</ol>",
+        "id": 275190110,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647227600
+    },
+    {
+        "content": "<p>I think we want to support that #2 situation someday anyway, because if my server pancs on an integer overflow, it would be awesome if I got a stack trace so I could see where in the code the panic actually happened...but without that stack trace, getting an automated report of \"an integer overflowed somewhere in your gazillion lines of code\" is not likely to lead that bug to get fixed ever <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 275190218,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647227714
+    },
+    {
+        "content": "<p>I'd love to hear anyone's thoughts on this!</p>",
+        "id": 275190221,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647227728
+    },
+    {
+        "content": "<p>I think there is a big developer experience aspect to this. Having a good story around irrecoverable errors and how to use them hygienically is important. If the answer is \"there is no language-level way to have irrecoverable errors\", I think folks will just end up creating their own ad-hoc versions like Brendan's <code>0 - 1</code>, which has poor ergonomics from a code-reading and error-reporting point of view. Even programs that propagate errors all the way up may reasonably use ad-hoc panics for cases where the compiler is not smart enough to understand their control flow (for example in redundant branches, see <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/stream/304641-ideas/topic/Narrowing.20types.20in.20when.20expressions\">#ideas &gt; Narrowing types in when expressions</a>, or something like compiling a regex you know is infallible).</p>\n<p>Anecdotally, I have seen some classes where it makes more sense to panic than it does to propagate errors up:</p>\n<ol>\n<li>When your domain logic includes invariants that are cumbersome or otherwise not useful to express via the type system. There are many of these in the Roc compiler codebase itself (e.g. this string starts with an uppercase letter, this vector is non-empty, this built-in definitely exists in a map, etc). Here it makes sense to panic because you want to know loudly when your invariants are broken, and you don't have a meaningful way to recover from a broken invariant because you expect it to be, well, invariant.</li>\n<li>When you don't have a good way to recover, and shouldn't expect anyone up the call stack to have a way to recover either. For example suppose you were doing some writes on a NFS or some other network and then all of a sudden you get partitioned. At this point you know something is wrong, but you may not have a good way to clean up, and at worse your (or your callers') clean up attempts may induce further corruption. At this point you want to fail loudly, sending off sirens and get eyes on the error rather than passing it up.</li>\n<li>When you're prototyping something, or writing tests, or trying to add a feature incrementally. During this kind of development and in non-production code, it's unpleasant when the compiler blocks your progress because it'd like you to handle all cases, which may not be your priority.</li>\n</ol>",
+        "id": 275192356,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1647230991
+    },
+    {
+        "content": "<p>I think there is space for both errors-as-values and irrecoverable panics. They solve different problems. There is the problem of \"please don't replace your valued errors with panics (and vice versa)\", but there is merit to both uses.</p>",
+        "id": 275192433,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1647231086
+    },
+    {
+        "content": "<p>I think it is important that panic in Roc does not have a way to get caught. It should be an unrecoverable exception based on when an invariant is broken. Something that can only be dealt with by the platform, if at all. I think that if someone ever wants to catch a panic, the panic shouldn't exist at all.</p>",
+        "id": 275192644,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647231371
+    },
+    {
+        "content": "<p>Hopefully will be a clear indication of a bug.</p>",
+        "id": 275192653,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647231409
+    },
+    {
+        "content": "<blockquote>\n<p>If it turns out it can unlock more performance optimizations, e.g. via LLVM. (I'm actually somewhat skeptical that it can, but maybe there's a way!)</p>\n</blockquote>\n<p>I am pretty sure that I can prove this true. One simple case: Make every operation that might panic (but you can guarantee never will) use the checked version of the operation. Make them all throw the same \"unreachable\" panic when the check fails. Now they all will be jumping to the exact same code block if they panic.</p>\n<p>This enables llvm to merge the checks together if one check guarantees another one of the checks. llvm can't do that merging if the 2 operations lead to different kinds of panics.</p>\n<p>This is one of the things I have run into with incrementing integers and using them to access a list. I know that neither will ever overflow or access out of bounds. If they both threw the same panic, they could be merged into one check. They don't so I always have at least 2 checks.</p>",
+        "id": 275192801,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647231684
+    },
+    {
+        "content": "<p>I agree that there should at least be a <em>consistent</em> story for this in Roc. If it has panics at all, then we're already well along that one-way street, and the only way to truly reverse direction is to remove the concept of panics entirely (instead favoring checked, wrapping, or other deterministic outcomes). I agree that panics, when they do exist, should be irrecoverable but stylistically used only to check invariants/impossible states. Some languages have pre-condition/post-condition clauses in functions that formalize panics into rather declarative, concise, and readable assertions (essentially a constraint language within the grammar); I don't know how well that'd fit the panics that Roc already has, but it could handily solve Brendan's needs, for example, without obfuscating the code by mixing invariant checks with semantic behaviors.</p>\n<p>It's worth noting that pre-conditions should not be used to validate untrusted inputs, since Roc's type system is expressive enough, particularly with tags, to handle almost all such validation in a cleaner way. The pre-condition, however, would be used to validate the internal state managed by the module itself (i.e. of the Dict input); it may be possible that all pre-conditions could be represented as post-conditions instead, since if a module has encapsulated internal state, then only the module's functions can produce such values, thus state could be eagerly checked at the end of a function doing updates rather than lazily at the start of a function receiving the updated value. It's probably then also the case that these invariants could be expressed alongside the type definition itself instead of within functions (perhaps as an <code>assume</code> clause, similar to how <code>where</code> is proposed in #Abilities). Perhaps modules could have a formal bug-report destination concept which Roc could use to automatically provide the option to, after review, submit a report/issue upon detected issue. Presumably productionized/optimized builds would simply omit code that checks the invariants.</p>",
+        "id": 275198440,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1647239679
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"483789\">@Kevin Gillette</span> Worth noting that currently the panics are in the compiler, either to verify invariants, like Ayaz described, or as TODOs where a feature needs to be added. None of these should be viewable to Roc users, once it's production ready</p>",
+        "id": 275222397,
+        "sender_full_name": "Derek Gustafson",
+        "timestamp": 1647256836
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"483003\">@Derek Gustafson</span> I had thought there were user-visible panics in the language itself, such as for numeric operations that overflow.</p>",
+        "id": 275246235,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1647269441
+    },
+    {
+        "content": "<p>I had missed that</p>",
+        "id": 275248321,
+        "sender_full_name": "Derek Gustafson",
+        "timestamp": 1647270210
+    },
+    {
+        "content": "<p>Yeah, you can always generate a panic using integer over or underflow. In my case, I just set the dictionaries size to <code>0 - 1</code> which cause it to underflow</p>",
+        "id": 275252597,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647271889
+    },
+    {
+        "content": "<p>Haskell does this very nice from the ergonomics perspective. <br>\nThey don't panic, they specify <code>undefined</code> behavior.</p>",
+        "id": 275277035,
+        "sender_full_name": "Zeljko Nesic",
+        "timestamp": 1647281788
+    },
+    {
+        "content": "<p><code>undefined</code> type checks everytime</p>",
+        "id": 275277082,
+        "sender_full_name": "Zeljko Nesic",
+        "timestamp": 1647281809
+    },
+    {
+        "content": "<p>Maybe we can have <code>whatever</code></p>",
+        "id": 275277129,
+        "sender_full_name": "Zeljko Nesic",
+        "timestamp": 1647281829
+    },
+    {
+        "content": "<p><code>undefined</code> isn't as nice from a reporting perspective</p>",
+        "id": 275277586,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1647282003
+    },
+    {
+        "content": "<p>It really helps as much as <code>Debug.todo</code> helps for sketching the code , but I think that we should not panic in any way.</p>",
+        "id": 275277603,
+        "sender_full_name": "Zeljko Nesic",
+        "timestamp": 1647282004
+    },
+    {
+        "content": "<p>I like rust's <code>unreachable</code></p>",
+        "id": 275277615,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1647282009
+    },
+    {
+        "content": "<p>Well, I've written it with a wrapper that prints a message before ~undefining~.</p>",
+        "id": 275277775,
+        "sender_full_name": "Zeljko Nesic",
+        "timestamp": 1647282088
+    },
+    {
+        "content": "<p>I also like <code>unreachable</code> because it is clearer about when it should be used.</p>",
+        "id": 275279325,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647282759
+    },
+    {
+        "content": "<blockquote>\n<p>It really helps as much as <code>Debug.todo</code> helps for sketching the code , but I think that we should not panic in any way.</p>\n</blockquote>\n<p>How is <code>undefined</code> different from a panic? What happens if it is reached? Does it just keep executing and hope nothing is wrong?</p>",
+        "id": 275279434,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647282813
+    },
+    {
+        "content": "<p>for sketching we have holes, the single <code>_</code> character</p>",
+        "id": 275279615,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1647282909
+    },
+    {
+        "content": "<p>much more convenient to type</p>",
+        "id": 275279636,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1647282919
+    },
+    {
+        "content": "<blockquote>\n<p><code>undefined</code> type checks everytime</p>\n</blockquote>\n<p>so does <code>panic!</code> in Rust, and so would any kind of explicit panic in Roc</p>",
+        "id": 275287450,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647286537
+    },
+    {
+        "content": "<p>one thing that I think is fairly compelling is that if something fits all of these criteria:</p>\n<ul>\n<li>we've hit an error state that we didn't expect to come up in practice</li>\n<li>the way we're going to handle it is to bail out of the current call chain and inform the user</li>\n<li>it would help us to track down what happened if we could also inform the developers of the call chain that led to this error</li>\n</ul>\n<p>...then panicking (when the application author is able to specify how to recover and explain what happened to the user) is arguably better than using something like <code>Result</code> for several reasons:</p>\n<ul>\n<li>it can provide a stack trace to the developer</li>\n<li>it can simplify the code because there's less <code>Result</code> handling that will all lead to the same error being reported to the user anyway</li>\n<li>it's faster because there are fewer conditional checks on <code>Result</code> involved</li>\n</ul>\n<p>of course, the temptation of having an explicit panic available is that, because it's more convenient in those scenarios, to choose to bail out and show the user an error more often - even in scenarios where if <code>Result</code> was the only option, you'd otherwise handle the error more gracefully than that</p>",
+        "id": 275289962,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647287908
+    },
+    {
+        "content": "<p>here i'm hopeful that our editor could make the <code>Result</code> approach easier</p>",
+        "id": 275292006,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1647288814
+    },
+    {
+        "content": "<p>as in, \"i want to make this function return a result, bubble that up to all call sites\"</p>",
+        "id": 275292035,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1647288839
+    },
+    {
+        "content": "<p>definitely! Although it still makes all the types more involved along the way</p>",
+        "id": 275294210,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647290000
+    },
+    {
+        "content": "<p>another thing to consider: the current design for panics in Roc is heavily performance-optimized for the case where they never happen.</p>\n<p>A panic in a Roc application literally runs a function in the host called <code>roc_panic</code> and that's it. It's completely up to the host what that code does.</p>\n<p>This will usually happen in the middle of a call stack. The host can unwind that stack using <code>libunwind</code>, but has no way to clean up all the heap memory that was in use.</p>",
+        "id": 275313617,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647302259
+    },
+    {
+        "content": "<p>So the only way today to avoid a memory leak on every panic is to have <code>roc_alloc</code> remember all the virtual memory pages where it was stored, deep clone the entire application state into a fresh virtual memory page, and release all the old ones back to the OS.</p>",
+        "id": 275313715,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647302373
+    },
+    {
+        "content": "<p>This is actually theoretically very efficient if you're a server, because everything is arena allocated anyway, so you just fire off a HTTP 500 response and throw away the arena</p>",
+        "id": 275313876,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647302453
+    },
+    {
+        "content": "<p>But for something like a GUI, a panic would actually result in cloning the entire application state, which would likely at least drop a couple of frames</p>",
+        "id": 275313915,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647302496
+    },
+    {
+        "content": "<p>(There's a theoretical way to get panics to walk the stack and decrement refcounts but it would be a huge, messy project and I'd prefer not to do it.)</p>",
+        "id": 275314029,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647302584
+    },
+    {
+        "content": "<p>Dropping a couple of frames on panic is honestly probably fine if they are extremely rare events, like actual \"I thought this would never ever happen\" things - integer overflows and such - but I think a valid concern is that explicit recoverable panics might result in people overusing them for coarse-grained control flow and ending up with slower and slower programs as their application state grows, and then spreading the word that \"Roc is slow at scale, actually.\"</p>",
+        "id": 275314204,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647302727
+    },
+    {
+        "content": "<p>If the host halts the process when a panic happens though that's not an issue. I can't think of many examples other than a server-like process when a host would want to do something other than exit?</p>",
+        "id": 275314297,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1647302806
+    },
+    {
+        "content": "<p>well in a UI application you'd probably want to let the user continue with what they were doing</p>",
+        "id": 275314337,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647302852
+    },
+    {
+        "content": "<p>like the operation they just attempted failed catastrophically, so you display an error, but then they should be able to press ok and try something else</p>",
+        "id": 275314409,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647302888
+    },
+    {
+        "content": "<p>Idk</p>",
+        "id": 275314532,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647303004
+    },
+    {
+        "content": "<p>If it failed with a panic, continuing probably doesn't make sense</p>",
+        "id": 275314543,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647303017
+    },
+    {
+        "content": "<p>If they failed with an error, continuing makes sense.</p>",
+        "id": 275314555,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647303029
+    },
+    {
+        "content": "<p>hm.. personally, it seems to me like that kind of pattern means errors should be used and not panics. In my mind the role of panics is entirely different than that of errors, and panics should only be used when there's literally no way to recover. If you can present an error and keep going you should send an error up</p>",
+        "id": 275314556,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1647303029
+    },
+    {
+        "content": "<p><span aria-label=\"point up\" class=\"emoji emoji-1f446\" role=\"img\" title=\"point up\">:point_up:</span> That</p>",
+        "id": 275314572,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647303048
+    },
+    {
+        "content": "<p>Otherwise, there is no way for the host to know if the application is even in a usable state. The model may be total garbage is half changed to the new state.</p>",
+        "id": 275314688,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647303099
+    },
+    {
+        "content": "<p>e.g. so far I've not seen a rust panic being caught</p>",
+        "id": 275314690,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1647303105
+    },
+    {
+        "content": "<p>that's a fair point</p>",
+        "id": 275314694,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647303114
+    },
+    {
+        "content": "<blockquote>\n<p>but I think a valid concern is that explicit recoverable panics might result in people overusing them for coarse-grained control flow but I think a valid concern is that explicit recoverable panics might result in people overusing them for coarse-grained control flow </p>\n</blockquote>\n<p>I guess this is the meat of the problem right, how do you enforce that panics and errors are used for orthogonal reasons.. maybe there is a way to make it harder to use panics for error handling</p>",
+        "id": 275314695,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1647303115
+    },
+    {
+        "content": "<p>I know it's possible, I just don't think it really happens in the wild</p>",
+        "id": 275314697,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1647303116
+    },
+    {
+        "content": "<p>yeah</p>",
+        "id": 275314775,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647303139
+    },
+    {
+        "content": "<p>so, maybe that should be a big cultural thing then</p>",
+        "id": 275314788,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647303156
+    },
+    {
+        "content": "<p>panic should mean unrecoverable loss of state</p>",
+        "id": 275314801,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647303182
+    },
+    {
+        "content": "<p>so if a panic happens, what you're supposed to do is exit immediately, possibly after logging diagnostic info about what went wrong</p>",
+        "id": 275314831,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647303227
+    },
+    {
+        "content": "<p>should we call it something else then?</p>",
+        "id": 275314893,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647303261
+    },
+    {
+        "content": "<p>e.g. <code>crash</code></p>",
+        "id": 275314904,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647303269
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281543\">Folkert de Vries</span> <a href=\"#narrow/stream/304641-ideas/topic/Explicit.20Panic.20in.20Roc/near/275314697\">said</a>:</p>\n<blockquote>\n<p>I know it's possible, I just don't think it really happens in the wild</p>\n</blockquote>\n<p>(aside: rustc <a href=\"https://github.com/rust-lang/rust/blob/ecb867ec3cefa97a5807453a68758392730e3ed9/compiler/rustc_driver/src/lib.rs#L1123-L1136\">uses it to convert panics into errors</a> <span aria-label=\"face with thermometer\" class=\"emoji emoji-1f912\" role=\"img\" title=\"face with thermometer\">:face_with_thermometer:</span> )</p>",
+        "id": 275314989,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1647303283
+    },
+    {
+        "content": "<p>could even go with <code>unrecoverableError</code> just to make it stick out and be long to type.</p>",
+        "id": 275315007,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647303298
+    },
+    {
+        "content": "<p>Would make things pretty clear.</p>",
+        "id": 275315031,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647303321
+    },
+    {
+        "content": "<p>From the platform perspective an unrecoverable application error may not always mean an unrecoverable platform error. So I think this all makes sense. It means consider any application state and memory as garbage, but feel free to continue if that doesn't matter to the platform/the platform knows how to reset.</p>",
+        "id": 275315167,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647303438
+    },
+    {
+        "content": "<p>I'm fine with panic meaning unrecoverable, particularly if, in practice, the host can know how to deallocate everything related to Roc, in case Roc is used in an embedded way.</p>\n<p>Panic will get misused if it's recoverable <em>within</em> Roc itself. If unrecoverable, it should only be used for programmer mistakes</p>",
+        "id": 275316877,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1647305086
+    },
+    {
+        "content": "<p>in Elm it was called <code>crash</code> back when it was allowed outside release builds (which it no longer is), and that was how people used it</p>",
+        "id": 275317273,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647305475
+    },
+    {
+        "content": "<p><code>crash</code> was responsible for NoRedInk's one instance of having a production runtime exception in 7 years, so I guess that's not a bad track record <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 275317288,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647305508
+    },
+    {
+        "content": "<blockquote>\n<p>Panic will get misused if it's recoverable <em>within</em> Roc itself. If unrecoverable, it should only be used for programmer mistakes</p>\n</blockquote>\n<p>unfortunately there's no real way to prevent this</p>",
+        "id": 275317390,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647305610
+    },
+    {
+        "content": "<p>a platform author can always have the application author provide a function to run if a crash happens, and then have the host call that function from within <code>roc_panic</code></p>",
+        "id": 275317452,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647305654
+    },
+    {
+        "content": "<p>there's no way to rule it out, since hosts can call whatever functions they like</p>",
+        "id": 275317469,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1647305668
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/Explicit.20Panic.20in.20Roc/near/275317452\">said</a>:</p>\n<blockquote>\n<p>a platform author can always have the application author provide a function to run if a crash happens, and then have the host call that function from within <code>roc_panic</code></p>\n</blockquote>\n<p>Sure, but that's categorically different than a recovery feature provided by and within the language itself.</p>",
+        "id": 275325947,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1647315348
+    },
+    {
+        "content": "<p>As a general question, was anyone ever suggesting adding a recovery feature into roc itself? I am only try to get some sort of user exposed panic feature. No want for recovery.</p>",
+        "id": 275327421,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1647317153
+    },
+    {
+        "content": "<p>The only time so far that I've wanted a Roc panic/crash was to assert the safety of literals (which I think qualifies as catching \"programmer mistakes\" as mentioned above).</p>\n<div class=\"codehilite\"><pre><span></span><code>» x = 5\n… x % 3\n\nOk 2 : Result (Int *) [ DivByZero ]*\n\n» x = 5\n… x % 3 |&gt; Result.withDefault 666 # No need for error handling, so let&#39;s just get use the Ok value. However, this is smelly.\n\n2 : Int *\n\n» x = 5\n… modSafe = \\a, b -&gt;\n…     a % b |&gt; Result.withDefault 666 # Encapsulate the smelliness into a helper function.\n… modSafe x 3\n\n2 : Int *\n\n» x = 5\n… modSafe = \\a, b -&gt;\n…     when a % b is\n…         Ok c -&gt; c\n…         DivByZero -&gt; crash &quot;modSafe doesn&#39;t support b=0!&quot; # Is this less smelly? I don&#39;t know!\n… modSafe x 3\n</code></pre></div>\n<p>However, I can see this use case increasing flakiness. <span aria-label=\"shrug\" class=\"emoji emoji-1f937\" role=\"img\" title=\"shrug\">:shrug:</span></p>",
+        "id": 275329363,
+        "sender_full_name": "jan kili",
+        "timestamp": 1647319363
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/Explicit.20Panic.20in.20Roc/near/275314831\">said</a>:</p>\n<blockquote>\n<p>so if a panic happens, what you're supposed to do is exit immediately, possibly after logging diagnostic info about what went wrong</p>\n</blockquote>\n<p>What about if you're running 3rd party Roc code? For example, plugins in an editor. That shouldn't bring down the whole editor.</p>\n<p>Edit: It occurred to me that you're probably talking about just the Roc code, not the platform, so nevermind.</p>",
+        "id": 275350939,
+        "sender_full_name": "Martin Stewart",
+        "timestamp": 1647338115
+    },
+    {
+        "content": "<p>Perhaps Roc packages, once there's a package manager, can be automatically annotated with whether they panic, and maybe even distinguishing between panics for data they control (as in Dict example elsewhere, counter-balanced by test coverage) vs parameters you can pass in (such as panicking if you pass an even number). That could be used by users in search of a package to evaluate their reliability.</p>",
+        "id": 275373419,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1647351403
+    },
+    {
+        "content": "<p>Ideally most explicit panics would be for a module's own types.</p>\n<p>I could however see some cases where the function must only handle numbers of a certain range. For \"must be non-negative\" an unsigned type could be required, but occasionally there are stranger ranges (\"between 3 and 127\"). Some languages have ranged number types, but those haven't proved so valuable to have ended up in many languages. For Roc, the function could return a Result, or take an opaque type that would've been produced by another function returning a Result, or it could panic. I suspect panic would be quite disfavored here, but I also don't know in practice when too much use of Result or opaque types gets tedious.</p>",
+        "id": 275374615,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1647351978
+    },
+    {
+        "content": "<p>While <code>roc_panic</code> does seem straightforward and reasonable for many platforms (where the host is just there to serve the Roc application), it seems plausible that there are some platforms in which roc_panic, at least afaict, doesn't provide great choices:</p>\n<ol>\n<li>Consider an pre-existing game engine (such as Unity or Godot) adapted to run Roc for game-specific code, probably in the form of behavioral hooks. A roc_panic probably shouldn't exit the game, nor should it no-op, since that would be undefined behavior and memory leaks; perhaps the character whose behavior panicked would just fall back to some non-custom behavior (alongside reporting the issue).</li>\n<li>Consider a productionized web-server platform in which an organization has decided that issues in, perhaps, one corner case of one endpoint/handler should not crash the whole service: likewise, a direct <code>roc_panic</code> call is not very convenient.</li>\n<li>Consider some case in which live code compilation/loading is used to allow untrusted users run Roc code, similar to Web-Assembly or PNACL can work with safety/conformance scanning (to which Roc could be naturally well suited, being side-effect-free). Restrictions would probably be to run code in a separate thread with a limited size for stack and allocations, and is pre-empted after a certain time or otherwise proven to be a \"total\" function with a linear-ish time bound. In such a case, panics should be expected, and it would certainly be undesirable for these to cause leaks or exit the program.</li>\n</ol>\n<p>All of these above examples feel less like a host &lt;-&gt; <em>tenant</em> relationship (where the Roc application has some expectation of exclusivity or prime importance), but instead more like a host &lt;-&gt; <em>guest</em> relationship (where this particular Roc code fits more into the role of a embedded scripting component, albeit faster and uninterpreted). Other terms certainly could be application (as is already used) and <em>behavior</em>.</p>\n<p>These certainly may be misconceptions, but the [solvable] issues I see here with <code>roc_panic</code> are:</p>\n<ul>\n<li>There's a certain assumption that if the host wants to recover, it's solely through the extra effort on the part of the host.</li>\n<li><code>roc_alloc</code> and friends will probably be naively implemented most of the time (iow by just calling the host's own allocator directly), thus without special effort, a host won't be able to distinguish between allocations made by different threads running Roc, or even between Roc-related and Roc-unrelated allocations, and thus a straightforwardly-implemented host will not free leaked allocations.</li>\n</ul>\n<p>Certainly a few of workarounds for memory leaks are for a host to give a separate arena to each thread/invocation, or to manually unwind the stack to find heap references (needing to know a lot of unsafe details about Roc in the process, and hoping its calling convention never changes).</p>\n<p>I wonder if we could guarantee that, following a <code>roc_panic</code> in which the host does not call exit, Roc would unwind its own stack and decrement/free allocations, finally resulting in a sentinel \"I panicked\" value to the host. Roc could accept from the host a pointer to a signal variable (somewhat like <code>errno</code>) that it might overwrite before the Roc code returns control to the host. Alternatively, Roc could provide some utility functions to host that could be called within <code>roc_panic</code>, such as a function for filling a host-provided buffer with a formatted stack trace, and a function for unwinding the stack.</p>\n<p>It seems like, ideally, hosts should need to know very little about Roc, and Roc should be able to clean up its own allocations even in the case of a panic (as it cleans allocations when no panics have occurred).</p>",
+        "id": 278488027,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1649622463
+    },
+    {
+        "content": "<p>there were related discussions about this in <a href=\"#narrow/stream/304641-ideas/topic/Explicit.20Panic.20in.20Roc\">https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/Explicit.20Panic.20in.20Roc</a></p>",
+        "id": 278490705,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1649626041
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> Thanks for the reminder!</p>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/Explicit.20Panic.20in.20Roc/near/275314029\">said</a>:</p>\n<blockquote>\n<p>(There's a theoretical way to get panics to walk the stack and decrement refcounts but it would be a huge, messy project and I'd prefer not to do it.)</p>\n</blockquote>\n<p>Why would it be a huge mess? It seems like we could just arrange for each Roc stack frame to have heap-references at the \"end\" of the frame, along with an integer indicating the number of such references. At that point wouldn't the stack just be essentially a [contiguously-allocated] linked-list of frames, where the allocation-relevant parts, and the info needed to unwind, are all self-describing and size-agnostic? It might be a deep change, and there are probably some technical road-blocks, but, granted coming from someone with no specific experience in this area, it does not sound particularly intensive from an algorithmic sense.</p>",
+        "id": 278493919,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1649631004
+    },
+    {
+        "content": "<p>so <code>libunwind</code> has a system like this, and LLVM is aware of it and can emit this info</p>",
+        "id": 278497506,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1649636617
+    },
+    {
+        "content": "<p>I got a \"hello world\" example with <code>clang</code> and <code>libunwind</code> working some time ago, where it's at least able to walk the stack and print out the function calls</p>",
+        "id": 278497577,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1649636700
+    },
+    {
+        "content": "<p>however, <code>libunwind</code> just lets you unwind the stack, it doesn't really ship with a way to say \"okay at each point in the stack, here's some extra info that you need to know about how to clean up heap stuff for this stack frame\"</p>",
+        "id": 278497646,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1649636764
+    },
+    {
+        "content": "<p>C++ exceptions let you do that, and LLVM knows how to emit those too</p>",
+        "id": 278497657,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1649636783
+    },
+    {
+        "content": "<p>in fact, we used to do this for panics in Roc</p>",
+        "id": 278497661,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1649636792
+    },
+    {
+        "content": "<p>it was very complicated and caused all sorts of problems, including:</p>\n<ul>\n<li>you have to tell LLVM to \"invoke\" versus \"call\" functions in some cases versus others, on a per-call basis (the distinction has something to do with whether the call can result in a panic; I don't remember exactly). It was difficult and error-prone to figure out when we were supposed to generate a call vs an invoke, and \"invoke\" prevents certain LLVM optimizations from running - so using it slows down the final program. If there are ways to mitigate that, I'm not sure what they are.</li>\n<li>how do hosts handle panics if they aren't C++ with its <code>catch</code> keyword? We used to deal with this by having every call from the host to a roc application function always return a <code>Result</code>, which was basically us wrapping every call to a roc app in a giant <code>try</code>/<code>catch</code>, and then returning an <code>Err</code> from the <code>catch</code> and an <code>Ok</code> if a <code>throw</code> didn't happen. This meant every Roc application had to do a conditional to check for potential panics on every call, whereas today that's no longer necessary. (Granted, we could theoretically change to the API of today and have the <code>catch</code> invoke <code>roc_panic</code>.)</li>\n<li>how do we implement the necessary code gen for all of our development backends, which aren't using LLVM? What we generate has to match what LLVM is generating (we can't invent our own design for it, because LLVM wouldn't know its semantics the way it knows C++ exception semamtics), but I don't even know if there's a spec for what the layout is supposed to look like. So maybe the way we'd end up implementing it is looking at LLVM/C++ compiler code gen and trying to figure out how it works?</li>\n<li>The only implementation of <code>throw</code> I'm aware of is in <code>libc++</code> (the function LLVM emits is called <code>__cxa_throw</code> or something), so we used to have to link all of <code>libc++</code> into every roc application in order to support this. Theoretically we could extract just what we need from <code>libc++</code>, port it to Zig, and include it in the builtins, but I took a look at it and concluded I don't know C++ nearly well enough to do that.</li>\n</ul>",
+        "id": 278498203,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1649637563
+    },
+    {
+        "content": "<p>Thanks for the context!</p>\n<p>I didn't realize that made that many assumptions about calling conventions and stack layout, but it makes sense in retrospect that it would.</p>\n<p>Linking against libc++ for just this reason certainly doesn't seem like a win.</p>\n<p>In theory, how hard would it be for Roc to provide its own arena allocation implementation? iow, Roc still calls <code>roc_alloc</code>, but instead of asking for 4 bytes here or 32 bytes there, it just asks for page-size multiples. At that point it'd be a bit simpler for arbitrary platforms to ask Roc, as part of a <code>roc_panic</code>, to free the arena pages (presumably part of the first page could hold accounting that links to another pages).</p>\n<p>This would still leave the question of reference data shared across the host &lt;-&gt; Roc boundary, but at least for hosts in which that's not a concern (such as with static data or where the counts can be reset back to 1), this would give arbitrary hosts a non-leaking recovery path.</p>",
+        "id": 278500215,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1649640531
+    },
+    {
+        "content": "<p>hm, what would the benefit be of that compared to status quo? Hosts can already choose to have <code>roc_alloc</code> calls do arena allocation, and then the host knows all about the allocated memory and can deallocate as necessary</p>",
+        "id": 278548327,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1649681459
+    },
+    {
+        "content": "<p>I'm suspect that providing an arena allocator is more work than many host authors (including those who want a recovery option) will want to spend time/complexity investing.</p>\n<p>While some host languages no doubt will have an easier time of this than others, it's probably not a differentiating feature for many platforms, and thus leaves a poorer tradeoff for a host author that wants recovery, but doesn't have great arena allocation implementations in their language, or when there are options but the host author doesn't want to research them (dilemma of choice).</p>\n<p>If Rust or Zig have good options (performant and robust), presumably we could provide that as an option to host authors via some pragma or build option. We wouldn't need to implement our own arena allocator, but merely layer a good preexisting one atop roc_alloc at the host author's request.</p>",
+        "id": 278594930,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1649700827
+    },
+    {
+        "content": "<p>It should just be importing a rust library for the most part. I feel most of the basic <code>roc_*</code> functions could be implemented in a library</p>",
+        "id": 278600523,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1649703169
+    },
+    {
+        "content": "<p>I think this can be supported rather simply on the platform side with a minor ecosystem. So using rust/zig/etc package manager instead of building it into roc</p>",
+        "id": 278600582,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1649703196
+    },
+    {
+        "content": "<blockquote>\n<p>I'm suspect that providing an arena allocator is more work than many host authors (including those who want a recovery option) will want to spend time/complexity investing.</p>\n</blockquote>\n<p>I think that this is a bad assumption based on the vision of Roc. Most roc users will not be platform authors. Platform authors, especially those implementing core platforms that many people depend on will need to deal with low level implementation details. This is not something most people have to think about at all, but some people do.</p>",
+        "id": 278601075,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1649703452
+    }
+]

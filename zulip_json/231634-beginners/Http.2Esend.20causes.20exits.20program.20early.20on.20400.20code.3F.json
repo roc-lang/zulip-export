@@ -1,0 +1,152 @@
+[
+    {
+        "content": "<p>So I'm trying to ping an API with a post request, and the API is giving me a 400 status code. However it seems that the send function is forcing my program to exit early, rather than letting me handle the 400 code myself.</p>\n<p>So in the source below, the <code>dbg</code> statement is never hit. Instead, the program exits with the following message:</p>\n<div class=\"codehilite\"><pre><span></span><code>Program exited early with error: (HttpError (BadStatus 400))\n</code></pre></div>\n<p>Looking over the source from basic-cli, I don't see anything that obviously looks like it should do this. Anyone know <del>anything about this</del> what I'm doing wrong?</p>\n<div class=\"codehilite\"><pre><span></span><code>resp = Http.send! (buildRequest apiKey model messages)\ndbg resp\noutput =\n    when resp |&gt; Http.handleStringResponse is\n        Err err -&gt; crash (Http.errorToString err)\n        Ok body -&gt; body\n</code></pre></div>",
+        "id": 437489195,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1715099372
+    },
+    {
+        "content": "<p>Hi Ian,<br>\nI believe you are creating a Task chain with error accumulation that short circuits when an error is encountered. I'll see if I can modify this so it works as you intend.</p>",
+        "id": 437490839,
+        "sender_full_name": "Anton",
+        "timestamp": 1715100010
+    },
+    {
+        "content": "<p>I'm going to get diner but I can think you can follow <a href=\"https://github.com/roc-lang/examples/blob/201c056e34d87295cbe6c679110080fe81c8857a/examples/Tasks/main.roc#L17\">this approach</a> with Task.onErr</p>",
+        "id": 437491689,
+        "sender_full_name": "Anton",
+        "timestamp": 1715100363
+    },
+    {
+        "content": "<p>Should be</p>\n<div class=\"codehilite\"><pre><span></span><code>when ... is\n   Err (HttpError (BadStatus 404)) -&gt; &quot;Error 404&quot;\n   Err err -&gt; crash ...\n   Ok body -&gt; body\n</code></pre></div>\n<p>Note that in your design the successful result of <code>when ... is</code> is a Str, so this implies you will provide a valid string in the case of an 404 error</p>\n<p>You might want to change that to return a Task Str ... instead, so that you can do some other action and not just return a value</p>",
+        "id": 437502557,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1715104619
+    },
+    {
+        "content": "<p>Or, you could return a Result (<code> -&gt; Err ExampleBadRequestTag</code> and <code>-&gt; Ok body</code>) instead, and handle the two options later in your code. What is more ergonomic depends on whether you can provide a replacement value when an error occurs right away</p>",
+        "id": 437507582,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1715106579
+    },
+    {
+        "content": "<p>Yeah there are multiple ways to go. This is a working example in old-style Roc (I don't have much experience with ! yet):</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">app</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nv\">main</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">pf</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">platform</span><span class=\"w\"> </span><span class=\"s\">\"https://github.com/roc-lang/basic-cli/releases/download/0.11.0/SY4WWMhWQ9NvQgvIthcv15AUeA7rAIJHAHgiaSHGhdY.tar.br\"</span><span class=\"w\"> </span><span class=\"p\">}</span>\n\n<span class=\"kn\">import</span><span class=\"w\"> </span><span class=\"nc\">pf.Http</span>\n<span class=\"kn\">import</span><span class=\"w\"> </span><span class=\"nc\">pf.Task</span><span class=\"w\"> </span><span class=\"nv\">exposing</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">Task</span><span class=\"p\">]</span>\n<span class=\"kn\">import</span><span class=\"w\"> </span><span class=\"nc\">pf.Stdout</span>\n<span class=\"kn\">import</span><span class=\"w\"> </span><span class=\"nc\">pf.Stderr</span>\n\n<span class=\"kr\">main </span><span class=\"nf\">=</span>\n<span class=\"w\">    </span><span class=\"nv\">request</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"nv\">method</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Get</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"nv\">headers</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">[],</span>\n<span class=\"w\">        </span><span class=\"nv\">url</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"s\">\"http://localhost:8080\"</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"nv\">mimeType</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"s\">\"\"</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"nv\">body</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">[],</span>\n<span class=\"w\">        </span><span class=\"nv\">timeout</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">TimeoutMilliseconds</span><span class=\"w\"> </span><span class=\"mi\">5000</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"nv\">sendT</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"kt\">Http</span><span class=\"nf\">.</span><span class=\"nv\">send</span><span class=\"w\"> </span><span class=\"nv\">request</span>\n\n<span class=\"w\">    </span><span class=\"kt\">Task</span><span class=\"nf\">.</span><span class=\"nv\">attempt</span><span class=\"w\"> </span><span class=\"nv\">sendT</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">sendResult</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">        </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"nv\">sendResult</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">            </span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"nv\">response</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">                </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"nv\">response</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Http</span><span class=\"nf\">.</span><span class=\"nv\">handleStringResponse</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">                    </span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"nv\">body</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Stdout</span><span class=\"nf\">.</span><span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"s\">\"Response body: $(body).\"</span>\n<span class=\"w\">                    </span><span class=\"err\">#</span><span class=\"w\"> </span><span class=\"kt\">Body</span><span class=\"w\"> </span><span class=\"nv\">contained</span><span class=\"w\"> </span><span class=\"kt\">Invalid</span><span class=\"w\"> </span><span class=\"kt\">UTF</span><span class=\"nf\">-</span><span class=\"mi\">8</span>\n<span class=\"w\">                    </span><span class=\"kt\">Err</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Stderr</span><span class=\"nf\">.</span><span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Http</span><span class=\"nf\">.</span><span class=\"nv\">errorToString</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"p\">)</span>\n\n<span class=\"w\">            </span><span class=\"kt\">Err</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Stderr</span><span class=\"nf\">.</span><span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Inspect</span><span class=\"nf\">.</span><span class=\"nv\">toStr</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>I'll write a clean ! version tomorrow.<br>\nI'm also going to improve the error <code>Program exited early with error:</code>.</p>",
+        "id": 437508793,
+        "sender_full_name": "Anton",
+        "timestamp": 1715107036
+    },
+    {
+        "content": "<p>Awesome, thanks for this <span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> . This is a great help! <span aria-label=\"thank you\" class=\"emoji emoji-1f64f\" role=\"img\" title=\"thank you\">:thank_you:</span> </p>\n<p>One complaint that I have with the way Http errors are structured with the basic cli platform is that in the case of a <code>BadStatus</code> error, there is no access provided to the response body. In order to debug my error from the API, I had to modify the basic-cli platform with to allow the BadStatus error to return the response body. Might be nice if the error was a tagged record which included both the error code # as well as the response body.</p>",
+        "id": 437533044,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1715116792
+    },
+    {
+        "content": "<p>we can do that! Can you open an issue on the repo?</p>",
+        "id": 437533746,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715117066
+    },
+    {
+        "content": "<p>I sure can! I'd love to handle the PR too... Does this look good for the error types?</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nb\">Error</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">    </span><span class=\"nx\">BadRequest</span><span class=\"w\"> </span><span class=\"nx\">Str</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"nx\">Timeout</span><span class=\"w\"> </span><span class=\"nx\">U64</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"nx\">NetworkError</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"nx\">BadStatus</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">code</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">U16</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">body</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"nx\">U8</span><span class=\"w\"> </span><span class=\"p\">},</span><span class=\"w\"> </span><span class=\"c1\"># changed from: BadStatus U16,</span>\n<span class=\"w\">    </span><span class=\"nx\">BadBody</span><span class=\"w\"> </span><span class=\"nx\">Str</span><span class=\"p\">,</span>\n<span class=\"p\">]</span>\n</code></pre></div>",
+        "id": 437542327,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1715120868
+    },
+    {
+        "content": "<p>looks good to me! <span aria-label=\"raised hands\" class=\"emoji emoji-1f64c\" role=\"img\" title=\"raised hands\">:raised_hands:</span></p>",
+        "id": 437543379,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715121409
+    },
+    {
+        "content": "<p>So I'm seeing one downside to using a <code>List U8</code> for the body in the Error. There may be many reasons to keep the body in <code>List U8</code> format that I'm not aware of, but I'll just call this out here.</p>\n<p>In the case that the error goes unhandled and the program exits early and the platform attempts to print the error to the terminal, the <code>List U8</code> is not particularly readable/helpful to the user. If the error is handled by the user they can of course handle the U8 List however they want. </p>\n<p>But for example, you might get an output like this:</p>\n<div class=\"codehilite\"><pre><span></span><code>Program exited early with error: (HttpErr (BadStatus {body: [123, 34, 101, 114, 114, 111, 114, 34, 58, 123, 34, 109, 101, 115, 115, 97, 103, 101, 34, 58, 34, 77, 111, 100, 101, 108, 32, 109, 105, 115, 116, 114, 97, 108, 47, 109, 105, 115, 116, 114, 97, 108, 45, 115, 109, 97, 108, 108, 32, 105, 115, 32, 110, 111, 116, 32, 97, 118, 97, 105, 108, 97, 98, 108, 101, 34, 44, 34, 99, 111, 100, 101, 34, 58, 52, 48, 48, 125, 44, 34, 117, 115, 101, 114, 95, 105, 100, 34, 58, 34, 117, 115, 101, 114, 95, 50, 80, 111, 52, 88, 104, 97, 81, 78, 114, 73, 89, 115, 99, 88, 67, 89, 80, 57, 121, 113, 121, 118, 105, 49, 113, 78, 34, 125], code: 400}))\n</code></pre></div>\n<p>Maybe including the body as a <code>Str</code> instead of a <code>List U8</code> would be better for this reason?</p>",
+        "id": 437683046,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1715184703
+    },
+    {
+        "content": "<p>That is indeed a shortcoming, can the conversion from <code>List U8</code> to <code>Str</code> fail in this case?</p>",
+        "id": 437708560,
+        "sender_full_name": "Anton",
+        "timestamp": 1715193404
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"518883\">@Ian McLerran</span> I've made the ! example <a href=\"#narrow/stream/316715-contributing/topic/idiomatic.20Roc.20get/near/437709217\">here</a>, I also asked for input for potential improvements.</p>",
+        "id": 437709470,
+        "sender_full_name": "Anton",
+        "timestamp": 1715193786
+    },
+    {
+        "content": "<p>There is Http.errorToString, it can be adjusted to try to convert the new List U8 to Utf8 string</p>",
+        "id": 437709988,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1715193988
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> I'm sure there are cases where it could, my thought would be to use <code>Result.withDefault \"\"</code>. You'll still get the status code, but if the Utf8 conversion fails, you'll miss out on the body. Probably a rare edge case, but that risk is definitely a downside to string conversion.</p>\n<p><span class=\"user-mention\" data-user-id=\"654587\">@Karakatiza</span> Only problem is Http.errorToString is not called when the platform does an <code>Inspect.toStr err</code> from main.</p>",
+        "id": 437710694,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1715194279
+    },
+    {
+        "content": "<p>We could make the body an opaque type and implement <code>Inspect</code> on it in a way that first tries converting to string and defaults to printing the raw bytes if that fails.</p>",
+        "id": 437719745,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1715197968
+    },
+    {
+        "content": "<p>One downside is that sometimes you’ll see the string version just because the result happens to be valid UTF8</p>",
+        "id": 437720194,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1715198159
+    },
+    {
+        "content": "<p>As a dev I feel like adding Http.errorToString in a manual error handling is trivial, as well as decoding raw body bytes to utf8 if needed.<br>\nIt may make sense to have a new Http.sendUtf8 return Str body, and keep Http.send that returns List U8. Trying to implicitly decode a bytestring as a utf8 string feels wrong.</p>\n<p>Now that I think of it, I don't think having Inspect.toStr return entire body of Http error makes sense. It should either return just the error code, or maybe a preview of the body - maybe first ~50 bytes/characters. So that If you want to see the body in case of an error you are forced to add some manual handling, atleast Http.errorToString<br>\nIts Inspect, not Serialize after all (although I do not know the original philosophy of this builtin)</p>",
+        "id": 437720441,
+        "sender_full_name": "Karakatiza",
+        "timestamp": 1715198262
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"654587\">@Karakatiza</span> I think you’re right on the money there… the inspect probably shouldn’t return the entire body. Maybe not even return the body at all? Definitely think it could be truncated. When handling the error manually, the body info will be there, but for implicit handling of the error, or any time when inspected, the status code (and *maybe a chunk of the body) is probably adequate.</p>",
+        "id": 437722592,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1715199207
+    },
+    {
+        "content": "<p>Curious what others think…</p>",
+        "id": 437722637,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1715199231
+    },
+    {
+        "content": "<p>I would indeed add a truncated body, I think it's good to remove friction for debugging where possible</p>",
+        "id": 437948856,
+        "sender_full_name": "Anton",
+        "timestamp": 1715331541
+    },
+    {
+        "content": "<p>I've submitted a PR for this <a href=\"https://github.com/roc-lang/basic-cli/pull/209\">here</a>. Curious what folks think.</p>",
+        "id": 440370234,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1716486221
+    },
+    {
+        "content": "<p>I'm in favour of truncating the List U8. I also think implicit str conversion and a separate function to receive strings from http responses are not the \"Rocy\" way to do things (having one way to do the same thing). We do have functions that do the same thing as 2 functions combined, but they are in place for performace reasons (Like <code>List.WalkBackwards</code> Instead of <code>List.reverse |&gt; List.walk</code>), and we are trying to get rid of them by making the composition of functions just as performant with Iterator - like builtin list functions.</p>",
+        "id": 440466273,
+        "sender_full_name": "Norbert Hajagos",
+        "timestamp": 1716540321
+    },
+    {
+        "content": "<p>To be fair, there is no implicit Str conversion happening to the body value attached to BadStatus error tag. This is still a List U8, just wrapped in an opaque type. So the user has full control over how to handle those bytes. </p>\n<p>The only Str conversion happening \"implicitly\" is in inspect, which is ultimately a glorified string conversion anyway.</p>",
+        "id": 440532833,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1716565117
+    },
+    {
+        "content": "<p>Okay, sorry I didn't get it the first time. This sounds pretty nice then, since if the conversion fails with invalid utf8 bytes, the user probably doesn't expect the response body to be a valid string anyways. Yes, it would produce strings vs List U8 depending on the content, which isn't elegant, but I see it as a good solution in practice.</p>",
+        "id": 440553292,
+        "sender_full_name": "Norbert Hajagos",
+        "timestamp": 1716573219
+    }
+]

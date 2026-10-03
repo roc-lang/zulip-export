@@ -1,0 +1,152 @@
+[
+    {
+        "content": "<p>I was playing around with writing my first roc code, and came across a surprising (to me) crash due to integer overflow. I was able to narrow it down to the following minimal(ish) test case:</p>\n<div class=\"codehilite\"><pre><span></span><code>app [main] { pf: platform &quot;https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br&quot; }\n\nimport pf.Stdout\nimport pf.Task\n\nprintNoOverflow =\n    rows = 3\n\n    rows\n    - 5\n    |&gt; List.repeat rows\n    |&gt; Task.forEach \\row -&gt;\n        row\n        |&gt; Num.toStr\n        |&gt; Stdout.line\n\nprintAndOverflow = \\rows -&gt;\n    rows\n    - 5\n    |&gt; List.repeat rows\n    |&gt; Task.forEach \\row -&gt;\n        row\n        |&gt; Num.toStr\n        |&gt; Stdout.line\n\nmain =\n    # works, printing:\n    # -2\n    # -2\n    # -2\n    Stdout.line! &quot;working version:&quot;\n    printNoOverflow!\n\n    # crashes with:\n    # Integer subtraction overflowed!\n    Stdout.line! &quot;crashing version:&quot;\n    printAndOverflow 3\n</code></pre></div>\n<p>What appears to be happening is that <code>List.repeat</code> takes a <code>U64</code>, so <code>rows</code> is being inferred as an <code>U64</code> in the crashing version, both in the <code>List.repeat rows</code> expression and also in the <code>rows - 5</code> expression, with the latter causing the crash.</p>\n<p>Whereas, in the non-crashing version, <code>rows</code> is being inferred as an <code>U64</code> just in the <code>List.repeat rows</code> expression, and as a <code>Num *</code> in the <code>rows - 5</code> expression.</p>\n<p>My question is: is this behavior expected? And/or is there some basic pattern I should be following to avoid the crash?</p>",
+        "id": 444067505,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1718129216
+    },
+    {
+        "content": "<p>Hmm... this is definitely strange... rows should indeed be inferred to be U64 because of the List.repeat call. I would expect you to get an overflow in both cases if anything. </p>\n<p>What happens if you do:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">printAndOverflow</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">rows</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nx\">Num</span><span class=\"p\">.</span><span class=\"nx\">toI64</span><span class=\"w\"> </span><span class=\"nx\">rows</span>\n<span class=\"w\">     </span><span class=\"o\">-</span><span class=\"w\"> </span><span class=\"mi\">5</span>\n<span class=\"w\">    </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"p\">.</span><span class=\"nx\">repeat</span><span class=\"w\"> </span><span class=\"nx\">rows</span>\n<span class=\"w\">    </span><span class=\"c1\">#...</span>\n</code></pre></div>",
+        "id": 444094261,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1718137584
+    },
+    {
+        "content": "<p>Ah, that works</p>",
+        "id": 444095571,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1718138021
+    },
+    {
+        "content": "<p>So I guess the lesson is that the compiler won't necessarily infer for me that any given integer could be negative, and I have to think through each case myself and decide whether it needs to be converted to an <code>IXX</code>. Does that sound right?</p>",
+        "id": 444097460,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1718138638
+    },
+    {
+        "content": "<p>Correct. The other alternative is that you use <code>Num.subChecked</code> to catch any potential overflows, without type casting to a signed type:</p>\n<div class=\"codehilite\"><pre><span></span><code>subChecked : Num a, Num a -&gt; Result (Num a) [Overflow]\n</code></pre></div>",
+        "id": 444098235,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1718138902
+    },
+    {
+        "content": "<p>Oh, probably even better than using a type cast for the subtract operation, you could define the type of your function like:</p>\n<div class=\"codehilite\"><pre><span></span><code>printAndOverflow : I64 -&gt; Task {} _ # or I32 etc\n</code></pre></div>\n<p>This would enforce rows as a signed type, and when you try to use it as a U64 you would get a compile error telling you that you that your types conflict. Then typecast into the <code>List.repeat</code> call.</p>",
+        "id": 444113475,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1718146065
+    },
+    {
+        "content": "<p>Locals for numbers are polymorphic I believe</p>",
+        "id": 444151884,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718170757
+    },
+    {
+        "content": "<p>So they can be multiple types</p>",
+        "id": 444151894,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718170765
+    },
+    {
+        "content": "<p>It is a special case</p>",
+        "id": 444151899,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718170769
+    },
+    {
+        "content": "<p>That's at least my guess</p>",
+        "id": 444151906,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718170776
+    },
+    {
+        "content": "<p>So I think <code>row</code> being polymorphoc leads to row as a <code>U64</code> and row as a <code>Num a</code>. The default <code>Num a</code> being an <code>I64</code></p>",
+        "id": 444152081,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718170874
+    },
+    {
+        "content": "<p>So it's really the use as a function arg that forces them to unify</p>",
+        "id": 444152108,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718170897
+    },
+    {
+        "content": "<p>Actual roc ir for this:</p>\n<div class=\"codehilite\"><pre><span></span><code>procedure : `#UserApp.printNoOverflow` [&lt;r&gt;C *self {I64, {}}, C [C [C Str I32, C [C , C , C Str, C , C , C , C ]], C {}]]\nprocedure = `#UserApp.printNoOverflow` ():\n    let `#UserApp.40` : I64 = 3i64;\n    let `#UserApp.rows` : U64 = 3i64;\n    let `#UserApp.41` : I64 = 5i64;\n    let `#UserApp.39` : I64 = CallByName `Num.sub` `#UserApp.40` `#UserApp.41`;\n    let `#UserApp.35` : List I64 = CallByName `List.repeat` `#UserApp.39` `#UserApp.rows`;\n    let `#UserApp.36` : {} = Struct {};\n    let `#UserApp.34` : [&lt;r&gt;C *self {I64, {}}, C [C [C Str I32, C [C , C , C Str, C , C , C , C ]], C {}]] = CallByName `pf.Task.forEach` `#UserApp.35` `#UserApp.36`;\n    ret `#UserApp.34`;\n</code></pre></div>\n<p>Yeah, two versions of the local.</p>",
+        "id": 444152925,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718171379
+    },
+    {
+        "content": "<p>And failing version where <code>row</code> has to have single type due to being one arg</p>\n<div class=\"codehilite\"><pre><span></span><code>procedure : `#UserApp.printAndOverflow` [&lt;r&gt;C *self {U64, {}}, C [C [C Str I32, C [C , C , C Str, C , C , C , C ]], C {}]]\nprocedure = `#UserApp.printAndOverflow` (`#UserApp.rows`: U64):\n    let `#UserApp.32` : U64 = 5i64;\n    let `#UserApp.31` : U64 = CallByName `Num.sub` `#UserApp.rows` `#UserApp.32`;\n    let `#UserApp.27` : List U64 = CallByName `List.repeat` `#UserApp.31` `#UserApp.rows`;\n    let `#UserApp.28` : {} = Struct {};\n    let `#UserApp.26` : [&lt;r&gt;C *self {U64, {}}, C [C [C Str I32, C [C , C , C Str, C , C , C , C ]], C {}]] = CallByName `pf.Task.forEach` `#UserApp.27` `#UserApp.28`;\n    ret `#UserApp.26`;\n</code></pre></div>",
+        "id": 444153140,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718171500
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> general question: do we have a better way to expain this to users/clarify expectations. The local acting different from a function arg feel very strange.</p>",
+        "id": 444153289,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718171587
+    },
+    {
+        "content": "<p>It feels like the local has implicit type casting (which it essentially does, but with compile time errors on cast losing precisions or failing)</p>",
+        "id": 444153336,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718171622
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> might have an idea on how to explain it better, but my first thought is that the simplest explanation is something like \"constants get inlined\"</p>",
+        "id": 444227562,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1718196636
+    },
+    {
+        "content": "<p>so here:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"w\">    </span><span class=\"nv\">rows</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"mi\">3</span>\n\n<span class=\"w\">    </span><span class=\"nv\">rows</span><span class=\"w\"> </span><span class=\"nf\">-</span><span class=\"w\"> </span><span class=\"mi\">5</span>\n<span class=\"w\">    </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">List</span><span class=\"nf\">.</span><span class=\"nv\">repeat</span><span class=\"w\"> </span><span class=\"nv\">rows</span>\n</code></pre></div>\n<p><code>rows</code> is a constant that's known at compile time, so it gets inlined to:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"w\">    </span><span class=\"mi\">3</span><span class=\"w\"> </span><span class=\"nf\">-</span><span class=\"w\"> </span><span class=\"mi\">5</span>\n<span class=\"w\">    </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">List</span><span class=\"nf\">.</span><span class=\"nv\">repeat</span><span class=\"w\"> </span><span class=\"mi\">3</span>\n</code></pre></div>\n<p>...which explains the rest of the behavior</p>",
+        "id": 444227841,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1718196694
+    },
+    {
+        "content": "<p><code>\\rows -&gt;</code> is different in that <code>rows</code> is not a constant, so it doesn't get inlined</p>",
+        "id": 444228066,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1718196729
+    },
+    {
+        "content": "<p>That explanation makes perfect sense! This is really good information to know!</p>",
+        "id": 444251821,
+        "sender_full_name": "Ian McLerran",
+        "timestamp": 1718202871
+    },
+    {
+        "content": "<p>Thanks for the explanations, all! <span aria-label=\"pray\" class=\"emoji emoji-1f64f\" role=\"img\" title=\"pray\">:pray:</span></p>",
+        "id": 444298361,
+        "sender_full_name": "Eric Rogstad",
+        "timestamp": 1718215357
+    },
+    {
+        "content": "<p>We have to be careful though, cause it is special for constant numbers specifically, iiuc</p>",
+        "id": 444301448,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718216276
+    },
+    {
+        "content": "<p>currently yes, although we’d like to extend it to other literals</p>",
+        "id": 444331006,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1718225846
+    },
+    {
+        "content": "<p>You sure? I thought that was the whole point of the let's not document.</p>",
+        "id": 444351874,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1718235908
+    },
+    {
+        "content": "<p>yeah, e.g. if you have a record of number literals, we have all the info necessary at compile time to inline all of that just like we do if all the number literals were in separate defs</p>",
+        "id": 444367214,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1718246137
+    }
+]

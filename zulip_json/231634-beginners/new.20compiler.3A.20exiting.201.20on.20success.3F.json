@@ -1,0 +1,86 @@
+[
+    {
+        "content": "<p>This one is odd; I am working on the Sexp2 module and noticed this behavior, only in this specific case, after whittling down to minimal test case:</p>\n<div class=\"codehilite\"><pre><span></span><code>rwh@ht seatzero (master *)$ roc spike/test_sexp2.roc; echo $?\ndbg: [&lt;tag_union variant=3&gt;, &lt;tag_union variant=2&gt;, &lt;tag_union variant=2&gt;, &lt;tag_union variant=2&gt;, &lt;tag_union variant=1&gt;]\ndbg: [&quot;(&quot;, &quot;1&quot;, &quot;2&quot;, &quot;3&quot;, &quot;)&quot;]\nSexp2 runtime harness reached\n1\nrwh@ht seatzero (master *)$ cat spike/test_sexp2.roc\napp [main!] { pf: platform &quot;../../basic-cli/platform/main.roc&quot; }\n\nimport pf.Stdout\nimport Sexp2\n\nmain! = |_args| {\n    tokens = Sexp2.tokenize(&quot;(1 2 3)&quot;)\n    dbg tokens\n    names = Sexp2.token_names(tokens)\n    dbg names\n\n    expect Bool.True\n\n    Stdout.line!(&quot;Sexp2 runtime harness reached&quot;)\n    Ok({})\n}\n</code></pre></div>",
+        "id": 571175016,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769847252
+    },
+    {
+        "content": "<p><del>What if your use <code>Str.inspect</code> on the tokens?</del> nvm I'm pretty sure it's using that under the hood</p>",
+        "id": 571175703,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769847968
+    },
+    {
+        "content": "<p><del>If you implement a <code>to_str : Secp2 -&gt; Str</code> method does that change anything?</del> it's called <code>to_inspect</code></p>",
+        "id": 571175802,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769848054
+    },
+    {
+        "content": "<p>I vaguely recall an idea that inspect basically desugars to that method under the hood, but I can't remember</p>",
+        "id": 571175839,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769848089
+    },
+    {
+        "content": "<p>note, this is Sexp (as in s-expression).  let me investigate that, though i've moved on from this curiousity</p>",
+        "id": 571176006,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769848218
+    },
+    {
+        "content": "<p>In the meantime, not related to this curiosity, i have:</p>\n<blockquote>\n<p>The stack overflow you saw when running roc test --verbose spike/Sexp3.roc (after the<br>\n  added equality-based expect cases) wasn’t caused by a logic mistake in the Sexp parser<br>\n  itself—it was the Roc compiler hitting a stack overflow while evaluating those expect<br>\n  expressions. The crash message explicitly says the compiler overflowed its stack, which<br>\n  matches the behavior we observed when we defined is_eq methods and tried to compare<br>\n  Token/Value instances with ==. Removing those comparisons (and instead comparing the<br>\n  formatted string or the token names) lets roc test complete successfully, so the parser<br>\n  never “ran away” at runtime. In short: the compiler’s expect evaluation blew up when<br>\n  trying to derive equality for those custom types, so it’s a compiler bug triggered by<br>\n  that pattern, not a user error.</p>\n</blockquote>",
+        "id": 571176175,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769848351
+    },
+    {
+        "content": "<p>i can pause on this and try to make a minimal repro, but I want to try your to_str trick first</p>",
+        "id": 571176226,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769848404
+    },
+    {
+        "content": "<h2>test/fx/inspect_custom_test.roc</h2>\n<div class=\"codehilite\"><pre><span></span><code>app [main!] { pf: platform &quot;./platform/main.roc&quot; }\n\nimport pf.Stdout\n\n# Define an opaque type with a custom to_inspect method\nColor := [Red, Green, Blue].{\n    to_inspect : Color -&gt; Str\n    to_inspect = |color| match color {\n        Red =&gt; &quot;Color::Red&quot;\n        Green =&gt; &quot;Color::Green&quot;\n        Blue =&gt; &quot;Color::Blue&quot;\n    }\n}\n\nmain! = || {\n    red : Color\n    red = Red\n\n    # Test Str.inspect with custom to_inspect method\n    result = Str.inspect(red)\n    Stdout.line!(result)\n\n    # Compare with what the default would be\n    Stdout.line!(&quot;Expected: Color::Red&quot;)\n}\n</code></pre></div>",
+        "id": 571176521,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769848601
+    },
+    {
+        "content": "<p>Yeah -- consider <code>roc test</code> somewhat broken... if it works <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span>  but it clearly needs some love</p>",
+        "id": 571176688,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769848720
+    },
+    {
+        "content": "<p>here is the strace for exiting 1 on success: <a href=\"https://gist.github.com/rickhull/4247a1dddbc40069ad7f853a47bcb552\">https://gist.github.com/rickhull/4247a1dddbc40069ad7f853a47bcb552</a></p>",
+        "id": 571177198,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769849141
+    },
+    {
+        "content": "<p>it's too late for me now, but I'm not sure about your inspect test; in this case, I am executing with <code>roc</code> and not <code>roc test</code>, and in the strace gist, this is after <code>roc build</code></p>\n<p>gpt-codex-mini says:</p>\n<blockquote>\n<p>The strace capture settles it: the binary prints all the dbg/Stdout lines you care about<br>\n  and then ends with exit_group(1) — there’s no panic, crash, or expect failure at<br>\n  runtime, so it’s literally choosing to return status 1. That’s exactly what roc does for<br>\n  these little test harnesses when you run them with roc spike/... instead of roc test<br>\n  spike/...: the compiler builds a dedicated test binary and the runtime intentionally<br>\n  exits 1 (even on success) because it wasn’t invoked through the roc test driver that<br>\n  reports expect results. In short, the harness is behaving as designed — it’s not a logic<br>\n  bug in your code, it’s the way Roc signals “don’t treat this as a normal runnable app;<br>\n  use roc test so the expect blocks run and report success.”</p>\n</blockquote>",
+        "id": 571177348,
+        "sender_full_name": "Rick Hull",
+        "timestamp": 1769849264
+    },
+    {
+        "content": "<p>Ah yeah, by default a program with a <code>dbg</code> in it returns a non-zero exit code</p>",
+        "id": 571179056,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769850494
+    },
+    {
+        "content": "<p>Actually I might be getting confused there... </p>\n<p>Here's an older discussion <a class=\"message-link\" href=\"/#narrow/channel/304902-show-and-tell/topic/draft.20blog.20post.20about.20purity.20inference/near/492619780\">#show and tell &gt; draft blog post about purity inference @ 💬</a> -- Richard proposed adding a <code>--release</code> flag that would throw a non-zero code if there were any <code>dbg</code>'s</p>",
+        "id": 571179787,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769851035
+    },
+    {
+        "content": "<p>Need to look into that and document it somewhere I guess</p>",
+        "id": 571179836,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1769851068
+    }
+]

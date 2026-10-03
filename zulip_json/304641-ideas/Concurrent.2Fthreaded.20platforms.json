@@ -1,0 +1,98 @@
+[
+    {
+        "content": "<p>I would like to implement a platform in Zig, that calls Roc closures or entrypoints on different OS threads. Or if it's not possible, at least as stackful coroutines on the same OS thread.</p>\n<p><a href=\"https://github.com/roc-lang/roc/issues/11658\">https://github.com/roc-lang/roc/issues/11658</a><br>\nI would like to implement messaging between these fibers/threads: <a href=\"https://github.com/roc-lang/roc/issues/11634\">https://github.com/roc-lang/roc/issues/11634</a></p>\n<p>Spawning a new fiber in Zig is probably not enough. What are the areas that cause risks? The reference counting?</p>\n<p>How do the risks differ between a fiber concurrency solution and a parallel OS thread solution?</p>",
+        "id": 626924618,
+        "sender_full_name": "notramo",
+        "timestamp": 1790350494
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span>, could you point me in some direction? I don't need detailed guide, just some tips on where to get started, and what causes the main complexity.</p>",
+        "id": 627505431,
+        "sender_full_name": "notramo",
+        "timestamp": 1790616452
+    },
+    {
+        "content": "<p>reference counting should be fine, since we automatically do atomic refcounts on values that can potentially reach the host</p>",
+        "id": 627560294,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1790630235
+    },
+    {
+        "content": "<p>so if the scope of what you're doing is just this, it should Just Work already:</p>\n<blockquote>\n<p>I would like to implement a platform in Zig, that calls Roc closures or entrypoints on different OS threads.</p>\n</blockquote>",
+        "id": 627560473,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1790630282
+    },
+    {
+        "content": "<p>in other words, you should be able to just call the compiled Roc functions from the host, pass those values around to other threads if desired, and everything should work (as long as you're maintaining accurate refcounting in the host and using atomic operations when necessary)</p>",
+        "id": 627560744,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1790630361
+    },
+    {
+        "content": "<p>as far as pointing you in the right direction, this is an old implementation that used the original Roc (Rust-based) compiler, and an older version of Zig, but the host side should still work in principle: <a href=\"https://github.com/bhansconnect/roc-coro-webserver\">https://github.com/bhansconnect/roc-coro-webserver</a></p>",
+        "id": 627561056,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1790630484
+    },
+    {
+        "content": "<p>some more detail on reference counting that might be helpful:</p>\n<ul>\n<li>let's say you have 2 threads running</li>\n<li>on each of those threads you pass the same refcounted Roc value</li>\n<li>you're responsible for making sure those Roc functions receive accurate refcounts, because Roc doesn't have a stateful runtime; neither of those Roc functions knows the other function exists, or that it's running on a thread in parallel with another thread that's also running a Roc function, etc.</li>\n<li>in other words, if you gave each of these 2 Roc functions the same value, you need to make sure they each receive it with a refcount of 2</li>\n<li>if you give each Roc function the same value with a refcount of 1, they'll both thing it's safe to mutate in-place, and you can get really nasty behavior</li>\n<li>on the other hand, if they each get a refcount of 2, everything should work fine because Roc will automatically do atomic refcounting on them</li>\n<li>if you get the values back (as in, the Roc functions return them) their reference counts should be accurate again (note: the refcount might be higher than the refcount they had when you passed them in, if any of the other values the Roc functions return are referencing them)</li>\n</ul>",
+        "id": 627561715,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1790630718
+    },
+    {
+        "content": "<p>so that's what I mean regarding \"you have to keep the reference counts accurate\"</p>",
+        "id": 627561779,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1790630736
+    },
+    {
+        "content": "<p>compiled Roc functions are, by design, totally stateless - that's one reason why the host has to provide things like alloc and dealloc</p>",
+        "id": 627561883,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1790630763
+    },
+    {
+        "content": "<p>you just call them passing values, they operate on those values, call some functions the host itself provides (alloc, dealloc, crash, effectful functions, etc.), and then return, and that's it; there is no stateful runtime to initialize or deinitialize because once those functions return, they're done</p>",
+        "id": 627562011,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1790630808
+    },
+    {
+        "content": "<p>if there's any leftover stuff to be cleaned up, it's all stuff the host already knows about (e.g. allocations done using the host's own allocation system)</p>",
+        "id": 627562083,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1790630825
+    },
+    {
+        "content": "<p>but that does mean each compiled Roc function call is innately oblivious to what other Roc function calls are running, if any, and makes no attempt to coordinate between them - so the host is responsible for making sure they receive accurate refcounts when they're called, and then doing any necessary cleanup on the return values after they finish</p>",
+        "id": 627562317,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1790630903
+    },
+    {
+        "content": "<p>Thank you for the info!</p>",
+        "id": 627564205,
+        "sender_full_name": "notramo",
+        "timestamp": 1790631477
+    },
+    {
+        "content": "<p>This seems simple with scalars. But what happens if I pass a list or a struct, that reference further values? Do i need to recursively increase the refcount on each one, or is it enough only on the outermost container?</p>",
+        "id": 627564238,
+        "sender_full_name": "notramo",
+        "timestamp": 1790631485
+    },
+    {
+        "content": "<p>As I understand from Zig platform glue, it would need recursive.</p>",
+        "id": 627564269,
+        "sender_full_name": "notramo",
+        "timestamp": 1790631490
+    },
+    {
+        "content": "<p>Also, I guess I would need to know the type of every passed value in advance, when writing the Zig code, so I can't rely on the type inference of the Roc type system to figure out what each Roc program passes to the platform. Given two Roc programs that would use the same platform package (but has nothing to do with each other), it's not possible that one program sends struct type <code>A</code> through <code>send!()</code> between its own fibers, the other program sends struct with type <code>B</code>. Because that would require host recompilation.</p>",
+        "id": 627564884,
+        "sender_full_name": "notramo",
+        "timestamp": 1790631684
+    }
+]

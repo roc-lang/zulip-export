@@ -1,0 +1,128 @@
+[
+    {
+        "content": "<p>The kingfisher platform exports this function to the host: <code>Request, Box Model -&gt; Response</code>. It takes a <code>Model</code> but does not return <code>Model</code>.</p>\n<p>This call reduces the ref count of <code>Model</code> by one. Since a refcount of 0 would mean, that the value gets deallocated, the host has to set the refcount of <code>Model</code> to <code>2</code> before calling roc.</p>\n<p>When this is done in parallel, a segmentation fault happens. Probably, because the host and roc try to manipulate the same memory at the same time.</p>\n<p>A workaround is to set the refcount to a very high value any time <code>Model</code> gets manipulated. But this would mean, that the platform would only support that high number of read requests.</p>\n<p>I though, I read somewhere, that when refcount is set to a magic number, it is handled by roc as infinity and is not manipulated. But I don't know, where I read this or what that magic number is.</p>\n<p>Is there a magic refcount number, that tells roc not to manipulate the ref count?</p>\n<p>If not, is there another way to solve this?</p>",
+        "id": 439531079,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1716195683
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> has done some atomic refcounting work</p>",
+        "id": 439588075,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716216254
+    },
+    {
+        "content": "<blockquote>\n<p>When this is done in parallel, a segmentation fault happens. Probably, because the host and roc try to manipulate the same memory at the same time.</p>\n</blockquote>\n<p>Yeah, our refcounting is not thread safe currently. Also, simply updating the box refcount may not be enough. It might have recourse and update refcount a of things in the box, but not sure.</p>\n<blockquote>\n<p>Is there a magic refcount number, that tells roc not to manipulate the ref count?</p>\n</blockquote>\n<p>Yes, I believe it is <code>-1 as usize</code>, but would need to double check.</p>",
+        "id": 439590782,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716217122
+    },
+    {
+        "content": "<p>Thank you. The confirmation, that there is a magic number helped me to find it.</p>\n<p>After playing around with different numbers, I think the magic number is <code>0</code>.</p>\n<p>As far as I know, <a href=\"#narrow/stream/302903-Writing-a-platform/topic/Set.20the.20refcounter.20in.20a.20platform/near/418433879\">the highest bit of a refcount has to be set to 1</a>.</p>\n<p>When I set the value to <code>2^63+1</code> (<code>1&lt;&lt;63+1</code>, highest bit is 1, all other bits are 0), the refcount gets reduced by one (from <code>9223372036854775809</code> to <code>9223372036854775808</code>). If I call the function again without modifying the new refcount, it changes to a <code>random</code> number. Probably, because the memory is invalid. If I call the function again without modifying the refcount, I get a <code>segmentation violation</code>, since <code>Model</code> was deallocated.</p>\n<p>When I set the refcount to <code>1</code> (the lowest bit is 1, all other bits are zero, even the first bit) and I call the function, the refcount changes to <code>0</code>. If I call the function again, the value stays at <code>0</code>. The <code>Model</code> does not get deallocated.</p>\n<p>So setting the refcount to <code>0</code> does what I want.</p>",
+        "id": 439613825,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1716224199
+    },
+    {
+        "content": "<p>Awesome</p>",
+        "id": 439614135,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716224308
+    },
+    {
+        "content": "<p>I guess I forgot the number</p>",
+        "id": 439614156,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716224318
+    },
+    {
+        "content": "<p>we've talked about this in various places; I wonder if the time has come to figure out how we want to do this</p>",
+        "id": 439631556,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716230548
+    },
+    {
+        "content": "<p>My current vote is roughly. Use a bit to decide whether or not to do atomic refcounting (this feature is off by default and must be enabled by a compile time or platform flag). Only do atomic refcounting if the platform sets that bit. Cause the only way for data to be shared between threads is through the platform. When sharing, it can set the bit.</p>",
+        "id": 439657376,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716230972
+    },
+    {
+        "content": "<p>I like that design!</p>",
+        "id": 439657935,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716231127
+    },
+    {
+        "content": "<p>I have another bug when calling roc in parallel. I don't understand what is going on or if this is related to refcount. Maybe you have an idea what the cause is or how I could debug it?</p>\n<p>First, the host calls a roc function, that returns a <code>Box Model</code>. <code>Model</code> has type <code>List Str</code>.  If <code>Model</code> is <code>Str</code>, everything works.</p>\n<p>Then, the host calls the function from above (<code>Request, Box Model -&gt; Response</code>). If the function is called in sequence, there is no problem. But if it is called many times in parallel (around 10.000 calls \"at the same time\"), the memory gets corrupted. For example, if <code>Model</code> was <code>[\"hello\"]</code>,  then after the run, it is something like <code>[ �GM��]</code>.</p>\n<p>Could it be, that the Str inside the List is refcounted and roc manipulates that refcount?</p>",
+        "id": 439670563,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1716235449
+    },
+    {
+        "content": "<p>I tried to debug this by looking at the memory, that gets allocated with <code>roc_alloc</code>.</p>\n<p>After calling the function, that returns the <code>Model</code>, roc has allocated the following values:</p>\n<div class=\"codehilite\"><pre><span></span><code>0x5b3d0ea5c930: [0 0 0 0 0 0 0 128 8 202 165 14 61 91 0 0 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0]\n0x5b3d0ea5ca00: [0 0 0 0 0 0 0 128 87 111 114 108 100 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 133]\n</code></pre></div>\n<p>The first 8 bytes of each value are the ref counter. When you know, how the roc types look it memory, you can see, that the second value is a short string with the ascii values for \"World\". From the two <code>1</code> at the first value, you can see that it could be a list with one element and a capacity of 1.</p>\n<p>After calling the second function, the following values look like this:</p>\n<div class=\"codehilite\"><pre><span></span><code>0x5b3d0ea5c930: [254 255 255 255 255 255 255 255 8 202 165 14 61 91 0 0 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0]\n0x5b3d0ea5ca00: [0 0 0 0 0 0 0 128 87 111 114 108 100 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 133]\n</code></pre></div>\n<p>So the values are the same, but the refcount of the list has changed to a very big number. When the function is called again, the refcount of the list gets reduced by one.</p>\n<p>Should roc change the refcount of the list? If so, it should probably not be such a high number but something like <code>0</code>, <code>1</code>or the magic infinity.  Is this a bug in roc?</p>",
+        "id": 439676993,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1716238045
+    },
+    {
+        "content": "<p>By the way: It would be nice, if <code>roc_alloc</code> would have a debugging argument. For example a pointer to a struct, that contains the line number of the roc code, that triggert the <code>alloc</code> call, and a type-ID of the value, that gets allocated. In optimized builds, the argument could be a zero-pointer.</p>",
+        "id": 439677313,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1716238184
+    },
+    {
+        "content": "<blockquote>\n<p>Could it be, that the Str inside the List is refcounted and roc manipulates that refcount?</p>\n</blockquote>\n<p>Yes, exactly that</p>",
+        "id": 439685332,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716241382
+    },
+    {
+        "content": "<p>We need to remove this kind of recursive refcounting</p>",
+        "id": 439685365,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716241401
+    },
+    {
+        "content": "<p>I am planning to fix it for list (mostly done minus final tests)</p>",
+        "id": 439685376,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716241409
+    },
+    {
+        "content": "<p>We separately probably need to fix it for recursive tags and box.</p>",
+        "id": 439685410,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716241429
+    },
+    {
+        "content": "<p>Oh also, it is probably freeing the list, not the string</p>",
+        "id": 439685546,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716241483
+    },
+    {
+        "content": "<p>Cause the string is small and would not get freed</p>",
+        "id": 439685632,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716241519
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/302903-Writing-a-platform/topic/Ref.20count.20and.20parallel.20calls/near/439685376\">said</a>:</p>\n<blockquote>\n<p>I am planning to fix it for list (mostly done minus final tests)</p>\n</blockquote>\n<p>This sounds great. Is it the <a href=\"https://github.com/roc-lang/roc/tree/list-size-on-heap\">list-size-on-heap</a> branch? I tried it and it fails with <code>munmap_chunk(): invalid pointer</code></p>",
+        "id": 439735038,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1716269677
+    },
+    {
+        "content": "<p>It is.</p>",
+        "id": 439738729,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716271889
+    },
+    {
+        "content": "<p>And yeah, unsurprising. Though more of the code is hopefully done, it definitely has bugs</p>",
+        "id": 439738796,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1716271922
+    }
+]
