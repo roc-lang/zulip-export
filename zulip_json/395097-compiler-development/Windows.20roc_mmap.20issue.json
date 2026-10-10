@@ -1,0 +1,248 @@
+[
+    {
+        "content": "<p>Almost all the test failures on Windows I am experiencing look to be the same issue. Something like the following.</p>\n<div class=\"codehilite\"><pre><span></span><code>thread &#39;main&#39; panicked at &#39;extern function roc_mmap is not defined by the builtins&#39;, crates\\compiler\\gen_llvm\\src\\llvm\\externs.rs:176:17\n</code></pre></div>\n<p>So, I thought I might try and investigate further. It looks liks roc_mmap is provided in the bitcode. When I run the tests for zig builtins in <code>crates\\compiler\\builtins\\bitcode</code>  I get the following lld-link errors.</p>\n<div class=\"codehilite\"><pre><span></span><code>PS C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode&gt; zig build test\nlld-link: error: undefined symbol: getppid\n&gt;&gt;&gt; referenced by C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\src\\utils.zig:28\n&gt;&gt;&gt;               C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-cache\\o\\956e3fa7e43377a9e7882b44adf58cc5\\test.obj:(roc_getppid)\n\nlld-link: error: undefined symbol: mmap\n&gt;&gt;&gt; referenced by C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\src\\utils.zig:39\n&gt;&gt;&gt;               C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-cache\\o\\956e3fa7e43377a9e7882b44adf58cc5\\test.obj:(roc_mmap)\n\nlld-link: error: undefined symbol: shm_open\n&gt;&gt;&gt; referenced by C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\src\\utils.zig:36\n&gt;&gt;&gt;               C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-cache\\o\\956e3fa7e43377a9e7882b44adf58cc5\\test.obj:(roc_shm_open)\nerror: LLDReportedFailure\nThe following command exited with error code 1:\nC:\\ProgramData\\chocolatey\\lib\\zig\\tools\\zig-windows-x86_64-0.9.1\\zig.exe test C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\src\\main.zig -lc --cache-dir C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-cache --global-cache-dir C:\\Users\\bosyl\\AppData\\Local\\zig --name test\nerror: the following build command failed with exit code 1:\nC:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-cache\\o\\52b924dff34895983671b1f52442ea3d\\build.exe C:\\ProgramData\\chocolatey\\lib\\zig\\tools\\zig-windows-x86_64-0.9.1\\zig.exe C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-cache C:\\Users\\bosyl\\AppData\\Local\\zig test\n</code></pre></div>\n<p>ChatGPT tells me the following</p>\n<blockquote>\n<p>It looks like you're getting linker errors when trying to compile your Zig program, which is probably because the functions getppid, mmap, and shm_open are not found.<br>\nThe reason you're encountering this issue is likely because these functions are not available on Windows. These are POSIX (Portable Operating System Interface) system calls:<br>\n<strong>getppid</strong>: This function returns the parent process id. On Windows, you can use GetCurrentProcessId and GetParentProcessId instead.<br>\n<strong>mmap</strong>: This function is used to map a file or other object into memory. On Windows, you can use CreateFileMapping and MapViewOfFile.<br>\n<strong>shm_open</strong>: This function creates or opens a named shared memory object. On Windows, you can use CreateFileMapping with a unique name to achieve similar functionality.</p>\n</blockquote>",
+        "id": 378032680,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690186871
+    },
+    {
+        "content": "<p>In c hosts we do:</p>\n<div class=\"codehilite\"><pre><span></span><code>void* roc_mmap(void* addr, int length, int prot, int flags, int fd, int offset) {\n#ifdef _WIN32\n    return addr;\n#else\n    return mmap(addr, length, prot, flags, fd, offset);\n#endif\n</code></pre></div>\n<p>I don't really know zig, but in compiler/builtins/bitcode/src/utils.zig we don't have an if:</p>\n<div class=\"codehilite\"><pre><span></span><code>extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;\n</code></pre></div>\n<p>So that may be a problem.</p>\n<p>I don't think I've seen <code>extern function roc_mmap is not defined by the builtins</code> when fixing windows issues a couple of months ago, so that may also be a recently introduced issue.</p>",
+        "id": 378050151,
+        "sender_full_name": "Anton",
+        "timestamp": 1690190162
+    },
+    {
+        "content": "<p>I think it's specific to some platforms. In any case, we should not be using mmap on windows, so providing a dummy implementation is fine</p>",
+        "id": 378060517,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690192054
+    },
+    {
+        "content": "<p>Sounds good. Do you have any pointers where the dummy implementation should go? Also, should zig tests run on windows?</p>",
+        "id": 378071024,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690193678
+    },
+    {
+        "content": "<p>they kind of should</p>",
+        "id": 378075014,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690194217
+    },
+    {
+        "content": "<p>re the error, I think here </p>\n<div class=\"codehilite\"><pre><span></span><code>        unreachable_function(env, &quot;roc_getppid&quot;);\n        unreachable_function(env, &quot;roc_mmap&quot;);\n        unreachable_function(env, &quot;roc_shm_open&quot;);\n\n        add_sjlj_roc_panic(env)\n    }\n}\n\nfn unreachable_function(env: &amp;Env, name: &amp;str) {\n    // The type of this function (but not the implementation) should have\n    // already been defined by the builtins, which rely on it.\n    let fn_val = match env.module.get_function(name) {\n        Some(f) =&gt; f,\n        None =&gt; panic!(&quot;extern function {name} is not defined by the builtins&quot;),\n    };\n</code></pre></div>\n<p>(you'll find this by searching for string in the panic here)</p>",
+        "id": 378076254,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690194349
+    },
+    {
+        "content": "<p>we should just not call <code>unreachable_function(env, ...</code> on windows for roc_mmap, ppid, and shm_open I think</p>",
+        "id": 378076565,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690194376
+    },
+    {
+        "content": "<p>so just add some <code>#[cfg(not(windows))]</code> would be my guess</p>",
+        "id": 378076855,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690194406
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>        #[cfg(not(windows))]\n        {\n            unreachable_function(env, &quot;roc_getppid&quot;);\n            unreachable_function(env, &quot;roc_mmap&quot;);\n            unreachable_function(env, &quot;roc_shm_open&quot;);\n        }\n ```\n\nSeems to have done it. Ran one test and it passed. I&#39;ll try running all of test_gen next\n</code></pre></div>",
+        "id": 378085311,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690195299
+    },
+    {
+        "content": "<p>Ok so running <code>cargo test --release --locked --package test_gen --test test_gen</code> gave me this.</p>\n<p><a href=\"/user_uploads/22008/i7_y8iaORzVl-cUM23H_oREk/Screenshot-2023-07-24-210147.png\">Screenshot-2023-07-24-210147.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/i7_y8iaORzVl-cUM23H_oREk/Screenshot-2023-07-24-210147.png\" title=\"Screenshot-2023-07-24-210147.png\"><img src=\"/user_uploads/22008/i7_y8iaORzVl-cUM23H_oREk/Screenshot-2023-07-24-210147.png\"></a></div><p>I'm not sure why that crashes the test runner. If I disable the <code>decode_derive_decoder_for_opaque</code>which overflowed its stack I get the same issue where something is causing <code>exit code: 0xc0000005, STATUS_ACCESS_VIOLATION)</code>. I've also tried running in debug mode and get the same issue.</p>",
+        "id": 378094713,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690197021
+    },
+    {
+        "content": "<p>what might be helpful here is <code>cargo nextest-gen-llvm --no-fail-fast</code> (may need <code>cargo install nextest</code> or similar)</p>",
+        "id": 378098432,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690197678
+    },
+    {
+        "content": "<p>that should run all the tests and not stop when one of them crashes</p>",
+        "id": 378098479,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690197689
+    },
+    {
+        "content": "<p>so we can get an overview of what fails, maybe there are patterns</p>",
+        "id": 378098517,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690197700
+    },
+    {
+        "content": "<p>I'll give that a go. </p>\n<p>Just ran mono tests also</p>\n<div class=\"codehilite\"><pre><span></span><code>failures:\n\n---- branch_store_variable stdout ----\n`git diff &quot;generated/branch_store_variable.txt&quot;` failed\nthread &#39;branch_store_variable&#39; panicked at &#39;internal error: entered unreachable code&#39;, crates\\compiler\\test_mono\\src/tests.rs:232:9\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    branch_store_variable\n\ntest result: FAILED. 156 passed; 1 failed; 7 ignored; 0 measured; 0 filtered out; finished in 9.80s\n</code></pre></div>",
+        "id": 378098854,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690197762
+    },
+    {
+        "content": "<p>that error means that git diff failed?!</p>",
+        "id": 378099116,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690197827
+    },
+    {
+        "content": "<p>maybe the file doesn't exist?</p>",
+        "id": 378099279,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690197853
+    },
+    {
+        "content": "<p>Here are the results for <a href=\"https://gist.github.com/lukewilliamboswell/d06dba9a6f7ed85a94786a0c5456010b\">test-gen</a> in case this helps.</p>",
+        "id": 378370630,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690271621
+    },
+    {
+        "content": "<p>hmm, there is this chunk</p>\n<div class=\"codehilite\"><pre><span></span><code>   FAIL [   3.124s] test_gen::test_gen gen_num::to_i64_checked_larger_width_signed_fits_neg\n        FAIL [   3.978s] test_gen::test_gen gen_num::to_i64_checked_larger_width_signed_fits_pos\n        FAIL [   2.370s] test_gen::test_gen gen_num::to_i64_checked_larger_width_signed_oob_neg\n        FAIL [   2.326s] test_gen::test_gen gen_num::to_i64_checked_larger_width_signed_oob_pos\n        FAIL [   2.134s] test_gen::test_gen gen_num::to_i64_checked_larger_width_unsigned_fits_pos\n        FAIL [   2.151s] test_gen::test_gen gen_num::to_i64_checked_larger_width_unsigned_oob_pos\n</code></pre></div>",
+        "id": 378372131,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690271956
+    },
+    {
+        "content": "<p>they fail \"normally\". can you find an error message for them?</p>",
+        "id": 378372172,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690271967
+    },
+    {
+        "content": "<p>(others abort because they do the equivalent of a segfault)</p>",
+        "id": 378372250,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690271984
+    },
+    {
+        "content": "<p>Something like <code>thread 'gen_num::to_i64_checked_larger_width_signed_fits_neg' panicked at 'LLVM error: Did not get return value from bitcode function \"roc_builtins.num.int_to_i64_checking_max_and_min.i128\"'</code></p>",
+        "id": 378373581,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690272246
+    },
+    {
+        "content": "<p>and then for the other issues, I suspect <code>return_tuple_3</code> is the easiest to debug. that'll be an adventure in assembly though</p>",
+        "id": 378373830,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690272307
+    },
+    {
+        "content": "<p>hmm, ok, strange. I think it would help to see the LLVM IR for that failing i128 test. I think when a test fails we try to save that IR</p>",
+        "id": 378374111,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690272375
+    },
+    {
+        "content": "<p>but maybe that is skipped on windows</p>",
+        "id": 378374152,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690272385
+    },
+    {
+        "content": "<ul>\n<li>thread 'gen_num::to_i64_checked_larger_width_signed_fits_pos' panicked at 'LLVM error: Did not get return value from bitcode function \"roc_builtins.num.int_to_i64_checking_max_and_min.i128\"'</li>\n<li>thread 'gen_num::to_i64_checked_larger_width_signed_oob_neg' panicked at 'LLVM error: Did not get return value from bitcode function \"roc_builtins.num.int_to_i64_checking_max_and_min.i128\"'</li>\n<li>thread 'gen_num::to_i64_checked_larger_width_signed_oob_pos' panicked at 'LLVM error: Did not get return value from bitcode function \"roc_builtins.num.int_to_i64_checking_max_and_min.i128\"'</li>\n<li>thread 'gen_num::to_i64_checked_larger_width_unsigned_fits_pos' panicked at 'LLVM error: Did not get return value from bitcode function \"roc_builtins.num.int_to_i64_checking_max.u128\"'</li>\n<li>thread 'gen_num::to_i64_checked_larger_width_unsigned_oob_pos' panicked at 'LLVM error: Did not get return value from bitcode function \"roc_builtins.num.int_to_i64_checking_max.u128\"'</li>\n</ul>",
+        "id": 378374569,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690272470
+    },
+    {
+        "content": "<p>right, so on windows this function does not return, apparently</p>",
+        "id": 378375022,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690272570
+    },
+    {
+        "content": "<p>and you pass in effectively a <code>&amp;mut result</code> for it to write the value into</p>",
+        "id": 378375091,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690272592
+    },
+    {
+        "content": "<p>so that will have to be special-cased</p>",
+        "id": 378375179,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690272605
+    },
+    {
+        "content": "<p>in particular, I suspect that this logic is not entirely correct</p>\n<div class=\"codehilite\"><pre><span></span><code>                        if target_int_width.stack_size() as usize &gt; env.target_info.ptr_size() {\n                            let bitcode_return_type =\n                                zig_to_int_checked_result_type(env, target_int_width.type_name());\n\n                            call_bitcode_fn_fixing_for_convention(\n                                env,\n                                layout_interner,\n                                bitcode_return_type,\n                                &amp;[arg.into()],\n                                return_layout,\n                                intrinsic,\n                            )\n                        } else {\n                            call_bitcode_fn(env, &amp;[arg.into()], intrinsic)\n                        }\n</code></pre></div>",
+        "id": 378375926,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690272789
+    },
+    {
+        "content": "<p>They run through the <code>else</code> branch when I add dbg's</p>",
+        "id": 378377139,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690273059
+    },
+    {
+        "content": "<p>yeah, I think that is incorrect</p>",
+        "id": 378377513,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690273128
+    },
+    {
+        "content": "<p>So does this mean the builtin function when it is called by env.builder.build_call() isn't returning a BasicValueEnum type?</p>",
+        "id": 378384205,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690274600
+    },
+    {
+        "content": "<p>yes</p>",
+        "id": 378384623,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690274695
+    },
+    {
+        "content": "<p>it's a void function</p>",
+        "id": 378384651,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690274702
+    },
+    {
+        "content": "<p><code>pub fn exportToIntCheckingMaxAndMin(comptime From: type, comptime To: type, comptime name: []const u8) void</code></p>",
+        "id": 378385210,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690274805
+    },
+    {
+        "content": "<p>eh yes but that function is the generator</p>",
+        "id": 378388380,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690275375
+    },
+    {
+        "content": "<p>it makes available a function with some different type</p>",
+        "id": 378388436,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690275389
+    },
+    {
+        "content": "<p>it's like a macro</p>",
+        "id": 378388458,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690275393
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>let xxx = call_bitcode_fn_help(env, args, fn_name);\n\n    dbg!(&amp;xxx);\n\n    xxx.try_as_basic_value()\n        .left()\n        .unwrap_or_else(|| {\n            panic!(&quot;LLVM error: Did not get return value from bitcode function {fn_name:?}&quot;)\n        })\n</code></pre></div>\n<p>Gives</p>\n<div class=\"codehilite\"><pre><span></span><code>[crates\\compiler\\gen_llvm\\src\\llvm\\bitcode.rs:35] &amp;xxx = CallSiteValue(\n    Value {\n        name: &quot;&quot;,\n        address: 0x000001b9326ddd10,\n        is_const: false,\n        is_null: false,\n        is_undef: false,\n        llvm_value: &quot;  call void @roc_builtins.num.int_to_i64_checking_max_and_min.i128(i128 noalias nocapture nonnull sret(%\\&quot;num.ToIntCheckedResult(i64)\\&quot;) %\\&quot;#arg1\\&quot;), !dbg !9&quot;,\n        llvm_type: &quot;void&quot;,\n    },\n)\n</code></pre></div>",
+        "id": 378389339,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1690275585
+    },
+    {
+        "content": "<p>yes, exactly</p>",
+        "id": 378396578,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690276975
+    },
+    {
+        "content": "<p>it returns void, and the first argument is a pointer to write the result into</p>",
+        "id": 378396643,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1690276988
+    }
+]

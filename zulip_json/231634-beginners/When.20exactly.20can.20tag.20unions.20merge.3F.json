@@ -1,0 +1,278 @@
+[
+    {
+        "content": "<p>Since the tag union <code>[Green, Blue]</code> is a subset of <code>[Red, Green, Blue]</code>, I expected the following code to work, but the compiler complains. Is this working as intended? If so, what's the rationale?</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>f: U8 -&gt; [Red, Green, Blue]\nf = |n| {\n    match n {\n        0 =&gt; Red\n        _ =&gt; g(n)\n    }\n}\n\ng: U8 -&gt; [Green, Blue]\ng = |n| {\n    match n {\n        1 =&gt; Green\n        _ =&gt; Blue\n    }\n}\n\nmain! = |_args| {\n    dbg f(2)\n    Ok({})\n}\n</code></pre></div>\n<p>Here's the error I get.</p>\n<div class=\"codehilite\"><pre><span></span><code>-- TYPE MISMATCH ---------------------------------\n\nThe second branch of this match does not match the previous branch :\n   ┌─ /var/folders/74/7_g_vgn57nzgjh9mw5smp6rc0000gn/T/roc/debug-f081a87b/yFTm8aktdFZvhh9IG3uovOGfNvuQlGPk/main.roc:30:14\n   │\n30 │         _ =&gt; g(n)\n   │              ^^^^\n\nThe second branch is:\n\n    [Blue, Green]\n\nBut the previous branch results in:\n\n    [Blue, Green, Red]\n\nAll branches in a match must have compatible types.\nNote: You can wrap branches values in a tag to make them compatible.\nTo learn about tags, see &lt;https://www.roc-lang.org/tutorial#tags&gt;\n\nFound 1 error(s) and 0 warning(s) for /var/folders/74/7_g_vgn57nzgjh9mw5smp6rc0000gn/T/roc/debug-f081a87b/yFTm8aktdFZvhh9IG3uovOGfNvuQlGPk/main.roc.\n</code></pre></div>\n<p>Of course the problem disappears if I make both unions open (<code>[Red, Green, Blue, ..]</code> and <code>[Green, Blue, ..]</code>), but I don't see why I need to do that in this case.</p>",
+        "id": 603011413,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1781422511
+    },
+    {
+        "content": "<p>Off the top of my head, I would expect <code>[Green, Blue]</code> to need to be open, but not the other one.</p>",
+        "id": 603011659,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781422600
+    },
+    {
+        "content": "<p>Unfortunately, currently both need to be open.</p>\n<p>Plus, I'm not sure why <code>g()</code> would have to return an open union. When writing this function, I might not know who is going to use it and how. It's weird to have to make it open just in case someone needs to use it and return a superset.</p>",
+        "id": 603012172,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1781422808
+    },
+    {
+        "content": "<p>Oddly, the error disappears if I implement <code>f</code> like this:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>f: U8 -&gt; [Red, Green, Blue]\nf = |n| {\n    match n {\n        0 =&gt; Red\n        _ =&gt; {\n            match g(n) {\n                Green =&gt; Green\n                Blue =&gt; Blue\n            }\n        }\n    }\n}\n</code></pre></div>\n<p>But this fails:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>f: U8 -&gt; [Red, Green, Blue]\nf = |n| {\n    match n {\n        0 =&gt; Red\n        _ =&gt; {\n            match g(n) {\n                x =&gt; x\n            }\n        }\n    }\n}\n</code></pre></div>\n<p>It's as if the <code>Green</code> and <code>Blue</code> returned by <code>g</code> are not the same as the <code>Green</code> and <code>Blue</code> returned by <code>f</code>. Pretty surprising tbh.</p>",
+        "id": 603012930,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1781423091
+    },
+    {
+        "content": "<p>I feel like returned unions used to default to open.</p>",
+        "id": 603012938,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781423093
+    },
+    {
+        "content": "<p>Not sure the state in the zig compile</p>",
+        "id": 603012954,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781423104
+    },
+    {
+        "content": "<p>Your odd example is not surprising to me. By being explicit you decoupled the types. In <code>x =&gt; x</code> both sides must be the same type. In <code>Blue =&gt; Blue</code> both sides came be totally different and unrelated types.</p>",
+        "id": 603013196,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781423191
+    },
+    {
+        "content": "<p>That used to be a common work around for.some unification issues.</p>",
+        "id": 603013241,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781423213
+    },
+    {
+        "content": "<p>I can see why [A, B] and [B, C] should be incompatible types, because neither is a subset of the other. But I don't see why [A, B] should not be compatible with [A, B, C] (but not the other way round). I guess I'm saying that the compiler should automatically cast [A, B] to [A, B, C] when needed. Other than the complexity of implementing that, is there a downside I'm missing?</p>",
+        "id": 603014428,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1781423728
+    },
+    {
+        "content": "<p>After more thought, it's no different than the fact that U8 doesn't automatically get turned into U64 when needed.</p>\n<p>But I can write <code>a.to_u64()</code>, whereas I don't see an easy way to promote a tag union to a superset. Perhaps tag unions could support something like <code>to_superset()</code>, so I could write <code>g().to_superset()</code> rather than <code>match g() { Green =&gt; Green, Blue =&gt; Blue }</code>.</p>",
+        "id": 603019265,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1781425612
+    },
+    {
+        "content": "<p>Ok, I'm officially confused. Why doesn't the following code work?</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>main! = |_args| {\n    f : [Red, Green, ..]\n    f = Red\n\n    g : [Red, Green, Blue, ..]\n    g = f\n\n    dbg g\n\n    Ok({})\n}\n</code></pre></div>",
+        "id": 603026764,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1781428575
+    },
+    {
+        "content": "<p>Is the the polarity thing that <span class=\"user-mention\" data-user-id=\"341568\">@Jared Ramirez</span> has mentioned isn't implemented yet? it sounds familiar</p>",
+        "id": 603030231,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1781429885
+    },
+    {
+        "content": "<p>so there is quite a bit here:</p>\n<p><span class=\"user-mention silent\" data-user-id=\"734214\">Aurélien Geron</span> <a href=\"#narrow/channel/231634-beginners/topic/When.20exactly.20can.20tag.20unions.20merge.3F/near/603014428\">said</a>:</p>\n<blockquote>\n<p>I can see why [A, B] and [B, C] should be incompatible types, because neither is a subset of the other. But I don't see why [A, B] should not be compatible with [A, B, C] (but not the other way round). I guess I'm saying that the compiler should automatically cast [A, B] to [A, B, C] when needed. Other than the complexity of implementing that, is there a downside I'm missing?</p>\n</blockquote>\n<p>in this case both are closed unions, so the type is saying “i contain exactly [A, B]”, so it can be auto extended to also contain C. if the type was [A, B, ..], then it should be able to be extended</p>\n<p><span class=\"user-mention silent\" data-user-id=\"734214\">Aurélien Geron</span> <a href=\"#narrow/channel/231634-beginners/topic/When.20exactly.20can.20tag.20unions.20merge.3F/near/603026764\">said</a>:</p>\n<blockquote>\n<p>Ok, I'm officially confused. Why doesn't the following code work?</p>\n<p><div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>main! = |_args| {\n    f : [Red, Green, ..]\n    f = Red\n\n    g : [Red, Green, Blue, ..]\n    g = f\n\n    dbg g\n\n    Ok({})\n}\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>in below, i’m assuming the error is on g = f</p>\n<p>this case is complicated, and it’s actually not realated to polarity, but it’s about what’s called generalization/instantiation. when a type is generalized, it means that each place that uses the type gets instantiated to a fresh copy of it where all the lowercase letters in the type signature get fresh, local copies, that are inferred at the call site. then note that f: [A, B, ..] becomes [A, B, ..c] during compilation. so when f would be instantiated, c is  instantiated to a “flex” variable. </p>\n<p>but here’s the wrinkle: in the zig compiler, we decided ONLY to generalize/instantiate functions! so here f is NOT generalized. because of this, the implicit c is not generalized, and stays a “rigid” var. and rigid vars cannot be extended, so the compiler rejects g = f</p>\n<p>i suspect that if you dropped the annotation from f, g = f would work</p>\n<p>this begs a broader question about how to handle generalization in cases like this. we went this path of only generalizing functions because if you generalize everything, you can end of up with some surprising performance issues. (see <a href=\"https://github.com/seanpm2001/Roc-Lang_RFCs/blob/main/0010-let-generalization-lets-not.md\">https://github.com/seanpm2001/Roc-Lang_RFCs/blob/main/0010-let-generalization-lets-not.md</a>). but, the above not working is def confusing</p>",
+        "id": 603080582,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1781449826
+    },
+    {
+        "content": "<p>I have thought about expanding the generalization strategy to allow some literals that we know are \"harmless\" (won't cause perf surprises) such as number literals, tags, records, tuples</p>",
+        "id": 603081290,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781450080
+    },
+    {
+        "content": "<p>the original proposal suggested number literals but I figured in the new compiler we should try the bare minimum (just lambdas) and see if there was demand in practice for the others</p>",
+        "id": 603081409,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781450123
+    },
+    {
+        "content": "<p>there's still the potential surprise of \"if you change it to <code>f = dbg Red</code> then it will debug-print Red twice (once for <code>f</code> and once for <code>g</code>)</p>",
+        "id": 603081652,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781450217
+    },
+    {
+        "content": "<p>but arguably that's good because it accurately informs you about what's happening at runtime</p>",
+        "id": 603081742,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781450249
+    },
+    {
+        "content": "<blockquote>\n<p>I guess I'm saying that the compiler should automatically cast [A, B] to [A, B, C] when needed. Other than the complexity of implementing that, is there a downside I'm missing?</p>\n</blockquote>\n<p>This has been discussed a lot in the past. I wish I remembered it all. I think most people found that once functions assumed open tags for outputs, must of the problems went away and it was not to bad. I guess we could generically assume open unions, but I really want a compiler error to be reported if someone accidentally adds tags to my union.</p>",
+        "id": 603082570,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781450545
+    },
+    {
+        "content": "<p>yeah, that would be reasonable i think. but for complex tags with polymorphic payloads, the perf issue may still be possible</p>\n<p>then also was thinking as i typed out the above that maybe if there’s a type sig we should always generalize, since from the user perspective the same syntactically as defining a function, which does generalize. but maybe we still never generalize for let defs without annos.</p>",
+        "id": 603082749,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1781450615
+    },
+    {
+        "content": "<blockquote>\n<p>yeah, that would be reasonable i think. but for complex tags with polymorphic payloads, the perf issue may still be possible</p>\n</blockquote>\n<p>Yeah, could definitely explode memory. The one saving grace is that at least they are unified at compile time and it is not a cast that could be shifting around tons of data.</p>",
+        "id": 603082851,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781450659
+    },
+    {
+        "content": "<p>I dunno, is that bad though? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 603093133,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781454834
+    },
+    {
+        "content": "<p>I guess I'm just wondering if this is an actual perf footgun vs something that could happen theoretically but actually wouldn't in practice</p>",
+        "id": 603093211,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781454871
+    },
+    {
+        "content": "<p>like calling arbitrary functions can obviously explode in practice, like the example in Ayaz's writeup</p>",
+        "id": 603093259,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781454890
+    },
+    {
+        "content": "<p>but constructing polymorphic tags and structs feels much more hypothetical</p>",
+        "id": 603093369,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781454936
+    },
+    {
+        "content": "<p>as being a source of an actual real-world perf surprise</p>",
+        "id": 603093432,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781454950
+    },
+    {
+        "content": "<p>i played with it a bit &amp; as expected:</p>\n<ul>\n<li>removing the type annotation from <code>f</code> works</li>\n<li>making f a function like <code>f : {} -&gt; [Red, Green, ..]</code> works</li>\n<li>making f a inferred type like <code>f : _</code> works</li>\n</ul>\n<p>&amp; I re-read Ayaz's proposal &amp; it actually explicitly disallows:</p>\n<div class=\"codehilite\"><pre><span></span><code>f : [Red, Green, ..]\n</code></pre></div>\n<p>saying it should error with a <code>TYPE IS NOT POLYMORPHIC</code> error.</p>\n<p>thinking out loud here: in the case where we don't generalize (ie binding a let value like <code>f</code>), maybe instead of desugaring <code>[A, B, ..]</code> as <code>[A, B, ..c]</code> (rigid), we desugar it as <code>[A, B, .._]</code> (weak). that way, it can be refined in based on it's usage. but since functions are generalize &amp; are instantiated at callsites anyways, they keep the existing semantics</p>",
+        "id": 603116664,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1781463158
+    },
+    {
+        "content": "<p>that would make:</p>\n<div class=\"codehilite\"><pre><span></span><code>    f : [Red, Green, ..]\n    f = Red\n\n    g : [Red, Green, Blue, ..]\n    g = f\n</code></pre></div>\n<p>work &amp; have the following types:</p>\n<ul>\n<li><code>f : [Red, Green, ..[Blue, ..x]]</code></li>\n<li><code>g : [Red, Green, Blue, ..x]</code><br>\nnote that <code>x</code> is the same exact type var here</li>\n</ul>",
+        "id": 603116957,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1781463264
+    },
+    {
+        "content": "<p>oh yeah I forgot, I had an idea about Ayaz's proposal regarding tag unions</p>",
+        "id": 603116984,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781463275
+    },
+    {
+        "content": "<p>he talked about the problem with them being that they can break cross-module caching, which is a great point, and his idea was to prohibit exporting them</p>",
+        "id": 603117065,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781463308
+    },
+    {
+        "content": "<p>but I think an even easier idea is just to not generalize them at the top level (just like today)</p>",
+        "id": 603117131,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781463335
+    },
+    {
+        "content": "<p>and only allow local defs to generalize</p>",
+        "id": 603117232,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781463372
+    },
+    {
+        "content": "<p>which prevents the exposing problem while making cases like this one work, and also while keeping generalization rules decoupled from the concept of module boundaries</p>",
+        "id": 603117351,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781463411
+    },
+    {
+        "content": "<p>so here <code>f</code> would generalize, but the same def at top-level would not? would the top-level version error if you tried to annotate it with a rigid/<code>..</code>?</p>",
+        "id": 603117433,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1781463443
+    },
+    {
+        "content": "<p>hm, I guess? (I hadn't thought about it)</p>",
+        "id": 603120586,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781464718
+    },
+    {
+        "content": "<p>maybe the rule could be that top-level values can't have unbound type variables unless they're functions? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 603120829,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781464819
+    },
+    {
+        "content": "<p>(with or without annotations)</p>",
+        "id": 603120865,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781464835
+    },
+    {
+        "content": "<p>Thanks everyone, that's very helpful. <span aria-label=\"folded hands\" class=\"emoji emoji-1f64f\" role=\"img\" title=\"folded hands\">:folded_hands:</span><br>\nFor anyone else wondering, here's Ayaz's proposal:<br>\n<a href=\"https://github.com/roc-lang/rfcs/blob/main/0011-union-refinement.md\">https://github.com/roc-lang/rfcs/blob/main/0011-union-refinement.md</a></p>",
+        "id": 603124438,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1781466317
+    },
+    {
+        "content": "<p>oh actually the one that's relevant here is actually <a href=\"https://github.com/roc-lang/rfcs/blob/main/0010-let-generalization-lets-not.md\">https://github.com/roc-lang/rfcs/blob/main/0010-let-generalization-lets-not.md</a> - probably should have linked to it earlier, oops!</p>",
+        "id": 603140459,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781472417
+    },
+    {
+        "content": "<p>Oh right, thanks <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span></p>",
+        "id": 603144181,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1781473857
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/231634-beginners/topic/When.20exactly.20can.20tag.20unions.20merge.3F/near/603093133\">said</a>:</p>\n<blockquote>\n<p>I dunno, is that bad though? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>\n</blockquote>\n<p>For most users and most cases probably not. Definitely hit some pain in rocci bird due to the equivalent when we still had tasks. Each capture was a slightly different layout and constantly was being shuffled around</p>",
+        "id": 603234944,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781504150
+    },
+    {
+        "content": "<p>I think this probably should not be decided worrying about perf</p>",
+        "id": 603234992,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781504165
+    },
+    {
+        "content": "<p>It should worry about ergonomic</p>",
+        "id": 603235028,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781504174
+    },
+    {
+        "content": "<p>At least for the most part</p>",
+        "id": 603235052,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781504181
+    },
+    {
+        "content": "<p>And the question here is are stricter types that give stronger guarantees or more flexible types more ergonomic</p>",
+        "id": 603235133,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781504205
+    },
+    {
+        "content": "<p>I think I'm still in the camp that most of the time, stricter is the preferred answer and if you don't want stricter, you can just avoid adding type a notions and it will infer something relaxed</p>",
+        "id": 603235268,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781504244
+    },
+    {
+        "content": "<p>That said, I totally see the reserve argument of loose by default and if you want stricter, define a nominal type.</p>",
+        "id": 603235445,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1781504296
+    }
+]

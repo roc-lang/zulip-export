@@ -1,0 +1,380 @@
+[
+    {
+        "content": "<p>I have been running the Roc Clock as an actual clock these last few days. The problem is that it consistently seg faults after running for about 8 hours. I’m guessing this is going to be a hard issue to debug 😅<br>\n<a href=\"/user_uploads/22008/3FlS3Q1hCXUI0R_CqwQX1KJ-/Screenshot-2023-02-27-at-3.24.06-AM.png\">Seg Faults</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/3FlS3Q1hCXUI0R_CqwQX1KJ-/Screenshot-2023-02-27-at-3.24.06-AM.png\" title=\"Seg Faults\"><img src=\"/user_uploads/22008/3FlS3Q1hCXUI0R_CqwQX1KJ-/Screenshot-2023-02-27-at-3.24.06-AM.png\"></a></div>",
+        "id": 338287736,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677493512
+    },
+    {
+        "content": "<p>Here’s the code for it if that’s useful<br>\n<a href=\"https://github.com/Billzabob/roc-clock/blob/main/examples/clock.roc\">https://github.com/Billzabob/roc-clock/blob/main/examples/clock.roc</a></p>",
+        "id": 338288076,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677493615
+    },
+    {
+        "content": "<p>Valgrind might be able to shed more light on the cause, can you execute:</p>\n<div class=\"codehilite\"><pre><span></span><code>valgrind --leak-check=full --track-origins=yes ./examples/clock\n</code></pre></div>",
+        "id": 338292708,
+        "sender_full_name": "Anton",
+        "timestamp": 1677494770
+    },
+    {
+        "content": "<p>Letting the clock run a lot faster could also trigger the segfault much sooner...</p>",
+        "id": 338411042,
+        "sender_full_name": "Anton",
+        "timestamp": 1677520730
+    },
+    {
+        "content": "<p>Ya that's a good point. I'm not home right now though, so I'll just let it run it's course today. But if I need to redo this I'll just disconnect the PI from the clock hardware and just run it without all the sleeps.</p>",
+        "id": 338414640,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677521608
+    },
+    {
+        "content": "<p>Is this useful at all?<br>\n<a href=\"/user_uploads/22008/nBHxYhxYZYxe30G7iXaskbV6/Screenshot-2023-02-27-at-9.03.17-PM.png\">Valgrind</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/nBHxYhxYZYxe30G7iXaskbV6/Screenshot-2023-02-27-at-9.03.17-PM.png\" title=\"Valgrind\"><img src=\"/user_uploads/22008/nBHxYhxYZYxe30G7iXaskbV6/Screenshot-2023-02-27-at-9.03.17-PM.png\"></a></div>",
+        "id": 338496736,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677557079
+    },
+    {
+        "content": "<p>haha 12 GB allocated over the course of the application.</p>",
+        "id": 338498573,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677558644
+    },
+    {
+        "content": "<p>Looks to be str.graphemes that is leaking memory, so that is useful to know.</p>",
+        "id": 338498639,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677558723
+    },
+    {
+        "content": "<p>Guess I just need to download some more RAM then</p>",
+        "id": 338498695,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677558782
+    },
+    {
+        "content": "<p>The question is why isn't the memory being freed. Could just be a bug in str.graphemes or could be some other bug in the application that is keeping around the data generated from str.graphemes. I'll try to take a look and see what's going on.</p>",
+        "id": 338498907,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677558980
+    },
+    {
+        "content": "<p>I have a fuzz test for Str.graphemes (that has never run on arm), but at least on x86_64, it seems to pass consistently. Not definitive of anything, but suggests that the bug if probably not just directly in Str.graphemes.</p>",
+        "id": 338499083,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677559172
+    },
+    {
+        "content": "<p>Looking at the code, I bet the bug is in Task.loop, or more specifically Effect.loop. I bet that it is not correctly decrementing the refcount of the looped over data between iterations.</p>",
+        "id": 338499398,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677559455
+    },
+    {
+        "content": "<p>I am gonna try to make a small repro and see.</p>",
+        "id": 338499407,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677559464
+    },
+    {
+        "content": "<p>Hmmm, unless this issue is arm specific, my guess seems wrong. Somehow numbers is being shared around in a way such that roc never manages to decrement it's refcount to zero, so it is never freed. Maybe another function is missing a decrement.</p>",
+        "id": 338500780,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677560711
+    },
+    {
+        "content": "<p>As a simple validity check, can you do two tests for me on you pi:</p>\n<ol>\n<li>\n<p><code>numbers = Str.graphemes n</code> -&gt; <code>numbers = lastNumbers</code>. I am pretty sure that this shouldn't crash anytime soon/shouldn't accumulate a ton of memory.</p>\n</li>\n<li>\n<p><code>numbers = Str.graphemes n</code> -&gt; <code>numbers = [ \"8\", \"8\", \"8\", \"8\" ]</code>. If I am correct, this should still lead to the memory leak and then crash.</p>\n</li>\n</ol>",
+        "id": 338501148,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677560989
+    },
+    {
+        "content": "<p>It seems like your hypothesis is correct! <a href=\"https://github.com/roc-lang/roc/issues/2\">#2</a> crashed after a short while and <a href=\"https://github.com/roc-lang/roc/issues/1\">#1</a> has been running for a while without any issues</p>",
+        "id": 338682128,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677615112
+    },
+    {
+        "content": "<p>Ok. Good to know</p>",
+        "id": 338688876,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677617322
+    },
+    {
+        "content": "<p>Next i guess i should look at the ir with recounting and see anything missing, otherwise, need to dig into other functions that numbers is passed to. Some built-in likely is simply not correctly handling refcounts.</p>",
+        "id": 338693353,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677618936
+    },
+    {
+        "content": "<p>Ok. I think I found the issue. Looks like <code>List.map2</code> and <code>List.map3</code> have memory leak.</p>",
+        "id": 338701875,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677622198
+    },
+    {
+        "content": "<p>minimal repro: <a href=\"https://github.com/roc-lang/roc/issues/5079\">#5079</a></p>",
+        "id": 338702270,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677622346
+    },
+    {
+        "content": "<p>So I think I was wrong, looks like 1 and 2 above both eventually segfaulted. Does that make sense for the <code>List.mapN</code> thing?</p>",
+        "id": 338704546,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677623386
+    },
+    {
+        "content": "<p>I think there may be more than one memory leak, just at different speeds. does 1 take longer to segfault?</p>",
+        "id": 338704784,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677623480
+    },
+    {
+        "content": "<p>Yes seemed like the first one took much longer to seg fault</p>",
+        "id": 338714203,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677627385
+    },
+    {
+        "content": "<p>Trying to familiarize myself with the codebase. <a href=\"https://github.com/roc-lang/roc/blob/a6cbc847298a0369c78d333df19e74a0c72df091/crates/compiler/builtins/bitcode/src/list.zig#L238-L293\">Am I looking in the right area here</a>? I'm guessing <code>Dec</code> and <code>IncN</code> refer to the reference count?</p>",
+        "id": 338741291,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677645752
+    },
+    {
+        "content": "<p>Yep and yep</p>",
+        "id": 338749198,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677650951
+    },
+    {
+        "content": "<p>In this case my guess is something weird is happening with the 2nd to nth list that cause roc to not decrement their refcount after the function. We have a whole system around wether variables are passed to built-ins as owned or borrowed. I am guessing that is the root cause of the bug.</p>",
+        "id": 338749371,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677651059
+    },
+    {
+        "content": "<p>Though i don't really understand the fundamentals of how that system works/the underlying details.</p>",
+        "id": 338749426,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677651093
+    },
+    {
+        "content": "<p>Could also be a bug local to those functions directly, but at first glance (and a little messing around), i didn't think so.</p>",
+        "id": 338749515,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677651133
+    },
+    {
+        "content": "<p>Ownership definition defined here: <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/mono/src/borrow.rs#L1009\">https://github.com/roc-lang/roc/blob/main/crates/compiler/mono/src/borrow.rs#L1009</a></p>",
+        "id": 338749890,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677651378
+    },
+    {
+        "content": "<p>is there a way we could rewrite those functions to be in pure Roc?</p>",
+        "id": 338821947,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677673248
+    },
+    {
+        "content": "<p>(using unsafe low-level <code>List</code>-module-only primitives)</p>",
+        "id": 338822018,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677673269
+    },
+    {
+        "content": "<p>I'd like that to happen, but currently it would have worse performance</p>",
+        "id": 338825525,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1677674167
+    },
+    {
+        "content": "<p>maybe it's worth it for these <code>List.mapN</code> functions though</p>",
+        "id": 338825673,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1677674201
+    },
+    {
+        "content": "<p>for <code>List.map</code> itself I remember the performance is significantly worse. But these days my benchmarking harness segfauls and I cannot figure out why that is</p>",
+        "id": 338825803,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1677674228
+    },
+    {
+        "content": "<p>eh let's not degrade perf then</p>",
+        "id": 338849042,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677679506
+    },
+    {
+        "content": "<p>I think I found the bug. Will push a pr soon.</p>",
+        "id": 339009271,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677736521
+    },
+    {
+        "content": "<p>essentially we were only decrementing the refcount of the last list in <code>List.mapN</code> functions.</p>",
+        "id": 339009548,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677736699
+    },
+    {
+        "content": "<p>Entire change is to delete 2 dollar signs in a macro: <a href=\"https://github.com/roc-lang/roc/pull/5085/files\">https://github.com/roc-lang/roc/pull/5085/files</a></p>",
+        "id": 339009792,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677736843
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"580063\">@Nick Hallstrom</span> when you get the chance, can you run your clock with this change and valgrind again. I assume there is more than 1 memory leak and want to try and track down what else is leaking memory. Another screenshot like you sent above would be useful in debugging this.</p>",
+        "id": 339010727,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677737388
+    },
+    {
+        "content": "<p>Got the next one for you<br>\n<a href=\"/user_uploads/22008/DnXC7EcQYKdIV7aRbVDA1Hwa/Screenshot-2023-03-02-at-1.16.37-PM.png\">Seg Fault 2</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/DnXC7EcQYKdIV7aRbVDA1Hwa/Screenshot-2023-03-02-at-1.16.37-PM.png\" title=\"Seg Fault 2\"><img src=\"/user_uploads/22008/DnXC7EcQYKdIV7aRbVDA1Hwa/Screenshot-2023-03-02-at-1.16.37-PM.png\"></a></div>",
+        "id": 339196951,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677788251
+    },
+    {
+        "content": "<p>So still another leak with <code>Str.graphemes</code> it looks like?</p>",
+        "id": 339197009,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677788279
+    },
+    {
+        "content": "<p>Just wondering, is this a <code>--optimized</code> build?</p>",
+        "id": 339215332,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677795448
+    },
+    {
+        "content": "<p>Also, <code>Str.graphemes</code> is not leaking anymore. It has one block of size 104 bytes. Which is the exact size of a list with 4 small strings in it. It's just that the program crashed, so valgrind noticed the memory is still in use when the program ended.</p>\n<p>Hard to say about the other data. I mean, the 32 bytes in 4 blocks that was definitely lost is obviously a leak. I would guess the 1564 bytes in 46 blocks is also leaked, but would need to look at your program for other expected allocations to be sure.</p>",
+        "id": 339216009,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677795755
+    },
+    {
+        "content": "<p>I think the stack overflow is a separate bug/issue. Maybe a problem with tail recursion or need for the <code>--optimized</code> flag. Given only, 10KB are in use at exit, that shouldn't be enough pressure to end up limiting the stack size.</p>",
+        "id": 339216287,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677795869
+    },
+    {
+        "content": "<p>Ya, if I didn’t have the <code>—optimize</code> flag, it would seg fault during compilation on the Pi. You were the one that found that workaround I believe.</p>",
+        "id": 339227063,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677801243
+    },
+    {
+        "content": "<p>Ah, I guess I already forgot the exact contraints</p>",
+        "id": 339229116,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677802297
+    },
+    {
+        "content": "<p>I'll take another look and see if I have any ideas around the stack overflow</p>",
+        "id": 339229201,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677802331
+    },
+    {
+        "content": "<p>Ok. I think I found the issue. We have a bug in our generation of <code>Effect.loop</code>. It is not generating a tail recursive function. As such, after some giant number of runs, we get a stack overflow</p>\n<p>Not sure if this is specific to your example for some reason or a general issue. Trying to make a minimal repro now.</p>",
+        "id": 339234823,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677805212
+    },
+    {
+        "content": "<p>Yeah, so far having a hard time generating a repro. I assume that somehow it is related to inlining and llvm.</p>",
+        "id": 339236024,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677805887
+    },
+    {
+        "content": "<p>I think you have a pretty long chain of tasks with <code>Task.traverse</code> on multiple lists</p>",
+        "id": 339236105,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677805929
+    },
+    {
+        "content": "<p>Yeah, the generated llvm ir from <code>clock.roc</code> for <code>Effect.loop</code> does not have tail call optimization</p>",
+        "id": 339239618,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677807991
+    },
+    {
+        "content": "<p>No idea why not so far.</p>",
+        "id": 339239663,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677808008
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/issues/5086\">#5086</a> is a minimal repro. Not really sure what is going on though. Some sort of bad reaction of <code>Task.loop</code> being after other Tasks.</p>",
+        "id": 339240862,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677808999
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"580063\">@Nick Hallstrom</span> if you can make your program work without <code>init</code> and <code>startup</code>, that will workaround the issue.</p>",
+        "id": 339240983,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677809092
+    },
+    {
+        "content": "<p>Something like this:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">main</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">    </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">loop</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"nv\">initialized</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Bool</span><span class=\"p\">.</span><span class=\"nx\">false</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">lastNumbers</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"s\">\"8\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"s\">\"8\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"s\">\"8\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"s\">\"8\"</span><span class=\"p\">]}</span><span class=\"w\"> </span><span class=\"nx\">run</span>\n\n<span class=\"p\">...</span>\n\n<span class=\"nv\">run</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"p\">{</span><span class=\"nx\">initialized</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">lastNumbers</span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"o\">!</span><span class=\"nx\">initialized</span><span class=\"w\"> </span><span class=\"k\">then</span>\n<span class=\"w\">        </span><span class=\"nx\">_</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">await</span><span class=\"w\"> </span><span class=\"nx\">init</span>\n<span class=\"w\">        </span><span class=\"nx\">_</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">await</span><span class=\"w\"> </span><span class=\"nx\">startup</span>\n<span class=\"w\">        </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">succeed</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">Step</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"nv\">initialized</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Bool</span><span class=\"p\">.</span><span class=\"nx\">true</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">lastNumbers</span><span class=\"p\">})</span>\n<span class=\"w\">    </span><span class=\"k\">else</span>\n<span class=\"w\">        </span><span class=\"nx\">_</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">await</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">sleep</span><span class=\"w\"> </span><span class=\"mi\">1000</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"nx\">n</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">await</span><span class=\"w\"> </span><span class=\"nx\">Time</span><span class=\"p\">.</span><span class=\"nx\">getTime</span>\n<span class=\"w\">        </span><span class=\"nv\">numbers</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">Str</span><span class=\"p\">.</span><span class=\"nx\">graphemes</span><span class=\"w\"> </span><span class=\"nx\">n</span>\n<span class=\"w\">        </span><span class=\"nx\">_</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">await</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">setClock</span><span class=\"w\"> </span><span class=\"nx\">lastNumbers</span><span class=\"w\"> </span><span class=\"nx\">numbers</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">succeed</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">Step</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"nx\">initialized</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">lastNumbers</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">numbers</span><span class=\"p\">})</span>\n</code></pre></div>",
+        "id": 339241445,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677809461
+    },
+    {
+        "content": "<p>Looks to fix the other memory leak as well</p>",
+        "id": 339241718,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677809655
+    },
+    {
+        "content": "<p>Oh awesome! I’ll give that a try in the morning. Thanks again Brendan</p>",
+        "id": 339247558,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677813925
+    },
+    {
+        "content": "<p>Just an update on this. It did indeed fix the issue. It’s been running for a day with all the sleeps taken out and is still going strong 💪</p>",
+        "id": 339472780,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1677891548
+    },
+    {
+        "content": "<p>yoooo, awesome!</p>",
+        "id": 339475290,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677893333
+    },
+    {
+        "content": "<p>thanks for helping valgrind these bugs to the surface - now they can be fixed for everyone! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 339475326,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677893368
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"580063\">@Nick Hallstrom</span> I believe <a href=\"https://github.com/roc-lang/roc/pull/5095\">https://github.com/roc-lang/roc/pull/5095</a> will solve the stack overflow you ran into above, without needing to workaround</p>",
+        "id": 339774917,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1678076689
+    },
+    {
+        "content": "<p>Woohoo <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span> I’ll give it a try in the morning. Thanks so much 🙏</p>",
+        "id": 339775811,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1678077651
+    },
+    {
+        "content": "<p>Got to this a bit late, but your fix seems to be working! Thanks a bunch Ayaz!</p>",
+        "id": 340271007,
+        "sender_full_name": "Nick Hallstrom",
+        "timestamp": 1678253467
+    }
+]

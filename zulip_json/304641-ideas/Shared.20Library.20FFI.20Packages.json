@@ -1,0 +1,464 @@
+[
+    {
+        "content": "<p>So I just had a realization. With Task as a builtin, we totally can enable a limited form of platform composability. For example, we could enable using sqlite with any platform at all. No need for the platform to support sqlite or any sqlite related primitives.</p>\n<h3>How?</h3>\n<p>We essentially allow packages to have a special form of the essentially hosted module. This special form of the hosted module would load a shared library and run calls against it. It likely would need design work to be made nice, but fundamentally should work and be totally safe. Everything impure will still be wrapped in Task.</p>\n<p>Now a user can package roc_sqlite which includes an sqlite wrapper shared library for all major platforms along with some roc code.</p>\n<h3>Note</h3>\n<p>If we really want the best api here, it would be preferable for roc to automatically be able to deal with a certain class of type conversions. That way we could directly call into existing shared libraries instead of always requiring a shim.</p>\n<h3>Concern</h3>\n<p>The main concern I have with this is how does it work with async and the underlying state machine. In the perfect world, we would want to enable the host state machine to keep running while we are waiting on file io in a shared library. In practice, I think this may require accepting that it will always block the host state machine by default. Maybe there is something smart we can do here to at least make the idea of async callbacks work nice.</p>",
+        "id": 448729665,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719967419
+    },
+    {
+        "content": "<p>I guess related to blocking the state machine. There should be some sort of primitive to say run this in another thread cause it is blocking io. That would spawn a thread that would block while the rest of the state machine keeps running. So maybe we just need something like that.</p>\n<p>Note, theoretically this could be done today if every platform added support for <code>libffi</code>. That said, I have no idea how that mapping would be made nice without support from the compiler.</p>",
+        "id": 448729935,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719967611
+    },
+    {
+        "content": "<p>Is the idea specifically to wrap dynamic libraries?</p>\n<p>I thought about this but another important thing I think this gives up is 1) the platform sandbox and 2) the platform having complete knowledge of the effects of the roc app.</p>\n<p>It seems like you can either have sandboxing or arbitrary calls from packages to shared libraries, but not both.</p>",
+        "id": 448750459,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719979868
+    },
+    {
+        "content": "<p>Specifically dynamic libraries cause otherwise we have no way to properly deal with linking. Surgical linker wouldn't work with an arbitrary library to link in.</p>",
+        "id": 448755612,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719982383
+    },
+    {
+        "content": "<p>As for sandboxing, I guess it depends on the use and maybe platforms need some sort of way to opt into this feature (and maybe compilation in general).</p>\n<p>For basic CLI there really is no loss. Give the user the power to call sqlite, blas, etc. that is just more power. It is the users app after all.</p>\n<p>For basic webserver, a user may shoot themselves in the foot by adding blocking io wrong. I think that is fine, we just need to add a threading system to support running blocking tasks. So the user has a solution to that.</p>\n<p>For a security or plugin focused platform. For example mods for a game. This feature should probably be turned off.</p>",
+        "id": 448756069,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719982614
+    },
+    {
+        "content": "<p>One risk I see in this is that it might create a split in the ecosystem. It'd become possible to create a 'base platform' that takes a <code>Task</code> and runs it, with all the effects provided by libraries. That would provide maximum composibility of effects, but effectively also ignore the platforms feature.</p>\n<p>I imagine the 'base platform' approach would be an attractive option as well, both for platform/library authors because it'd be the most flexible way to publish their code, and also app authors because it's the approach most familiar from other general purpose programming languages.</p>",
+        "id": 448767233,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1719988117
+    },
+    {
+        "content": "<p>Maybe. Though I would expect the restriction to shared libraries and some of the cumbersome nature of dynamic ffi would make that less likely.</p>",
+        "id": 448767582,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719988220
+    },
+    {
+        "content": "<p>Still definitely could happen.</p>",
+        "id": 448767647,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719988248
+    },
+    {
+        "content": "<p>Still definitely could happen.</p>",
+        "id": 448767660,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719988262
+    },
+    {
+        "content": "<p>Though if it were to become the default pattern, that would likely suggest that there is a major issue with Roc's assumptions about the value of platforms.</p>",
+        "id": 448767734,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719988299
+    },
+    {
+        "content": "<p>I think there will always be a long tail of potential extra functionality that someone wants from a platform. Currently, roc has no solution for this. I think at some point we need to figure out a way to address it.</p>\n<p>I doubt forking the platform is the answer. As Roc's community grows, more people will just want to be Roc application authors that never touch platforms.</p>\n<p>I think configurable platforms with many feature flags might be the answer, but that will likely only ever cover a short part of the long tail of wanted features. (and becomes an 2^n distribution problem if we want precompiled binaries instead of requiring users to build from source)</p>\n<p>For many things, breaking down to primitives and creating a roc library with module params will be the solution (just chat with postgres and mysql directly over sockets). I just don't think it is a large enough solution. There are many C ffi friendly tools that don't make sense to break down into primitives. They also may not be large enough to be a feature flag on any platform. So they either just won't exist in roc or require something more flexible.</p>",
+        "id": 448768406,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719988570
+    },
+    {
+        "content": "<p>I definitely think this will be a case where we want explicit opt in. This should be behind some sort of feature flag for auditing reasons. As said above, a secure-cli script and a game modding api likely want to restrict all ffi through only the platform exposed tasks. No 3rd party tasks.</p>",
+        "id": 448769090,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719988866
+    },
+    {
+        "content": "<p>I appreciate someone might want to, say, write an application that outputs some stats of an sqlite database, and have no way to write that application in Roc of the <code>basic-cli</code> platform does not provide <code>sqlite</code> support. Substitute <code>sqlite</code> with any other less-known database technology and the argument stays the same. I don't have a better idea for solving this.</p>\n<blockquote>\n<p>I think there will always be a long tail of potential extra functionality that someone wants from a platform. Currently, roc has no solution for this. I think at some point we need to figure out a way to address it.</p>\n<p>I doubt forking the platform is the answer. As Roc's community grows, more people will just want to be Roc application authors that never touch platforms.</p>\n</blockquote>\n<p>I think there might be two different audiences here. One is a group that wants to do something non-standard/untested on the platform, like use a database the platform was not designed to work with. This group is living on the edge, and I think forking the platform (and potentially contributing back if things work out) would not be out of their wheelhouse.</p>\n<p>The people who don't want to touch platforms at all might be best served by using the IO primitives that come with the platform, because those are built to integrate with the platform well. For instance, one thought I have had is to build/contribute to a web platform with great observability/tracing support out of the box, automatically instrumenting outgoing HTTP requests, database queries, etc. For the  less platform-savy users especially, I wouldn't want them to do something seeming reasonable like pulling in a database library, then be surprised when those queries aren't traced.</p>\n<blockquote>\n<p>Though if it were to become the default pattern, that would likely suggest that there is a major issue with Roc's assumptions about the value of platforms.</p>\n</blockquote>\n<p>My understanding of platforms and the assumptions behind them, is that they're inherently and intentionally adding some friction. They essentially introduce a constraint that all IO primitives be defined in the same place, which no other programming language I know has. I think the hypothesis is that this constraint will push folks to build nice curated experiences, the Elm's of other domains.</p>\n<p>I can definitely see a path where given the choice folks choose to avoid the friction, and we don't get to test the hypothesis.</p>\n<blockquote>\n<p>I definitely think this will be a case where we want explicit opt in. This should be behind some sort of feature flag for auditing reasons. As said above, a secure-cli script and a game modding api likely want to restrict all ffi through only the platform exposed tasks. No 3rd party tasks.</p>\n</blockquote>\n<p>This might be a solution, though I see some trade-offs:</p>\n<p>If it's the platform author that decides whether the flag is enabled or not for their platform, that could create a lot of pressure on the platform author to \"unlock the door\" so to speak, some of it ugly. This is what happened in Elm, where group pushed to allow performing arbitrary effects from pure Elm code and wouldn't take no for an answer.</p>\n<p>If it's the app user that decides whether the flag is enabled or not, does that mean the feature is aimed more at expert users than novice users?</p>",
+        "id": 448774308,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1719991055
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Shared.20Library.20FFI.20Packages/near/448768406\">said</a>:</p>\n<blockquote>\n<p>I think there will always be a long tail of potential extra functionality that someone wants from a platform. Currently, roc has no solution for this. I think at some point we need to figure out a way to address it</p>\n</blockquote>\n<p>We may not need to cover everything though. Just looking at some of the better loved \"batteries included\" standard libs (eg. Python and Go) and reproducing their functionality in <code>basic-cli</code> may be enough.</p>\n<p>Coming from the python ecosystem, people often will sacrifice using external libraries to keep their scripts portable and avoid the dependency management headache of python. You can get a lot done within the confines of those standard libs (basically all of ansible depends on that fact). The only thing that worries me is that those authors always have the escape hatch of reaching for whatever package they want in the future. Currently Roc's basic-cli users don't outside building their own platform.</p>",
+        "id": 448776603,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719991840
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"477725\">Jasper Woudenberg</span> <a href=\"#narrow/stream/304641-ideas/topic/Shared.20Library.20FFI.20Packages/near/448774308\">said</a>:</p>\n<blockquote>\n<p>This is what happened in Elm, where group pushed to allow performing arbitrary effects from pure Elm code and wouldn't take no for an answer.</p>\n</blockquote>\n<p>There are 2 critical differences this time around however. 1) You have an officially blessed 100% capable escape hatch: go build your own platform. 2) Richard does not hold the keys to the castle for that escape hatch, unlike Evan.</p>",
+        "id": 448782717,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719993731
+    },
+    {
+        "content": "<p>I don't think python or go are good examples here. They have tons and tons of packages that do arbitrary io. Sure the standards are nice, but python is glued to cffi and go still has plenty.</p>",
+        "id": 448782734,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719993734
+    },
+    {
+        "content": "<blockquote>\n<p>If it's the platform author that decides whether the flag is enabled or not for their platform, that could create a lot of pressure on the platform author to \"unlock the door\"</p>\n</blockquote>\n<p>One of the reasons I was asking about standards and module params earlier is there are parts of this problem that are similar to the wasm platform. Wasm is sandboxed and cannot execute anything without the host runtime.</p>\n<p>So there is not an \"all or nothing\" but more control. What if apps / platforms had the option to enable sections of some standard effectful interface ala <a href=\"https://github.com/bytecodealliance/wasmtime/blob/main/docs/WASI-capabilities.md\">wasi capabilities</a>.</p>\n<p>(edit: lost part of my quote there)</p>",
+        "id": 448784938,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719994317
+    },
+    {
+        "content": "<p>A program like <code>ftrace</code>can wrap syscalls, couldn't roc as well as part of this dylib enabled platform?</p>",
+        "id": 448785910,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719994667
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"453714\">Ryan Barth</span> <a href=\"#narrow/stream/304641-ideas/topic/Shared.20Library.20FFI.20Packages/near/448750459\">said</a>:</p>\n<blockquote>\n<p>It seems like you can either have sandboxing or arbitrary calls from packages to shared libraries, but not both.</p>\n</blockquote>\n<p>this is correct, and it's why I think the bar should be extremely high for doing something like this</p>",
+        "id": 448825519,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720006609
+    },
+    {
+        "content": "<p>for example, I think we need at least 10 more real motivating examples than sqlite</p>",
+        "id": 448825831,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720006743
+    },
+    {
+        "content": "<p>the actually-secure sandboxing benefit is one of the only things that genuinely cannot be found in any other language besides Roc</p>",
+        "id": 448826153,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720006886
+    },
+    {
+        "content": "<p>(I guess unless you count languages that are JS, or only compile to JS or wasm)</p>",
+        "id": 448826200,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720006909
+    },
+    {
+        "content": "<p>and the specific reason for that is that Roc doesn't support arbitrary dependencies introducing arbitrary C code</p>",
+        "id": 448826284,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720006934
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Shared.20Library.20FFI.20Packages/near/448767734\">said</a>:</p>\n<blockquote>\n<p>Though if it were to become the default pattern, that would likely suggest that there is a major issue with Roc's assumptions about the value of platforms.</p>\n</blockquote>\n<p>I partially agree - in one sense, if it turns out that everyone prefers to use platforms with FFI-like capabilities, then yeah, maybe that means everyone doesn't care about the sandbox after all</p>",
+        "id": 448826476,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007015
+    },
+    {
+        "content": "<p>on the other hand, it could also mean that people value expedience over guarantees</p>",
+        "id": 448826500,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007027
+    },
+    {
+        "content": "<p>for example, today there is a huge ecosystem of packages written in 100% JavaScript, because JavaScript in the browser did not have an escape hatch</p>",
+        "id": 448826586,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007050
+    },
+    {
+        "content": "<p>if JS in the browser had enabled C FFI, probably a lot of people would have used it extensively instead of writing libraries in JS, and the result would have been that it was fundamentally unsafe to use JS in the browser because it could give you viruses, etc.</p>",
+        "id": 448826797,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007144
+    },
+    {
+        "content": "<p>so you could look at that world and say \"well I guess the sandbox wasn't so valuable after all, since everyone reached for the C ecosystem as soon as it was available\" but you could also look at that world and say \"well they were too impatient, and really missed out on an opportunity to have something with real security guarantees; if they'd just waited for the ecosystem to mature, they would have ended up with something much more valuable\"</p>",
+        "id": 448827240,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007323
+    },
+    {
+        "content": "<p>obviously the considerations are different with Roc vs JS in the browser <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 448827286,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007343
+    },
+    {
+        "content": "<p>but I do think we are trying to over-generalize what feels like a narrow problem right now</p>",
+        "id": 448827336,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007363
+    },
+    {
+        "content": "<p>for example, Postgres, MySQL, and Redis all run in a separate process and are not motivating examples for this sort of design at all</p>",
+        "id": 448827561,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007442
+    },
+    {
+        "content": "<p>among databases, it's currently just sqlite and that's it</p>",
+        "id": 448827594,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007454
+    },
+    {
+        "content": "<p>I wonder if the following scenario is possible: one creates a base platform with a plugin system. then onyone can write a plugin in low-level language (and with a corresponding roc modules) and in the end you have to compose a platform of your dream manually with very minimal low-level code. as a result, the downsides are the same as for FFI packages from the box, right? but it's probably will be discouraged by community</p>",
+        "id": 448828028,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1720007602
+    },
+    {
+        "content": "<p>this is already possible in general, but the ergonomics aren't great</p>",
+        "id": 448828460,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007726
+    },
+    {
+        "content": "<p>for example, if I'm a platform author, I can provide something like this:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">runDylib</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">dylibPath</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Path</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">fn</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">args</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"kt\">DylibErr</span>\n</code></pre></div>",
+        "id": 448828697,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007814
+    },
+    {
+        "content": "<p>then you'd need to use a wrapped dylib (e.g. a dylib wrapper around the sqlite dylib) which exposes all of its functions as accepting a <code>RocList U8</code> as its one arg (and then decoding it somehow into the desired args) and then returning a <code>RocList U8</code> (encoded somehow)</p>",
+        "id": 448828900,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007888
+    },
+    {
+        "content": "<p>and then the application can encode the args and decode the return value after calling it from the platform, which can take care of caching the opened dylib to prevent having to go back to the OS repeatedly, etc.</p>",
+        "id": 448828984,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007914
+    },
+    {
+        "content": "<p>this is already possible today, and does not require any new language features</p>",
+        "id": 448829052,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007935
+    },
+    {
+        "content": "<p>you could take this a step further by importing bytes (e.g. importing a <code>List U8</code> into a <code>.roc</code> file) to make a shareable dylib</p>",
+        "id": 448829182,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007989
+    },
+    {
+        "content": "<p>you could include the bytes for all the different targets you want to support</p>",
+        "id": 448829197,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720007997
+    },
+    {
+        "content": "<p>and then platforms could expose some functions for like \"register dylib\" which takes the raw bytes and creates a dylib out of them</p>",
+        "id": 448829302,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720008016
+    },
+    {
+        "content": "<p>(or there may be a way to dlopen a pointer to bytes; I haven't checked if that exists but it's not strictly necessary for this to work since platforms can write the bytes to a file on the filesystem and then dlopen that)</p>",
+        "id": 448829389,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720008043
+    },
+    {
+        "content": "<p>this is also already possible today, and doesn't require any new language features (and again, the ergonomics aren't great)</p>",
+        "id": 448829455,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720008062
+    },
+    {
+        "content": "<p>this is why I think the exploration around ergonomics of all this is premature; if there is really a lot of demand for this sort of thing, nothing is blocking people from trying it out right now! <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 448829550,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720008095
+    },
+    {
+        "content": "<p>sounds like an escape hatch <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span> <br>\nI imagine a lot of ergonomics complexity can be hidden</p>",
+        "id": 448829733,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1720008131
+    },
+    {
+        "content": "<p>yeah potentially</p>",
+        "id": 448832275,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720008761
+    },
+    {
+        "content": "<p>personally I think we should focus on seeing how things go in practice with module params</p>",
+        "id": 448832529,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720008816
+    },
+    {
+        "content": "<p>it’s always been clear that there are tons of motivating use cases for platform-agnostic packages that can do effects</p>",
+        "id": 448832689,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720008856
+    },
+    {
+        "content": "<p>e.g. the entire category of “library that talks to a web service that has a REST or GraphQL API”</p>",
+        "id": 448832799,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720008899
+    },
+    {
+        "content": "<p>of which there are incredibly many</p>",
+        "id": 448832885,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720008923
+    },
+    {
+        "content": "<p>whereas in this case we’ve basically talked about “sqlite is a dylib rather than a separate process” and “BLAS/LAPACK are too big to reimplement in pure Roc, plus maybe the inline assembly they use is essential” - but that use case doesn’t want to use<code>Task</code> anyway</p>",
+        "id": 448833702,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720009199
+    },
+    {
+        "content": "<p>so to me, “wait and see” feels like the correct way to proceed here <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 448833862,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720009241
+    },
+    {
+        "content": "<p>Yeah. I think I agreed with your analysis for the most part. I do think beginners asking about composing two platforms is pretty common. So there is definitely a bit more want for flexibility (especially if they don't want to get into platform dev), but currently this is a very niche feature. Sqlite and blas being the two main potential examples. With things like essentially a more configurable basic CLI being another pseudo example.</p>",
+        "id": 448872281,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720018413
+    },
+    {
+        "content": "<p>I need to make a libffi prototype just to see what the ergonomics really are like in practice. Maybe I can wire that into basic CLI. I think if you require a shim, the ergonomics of usage might be okish. I think allowing general flexibility without a shim is where compiler support almost certainly would be required.</p>",
+        "id": 448872918,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720018570
+    },
+    {
+        "content": "<p>Of course there is currently no place for the shim to exist. So even if you could do it. It means you couldn't make a library for calling sqlite without distributing and sqlite shim library as well which is separate from all the roc package ecosystem.</p>",
+        "id": 448873211,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720018642
+    },
+    {
+        "content": "<p>I feel like a monster right now, but I have a very basic ffi working. It includes the most type unsafe roc code I have ever written.</p>\n<p>I have a function that takes any roc type, boxes it and returns a pointer as an opaque. I also have the reverse to go from a pointer as an opaque to a box of any type. So the ffi is all boxes with exactly 0 type safety, but it does work.</p>\n<p>On the <a href=\"https://github.com/roc-lang/basic-cli/compare/main...ffi\">basic-cli ffi branch</a></p>\n<hr>\n<p>From the little prototype, I actually learned a lot about the required types. From what I can tell there are 4 ways to make the types work here while having roc constraints and a platform in the middle:</p>\n<ol>\n<li><strong>Box everything</strong> -&gt; Everything is a pointer, so types just work. Unclear on how to reasonably make the types any safer. Medium overhead due to boxing. To cut down on cost, can always box a struct of all of the args (just one allocation per call)</li>\n<li><strong>Encode/Decode to bytes</strong> -&gt; Just pass and receive back a single list. Requires all ffi functions to know the format and do decoding. Type safety would depend on the serialization format. Probably would want to use something like proto. medium to high overhead due to serde, especially if done in a type safe way.</li>\n<li><strong>RocObject</strong> -&gt; Basically the same thing as a PythonObject. Convert all data passed around into a nested tag format that includes type info. <code>RocObject : [ RocStr Str, RocList (List RocObject), RocU8 U8, etc ]</code>. Very high overhead, especially with nested data. Have to map all elements of a list to a wrapped version of the element. Totally type safe.</li>\n<li><strong>Compiler Builtin</strong> -&gt; If the compiler generates the libffi calls, it knows all of the roc types. It can verify that the roc types are correct. That said, it would not verify on the lib side, so still possible for type mismatches that lead to issues. It also can pass the roc types to libffi without any sort of wrapping/boxing/encoding. Very low overhead.</li>\n</ol>",
+        "id": 449012284,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720074796
+    },
+    {
+        "content": "<p>Option 4 having low overhead sounds of course very enticing. This smells a lot like <code>roc glue</code>.</p>",
+        "id": 449013809,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1720075536
+    },
+    {
+        "content": "<p>If if we go with option 1 or 4, then platform devs probably wouldn't be put off too much by the perf cost. Options 2 or 3, on the other hand, would make me personally prefer to avoid the FFI styling and just use some Rust crate that provides the common code, and copy-paste/symlink the requisite FFI definitions instead</p>",
+        "id": 449014159,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1720075696
+    },
+    {
+        "content": "<p>I mean fundamentally a similar problem. This is a larger problem than glue cause it is even more dynamic. FFI info is known at app compile time, but not at platform compile time. So having it go through the platform is forcing something dynamic to go through a static hole.</p>",
+        "id": 449014244,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720075742
+    },
+    {
+        "content": "<p>In short, bad enough performance makes convenience unappealing</p>",
+        "id": 449014271,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1720075752
+    },
+    {
+        "content": "<p>From what I can tell, 1 probably is a viable option, just terribly unsafe. It could attempt to be augmented with sideband types, but they would be user provided and not guaranteed to be correct. It would just give a way for the functions to assert they are called with the correct args.</p>\n<p>I think 2 is just too high effort for anyone to want to use it. Like to wrap sqlite, you would have to setup idk, protobuf encode and decode for every single function....just not great.</p>\n<p>I think 3 makes sense for a dynamic language where the data is already in a tagged form. I think the cost of tagging at runtime for anything nested is too expensive. So would be ok if you limit to non-nested primitives....which probably isn't enough. Cause that would mean no lists. I don't think it would work out for roc on practice.</p>\n<p>For 4, I think it could be made roughly equivalent to writing effects in a platform, but a bit less safe. Though thinking about it more, linking doesn't verify function args are correctly matching between platform and app. So maybe as safe. Of course, it is a big cost ecosystem and compiler cost that roc doesn't want to consider currently.</p>\n<p>Maybe there is a 5 and 6 option that I am missing, but currently, boxing records to make each call only one allocation sounds like the best bet for trying this out. I think I am gonna try to setup a super duper basic ffi plugin for sqlite. Just see what that looks like.</p>",
+        "id": 449017011,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720076799
+    },
+    {
+        "content": "<p>As a note, the boxing could theoretically be avoided, but it would require roc enabling a user to explicitly pass reference to values to the platform. Cause fundamentally, FFI needs a list of references to data (the data can be on the stack). I'll definitely have to mess around more to see if I can make that API nicer without any extea compiler features.</p>",
+        "id": 449018199,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720077283
+    },
+    {
+        "content": "<p>Working ffi running sqlite from basic cli.</p>\n<p>Roc code: <a href=\"https://github.com/roc-lang/basic-cli/blob/ffi/examples/ffi/sqlite.roc\">https://github.com/roc-lang/basic-cli/blob/ffi/examples/ffi/sqlite.roc</a><br>\nC++ shim: <a href=\"https://github.com/roc-lang/basic-cli/blob/ffi/examples/ffi/sqlite-shim.cpp\">https://github.com/roc-lang/basic-cli/blob/ffi/examples/ffi/sqlite-shim.cpp</a></p>",
+        "id": 449198129,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720146254
+    },
+    {
+        "content": "<p>The ergonomics are actually approximately the same as adding an effect to a platform. Could definitely use some glue help. Also, it may use a bug in the roc type system to function. I don't think these should actually be legal effect signatures:</p>\n<div class=\"codehilite\"><pre><span></span><code>ffiCall : U64, Str, Box a -&gt; Effect (Result (Box b) Str)\nffiCallNoReturn : U64, Str, Box a -&gt; Effect (Result {} Str)\n</code></pre></div>",
+        "id": 449198268,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720146364
+    },
+    {
+        "content": "<blockquote>\n<p>The ergonomics are actually approximately the same as adding an effect to a platform</p>\n</blockquote>\n<p>As in, without glue generation support of some sort is 100% type unsafe and and easy way to shot yourself in the foot. But once that api is correct in the shared lib and the roc wrapping function, all the roc code after that is safe.</p>",
+        "id": 449198364,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720146457
+    },
+    {
+        "content": "<p>Also, I assume this would need some sort of record builder magic or something else smart, but I really that this is returning a <code>List (List SqlVal)</code>. Really you would want to return something like <code>List { id: I64, task: Str }</code>. Not only is it terrible for performance due to all of the list allocations, but it also is a lot less convenient and requires handling overly generic types.</p>\n<p>That said, given ffi has not type rules, I technically could just return a <code>List { id: I64, task: Str }</code>. The user of the library would just be able to shot themselves in the foot if they get the type wrong. Would return total garbage in that case.</p>",
+        "id": 449198776,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720146691
+    },
+    {
+        "content": "<p>So, this is totally unsafe. It requires the roc user to specify the correct output tuple for every sql query they write. That said, it is also super cool cause it avoids nested allocations and a huge perf cost:</p>\n<div class=\"codehilite\"><pre><span></span><code>Opening db: examples/ffi/todos.db\nPreparing statement: SELECT id, task FROM todos WHERE status = :status\n[[(Integer 1), (String &quot;Prepare for AoC&quot;)]]\n\nNow querying a second time without nested allocations!\n[(1, &quot;Prepare for AoC&quot;)]\n\nCleaning up\nDone\n</code></pre></div>\n<p>The roc user is manual specifying the second output type is a <code>List (I64, Str)</code>. If there sql query doesn't return exactly that type, they will get back garbage data.</p>",
+        "id": 449355557,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720198711
+    },
+    {
+        "content": "<p>Anyway, I feel like even this totally unsafe ffi feels like a super power. Basically makes it so that any platform that supports a few minimal ffi primitives can be extended to do anything. That said, it is horribly type unsafe and would be an easy way to crash or return totally garbage data to roc. (again, roughly the same ergonomics of working on a platform, but more exposed to the end users/library author).</p>",
+        "id": 449356232,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720198906
+    },
+    {
+        "content": "<p>Anyone have ideas on how to make it either:</p>\n<ol>\n<li>Safer: currently this is literally take a box of anything and returning a box of some different anything. No types at all. Roc doesn't expose any type info at runtime, so I can request the compiler to generate exactly what <code>a</code> monomorphizes to in <code>Box a</code>. Being able to do <code>typeOf someVar</code> and getting back a tag would be pretty awesome here. Then could add some guard asserts at least.</li>\n<li>Friendlier: Just in general making this something nice to use. Maybe there is a different api design that would work better overall.</li>\n</ol>",
+        "id": 449358276,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720199316
+    },
+    {
+        "content": "<p>On that general note, do we think this is something worth adding to basic-cli in general? Let users play with it and extend basic-cli via ffi if they want. That said, maybe should have written the shim in rust to have access to <code>roc_std</code>.</p>",
+        "id": 449358668,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720199389
+    },
+    {
+        "content": "<p>I think glue is likely the way to go for making it safer! It’s the exact shape of problem glue is built to solve <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 449362295,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720200446
+    },
+    {
+        "content": "<p>I don’t think we should add it to basic-cli right now, but I think it’s a reasonable thing to discuss in the future</p>",
+        "id": 449362473,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720200503
+    },
+    {
+        "content": "<p>I think if we put it in basic-cli, it might give the impression that “oh this is a thing every platform should include as a matter of course” - which I don’t think is the right impression to give right now <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 449362666,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720200568
+    },
+    {
+        "content": "<p>but it’s great to see the proof of concept! <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span></p>",
+        "id": 449362715,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720200598
+    },
+    {
+        "content": "<p>While glue helps, I think it hits an issue where this is more flexibly defined than the platform. Though maybe that is just cause I have a terrible overly flexible SQL API that doesn't actually make sense in roc.</p>",
+        "id": 449362940,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720200701
+    },
+    {
+        "content": "<p>But yeah, if we could run glue on an arbitrary FFI function call (or signature), that definitely would help make wrappers.</p>",
+        "id": 449363044,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720200750
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/Shared.20Library.20FFI.20Packages/near/449362666\">said</a>:</p>\n<blockquote>\n<p>I think if we put it in basic-cli, it might give the impression that “oh this is a thing every platform should include as a matter of course” - which I don’t think is the right impression to give right now <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>\n</blockquote>\n<p>Yeah, especially given it is super easy to add to any platform. It's like 3 effects.</p>",
+        "id": 449363163,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720200814
+    }
+]

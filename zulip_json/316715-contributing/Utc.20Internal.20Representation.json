@@ -1,0 +1,86 @@
+[
+    {
+        "content": "<p>We were discussing the internal representation of time, and I suggested we change from <code>U128</code> to <code>I64</code> for the internal representation as this was what <span class=\"user-mention\" data-user-id=\"508951\">@Hannes</span> is using for the DateTime lib. I've started looking at updating <code>roc-lang/basic-cli</code> to make this change for <code>Utc.roc</code> and have remembered why I used <code>U128</code>. The Rust library provides nanoseconds with <code>U128</code> e.g. <code>core::time::Duration::as_nanos(&amp;self) -&gt; u128</code> and the platform currently measures time at that level of precision. Is this an issue that needs to be resolved? I assume we can always just use <code>Num.toI64 : Int * -&gt; I64</code> as required. when converting to a DateTime.</p>",
+        "id": 355290110,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1683074139
+    },
+    {
+        "content": "<p>interesting, I wonder why they chose that <span aria-label=\"face with raised eyebrow\" class=\"emoji emoji-1f928\" role=\"img\" title=\"face with raised eyebrow\">:face_with_raised_eyebrow:</span></p>",
+        "id": 355290319,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683074253
+    },
+    {
+        "content": "<p><a href=\"https://github.com/rust-lang/rust/issues/50202\">Here is the tracking issue</a> </p>\n<blockquote>\n<p>Duration has historically lacked a way to get the actual number of nanoseconds it contained as a normal Rust type because u64 was of insufficient range, and f64 of insufficient precision. The u128 type solves both issues, so I propose adding an as_nanos function to expose the capability.</p>\n</blockquote>",
+        "id": 355290685,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1683074429
+    },
+    {
+        "content": "<p>looking at <a href=\"https://man7.org/linux/man-pages/man2/clock_gettime.2.html\">https://man7.org/linux/man-pages/man2/clock_gettime.2.html</a> and <a href=\"https://stackoverflow.com/a/471287\">https://stackoverflow.com/a/471287</a> it appears that if you get the time in Linux, the answer is specified as:</p>\n<ul>\n<li>seconds since epoch as either <code>i32</code> or <code>i64</code> (it's up to the particular C implementation which to choose; if they choose <code>i32</code> they are susceptible to the <a href=\"https://en.wikipedia.org/wiki/Year_2038_problem\">Year 2038 problem</a>)</li>\n<li>additionally, nanoseconds in <code>i32</code></li>\n</ul>",
+        "id": 355290813,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683074504
+    },
+    {
+        "content": "<p>That's how I've defined duration in my datetime library:</p>\n<div class=\"codehilite\"><pre><span></span><code>Duration : { seconds : I64, nanoseconds : U32 }\n</code></pre></div>\n<p>copied from Rust's chrono crate.</p>",
+        "id": 355290993,
+        "sender_full_name": "Hannes",
+        "timestamp": 1683074652
+    },
+    {
+        "content": "<p>so I guess if you're storing seconds as <code>i64</code> and nanoseconds as <code>i32</code> then if you want to combine those into one single nanoseconds value, I think you need another 30 bits (1 nanosecond is 1e9 seconds, 2^30 is a little over 1e9)</p>",
+        "id": 355291109,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683074701
+    },
+    {
+        "content": "<p>if nanoseconds is <code>u32</code> and seconds is <code>i64</code> then I think putting them together you should be able to just barely fit them both into a single <code>i128</code> number of nanoseconds unless my math is wrong <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 355291281,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1683074771
+    },
+    {
+        "content": "<p>The maximum value that can be stored is <code>Num.maxI64 seconds + 999_999_999 nanoseconds = 2^63 seconds</code>, which I think is more than <code>Num.maxI128 nanoseconds = (2^127 − 1) nanoseconds</code><br>\n<a href=\"/user_uploads/22008/9gbJBL7NtJ_9HEZVUSr98tcu/image.png\">image.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/9gbJBL7NtJ_9HEZVUSr98tcu/image.png\" title=\"image.png\"><img src=\"/user_uploads/22008/9gbJBL7NtJ_9HEZVUSr98tcu/image.png\"></a></div>",
+        "id": 355295651,
+        "sender_full_name": "Hannes",
+        "timestamp": 1683077388
+    },
+    {
+        "content": "<p>The way <code>chrono</code> handles this is if you try to convert a duration to nanoseconds that is longer than <code>i64::MAX nanoseconds</code> it returns <code>None</code></p>",
+        "id": 355295941,
+        "sender_full_name": "Hannes",
+        "timestamp": 1683077529
+    },
+    {
+        "content": "<p>No, it fits: <code>2^63*10^9+999,999,999</code> = <code>9...e+27</code> and <code>2^127</code> = <code>1...e+38</code></p>",
+        "id": 355295968,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683077549
+    },
+    {
+        "content": "<p>your result has a negative amount of days because the nanoseconds being subtracted are bigger than the amount of seconds.</p>",
+        "id": 355296042,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683077614
+    },
+    {
+        "content": "<p>They fit with tons of extra space, right? You need only 93 bits. So you have 34 bits to spare.</p>",
+        "id": 355296229,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683077744
+    },
+    {
+        "content": "<p><code>2^93-(2^63*10^9+999,999,999)</code> = <code>6.80148277428e+26</code>. So everything fits in the 93 bits if I understand correctly.</p>",
+        "id": 355296326,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1683077794
+    },
+    {
+        "content": "<p>Ah, yes, you're correct. I got the right result but interpreted the negative sign wrong!</p>",
+        "id": 355296369,
+        "sender_full_name": "Hannes",
+        "timestamp": 1683077845
+    }
+]

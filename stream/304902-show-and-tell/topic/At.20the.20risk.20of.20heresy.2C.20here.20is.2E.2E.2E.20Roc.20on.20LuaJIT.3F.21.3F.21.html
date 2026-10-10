@@ -1,0 +1,76 @@
+<html>
+<head><meta charset="utf-8"><title>At the risk of heresy, here is... Roc on LuaJIT?!?! · show and tell · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/304902-show-and-tell/index.html">show and tell</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/304902-show-and-tell/topic/At.20the.20risk.20of.20heresy.2C.20here.20is.2E.2E.2E.20Roc.20on.20LuaJIT.3F.21.3F.21.html">At the risk of heresy, here is... Roc on LuaJIT?!?!</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="629731221"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304902-show%20and%20tell/topic/At%20the%20risk%20of%20heresy%2C%20here%20is...%20Roc%20on%20LuaJIT%3F%21%3F%21/near/629731221" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Peter Marreck <a href="https://roc-lang.github.io/zulip-export/stream/304902-show-and-tell/topic/At.20the.20risk.20of.20heresy.2C.20here.20is.2E.2E.2E.20Roc.20on.20LuaJIT.3F.21.3F.21.html#629731221">(Oct 07 2026 at 04:28)</a>:</h4>
+<p>Hah, amazing! Hey, they say the best programmers put out negative LOC many days! ;)</p>
+
+
+
+<a name="629733151"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304902-show%20and%20tell/topic/At%20the%20risk%20of%20heresy%2C%20here%20is...%20Roc%20on%20LuaJIT%3F%21%3F%21/near/629733151" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Peter Marreck <a href="https://roc-lang.github.io/zulip-export/stream/304902-show-and-tell/topic/At.20the.20risk.20of.20heresy.2C.20here.20is.2E.2E.2E.20Roc.20on.20LuaJIT.3F.21.3F.21.html#629733151">(Oct 07 2026 at 04:47)</a>:</h4>
+<p><span class="user-mention" data-user-id="515757">@Luke Boswell</span> </p>
+<p>Yeah, I didn't intend to upstream it (unlikely to be interest, but who knows). I just wanted to see what was possible to do. And yeah, this might be an example of how to lower from LIR to implement other possible backends.</p>
+<p>And yes, regarding the platform/app abstraction:</p>
+<p>A Roc platform (as you may know) is two halves: a Roc module (main.roc) that declares the app's entrypoints and the effects it may call ("hosted functions"), and a native host that implements those effects. I reused the compiler's half unchanged and replaced the host half with Lua.</p>
+<p>Compiler side. roc build --target=luajit lowers the program exactly as the interpreter build does, down to ARC-complete LIR. The LIR already marks the platform boundary:</p>
+<ul>
+<li>Root procedures are the entrypoints the platform provides to its host (for example main_for_host).</li>
+<li>Hosted procedures each carry {symbol, dispatch_index}.</li>
+</ul>
+<p>LuaEmitter emits a platform-mode chunk shaped like <code>APP = function(hosted) ... return { rt = ..., entrypoints = {...} } end</code>.</p>
+<p>Binding by name, not position: Native Roc dispatches hosted calls by position in an alphabetically sorted function list. The Lua output binds each hosted procedure once at load with <code>rt.hosted(host, symbol)</code>, which looks the function up by its symbol and fails loudly if the host lacks it. That whole class of silent mismatch can't happen here.</p>
+<p>The host: A Lua file returning <code>{ run = function(app, argv) }</code>. <code>LuaHost.writeProgram</code> concatenates a shebang, the app chunk, the host chunk and the line <code>HOST.run(APP, arg)</code> into one runnable Lua file. run then:</p>
+<ol>
+<li>builds the table of hosted functions</li>
+<li>calls app(hosted) to get the runtime and the entrypoints</li>
+<li>invokes an entrypoint through <code>rt.call_entry</code>, which converts a Roc crash into a structured error and a Lua stack overflow into native Roc's overflow report (always a tricky business, getting errors across this line; might be incomplete)</li>
+<li>maps the outcome to the same stdout, stderr and exit status the native host would give.</li>
+</ol>
+<p><code>hosts/default.lua</code> (about 30 lines) is the whole host for headerless apps, mirroring default_platform/linux_runtime.zig.</p>
+<p>Where the host comes from:</p>
+<ul>
+<li>A host.lua next to its main.roc.</li>
+<li>A platform downloaded by URL can't carry one, so the compiler fingerprints the platform's .roc files (SHA-256 over sorted names and contents) and looks up a host bundled with roc_luajit. The fingerprint describes the hosted interface, and it is identical whether the package came from the cache or a local --replace-dep copy. basic-cli 0.23.0 is matched this way, so that was the blueprint.</li>
+<li>An unknown fingerprint is an error that names the fingerprint, never guessed.</li>
+</ul>
+<p>Crossing the boundary: Values cross as Lua tables in a fixed layout:</p>
+<ul>
+<li>record fields go by semantic index, which is alphabetical;</li>
+<li>tag-union variants are sorted by name, as upstream's glue numbers them;</li>
+<li>strings are converted in one direction only (Roc to host) by generated R.h converters chosen from the layout. An earlier version guessed by inspecting the value, and that broke once a Str could be a plain Lua number.</li>
+</ul>
+<p>The host-services interface (RocOps) maps as follows:</p>
+<ul>
+<li>alloc/dealloc disappear, because LuaJIT's GC owns memory, but the emitted code still follows every explicit reference-count statement for uniqueness and in-place reuse.</li>
+<li>crashed becomes a structured error.</li>
+<li>dbg and expect become runtime hooks a host can override.</li>
+<li>Native resource finalizers become a drop function on a box. It fires exactly where the LIR releases the last reference, so dropping a Child kills the process and dropping a FileReader closes the file.</li>
+</ul>
+<p>Effects. The <code>basic-cli</code> host is a port of its Rust host to LuaJIT's FFI over libc: files, directories, environment, processes, TCP sockets, SQLite and HTTP. Rust's buffering behavior is reproduced, and errno values are mapped to the same IOErr tags.</p>
+<p>Verification. Each platform has a differential conformance suite that builds every app natively and for LuaJIT and requires identical stdout bytes, stderr bytes and exit status:</p>
+<ul>
+<li>echo platform: all 76 buildable apps agree;</li>
+<li>fx test platform: 122 of 122 IO specs agree;</li>
+<li>basic-cli's own examples, as of Oct 1: 38 agree, 3 are judged by upstream's assertions alone because the native host itself segfaults on them (!!), 7 need hosted functions not yet ported, and 5 are deferred because they need helper servers or a terminal.</li>
+</ul>
+<p>My own Lua platform (luajit_backend/platforms/lua) takes the opposite shape. It has one hosted function, <code>Host.call!(op, request)</code>, carrying values encoded as LuaValue bytes, with the codec written once in Roc and once in Lua. Its native host embeds LuaJIT, so native and LuaJIT builds run the same host.lua for every effect.</p>
+
+
+
+<a name="629733396"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/304902-show%20and%20tell/topic/At%20the%20risk%20of%20heresy%2C%20here%20is...%20Roc%20on%20LuaJIT%3F%21%3F%21/near/629733396" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="https://roc-lang.github.io/zulip-export/stream/304902-show-and-tell/topic/At.20the.20risk.20of.20heresy.2C.20here.20is.2E.2E.2E.20Roc.20on.20LuaJIT.3F.21.3F.21.html#629733396">(Oct 07 2026 at 04:49)</a>:</h4>
+<p>This topic was moved here from <a class="stream-topic" data-stream-id="304902" href="/#narrow/channel/304902-show-and-tell/topic/At.20the.20risk.20of.20heresy.2C.20here.20is.2E.2E.2E.20a.20sneak.20peek.20at.20a.20neat.20WIP">#show and tell &gt; At the risk of heresy, here is... a sneak peek at a neat WIP</a> by <span class="user-mention silent" data-user-id="716256">Peter Marreck</span>.</p>
+
+
+
+<hr><p>Last updated: Oct 10 2026 at 16:24 UTC</p>
+</html>

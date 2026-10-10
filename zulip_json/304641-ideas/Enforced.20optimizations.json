@@ -1,0 +1,332 @@
+[
+    {
+        "content": "<p>As Roc is a functional language, tail call optimization is very important to avoid stack overflows. Having written a bunch of Scala over the years, I really appreciate the <code>@tailrec</code> annotation you can add to any function in Scala. It enforces that the function is written in a form that will become tail call optimized. If the function is not, then it's a compilation error. This is a nice way to think of optimizations I feel: if an optimization is crucial to your code, you can enforce that the code has that optimization. This approach is so nice that we are emulating it in Elm with <code>elm-review</code>.</p>\n<p>In many other languages, whether any given optimization is applied or not can feel like luck. I got the same feeling when watching the presentation on opportunistic in-place mutation. This optimization only applies when there are not further references to the item that is being mutated, making it really easy to break the optimization by taking a new reference to the old item. That's really easy to do by accident. For this optimization, one could imagine an annotation ala <code>@takesLastReference</code> or <code>@consumes</code> or some such, that enforces this behavior on the caller.</p>\n<p>Another case where this would be extremely helpful I think would be with vectorization (converting code to using SIMD instructions). LLVM is fairly good at doing auto-vectorization, but it's tricky to figure out if your code is actually being vectorized or not. Something like an <code>@isVectorized</code> annotation that guarantees vectorization would be very useful, as the only alternative to having the compiler discover that code should be vectorized, is to write SIMD code by hand.</p>\n<p>These are all varying difficulty to implement of course, and I have no idea if there's something like an annotation mechanism that might fit this usecase in Roc. But for achieving high performance with low and delightful effort, this fits perfectly I feel.</p>",
+        "id": 305775484,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1666602411
+    },
+    {
+        "content": "<p>it's something we think about, but as you say it can be hard to implement. </p>\n<p>Certainly tall-call elimination is feasible, we'd just have to find a way to express that syntactically. For the in-place mutation, we have two mechanisms: static and dynamic. We've thought about adding <code>expect-unique myList</code> assertions, but those will only do something at runtime, where you may not want these extra checks in production builds (and the optimization might not fire in debug builds)</p>",
+        "id": 305776366,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666602738
+    },
+    {
+        "content": "<p>vectorization is harder still, because how do we retrieve from llvm that it indeed vectorized some code as expected</p>",
+        "id": 305776495,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666602781
+    },
+    {
+        "content": "<p>there are cases where the vectorization that is picked is not optimal</p>",
+        "id": 305776554,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666602801
+    },
+    {
+        "content": "<p>Since Roc wants to be deeply integrated with the Roc Editor, we could have a plugin that informs what transformations the compiler applies and guide the user. That way, we move this feature away from a keyword.</p>",
+        "id": 305777184,
+        "sender_full_name": "Chris Duncan",
+        "timestamp": 1666603035
+    },
+    {
+        "content": "<p><code>expect-unique</code> sounds like a nice solution. Though it seems comparable to a bounds check in terms of performance, it's really more of an assertion. And those can often unlock other LLVM optimizations. In this case <code>expect-unique</code> is an assertion that the reference count equals 1, which is information LLVM can potentially use to optimize the rest of the code further. So I would expect such a check to be quite cheap in practice.</p>\n<p>For tail calls, maybe there could be a function ala <code>expect-constant-stack</code> that could take a function as input and fail to compile if TCO cannot be applied. Whether Roc has the means to support such a function today is beyond me though <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>\n<p>And integrating with the editor is nice, though I don't think it's sufficient by itself. But having them for quick feedback still makes good sense.</p>",
+        "id": 305779584,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1666603941
+    },
+    {
+        "content": "<p>yeah an editor only shows one page of code, so I think global asserts are useful</p>",
+        "id": 305780989,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666604495
+    },
+    {
+        "content": "<p>we already explicitly branch on <code>RC == 1</code> to get optimizations (much more than llvm can provide) and that branch is short-circuited if we can statically prove that the RC will be one at a certain point in the code</p>",
+        "id": 305781125,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666604541
+    },
+    {
+        "content": "<p>As long as <code>expect-unique</code> comes before the existing check on the reference count, I would expect LLVM to then remove the second check altogether, making <code>expect-unique</code> zero cost. I don't have enough expertise with LLVM to be 100% certain though.</p>\n<p>It would still be nice to know that it fails statically at least, but combined with information in the editor, it might be good enough <span aria-label=\"blush\" class=\"emoji emoji-1f60a\" role=\"img\" title=\"blush\">:blush:</span></p>",
+        "id": 305797170,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1666610918
+    },
+    {
+        "content": "<p>that is sadly not how llvm works: the refcount is stored on the heap, and llvm is very conservative about optimization there</p>",
+        "id": 305799199,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666611623
+    },
+    {
+        "content": "<p>things are improving as rust gets more mature</p>",
+        "id": 305799223,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666611633
+    },
+    {
+        "content": "<p>we should look into that at some point</p>",
+        "id": 305799236,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666611640
+    },
+    {
+        "content": "<p>Ah yes</p>",
+        "id": 305801787,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1666612688
+    },
+    {
+        "content": "<p>To backtrack a bit, it also seems like there are two different cases. For <code>expect-unique</code>, we want to validate the input of the function, whereas to check for TCO compatibility, we would need to validate the \"shape\" of the function. But for the in-place mutation, wouldn't we also require checking the shape of the function to get the optimization to be most effective?</p>\n<p>That is, you can probably optimize any function with in-place mutation more or less, but I assume you're only going to get its benefits if you're updating an existing record, rather than, say, creating a new record or tuple on every iteration of your function. I don't know if there's anything general that can be done to make sure a function has an optimal \"shape\" like this though.</p>\n<p>For vectorisation, it could also be that, instead of relying on auto-vectorisation, that if your code is validated to live up to a given shape, then the Roc compiler can insert SIMD instructions to improve performance. So if your code lives up to the <code>expect-avx-512</code> requirements, then the Roc compiler will supply LLVM with AVX 512 IR. But that's also more work for the compiler authors of course, so I don't know if that would be worthwhile.</p>",
+        "id": 305804711,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1666613346
+    },
+    {
+        "content": "<p>At a very general level, maybe you just want to be able to check that your function compiles to some simplified AST, where you can observe that optimizations have happened. So observe that your tail call has become a loop for example.</p>",
+        "id": 305805062,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1666613484
+    },
+    {
+        "content": "<p>I think the best you can do with llvm is to use array types/functions instead of just doing stuff with pointers</p>",
+        "id": 305813600,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666616398
+    },
+    {
+        "content": "<p>and then llvm has additional vectorization guarantees, or at least opportunities</p>",
+        "id": 305813712,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666616422
+    },
+    {
+        "content": "<p>but I know that the zig compiler uses arrays heavily and regularly finds bugs in how llvm handles them</p>",
+        "id": 305813761,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666616438
+    },
+    {
+        "content": "<p>in general, it's been fun to see rust and zig stress-test llvm in ways that clang just can't</p>",
+        "id": 305813847,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1666616463
+    },
+    {
+        "content": "<p>Yeah, I'm also curious what kind of findings Roc will expose in LLVM over time <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 305821861,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1666618938
+    },
+    {
+        "content": "<p>Just a note, <code>expect-unique</code> isn't enough, and often times isn't that useful. It definitely would be helpful, but it is very limited.</p>\n<ol>\n<li>Though it can be used on function inputs, you often may not want it there. Instead you would want to let your user pass in a non-unique value that only gets copied once and you keep unique the rest of the way down the stack. This really only matters for functions on the API boundary.</li>\n<li>The bigger issue is that expect unique is for a very specific static point in code. Often times uniqueness is broken on a single line or in the middle of a function. As such, expect unique is likely to miss that.</li>\n</ol>\n<p>After messing with a lot of roc code and thinking about this a good bit, i think a much much better solution involves some way to integrate with a profiling tool. For example, just like perf can be used to give a heat profile of every line of code, it should be possible to track calls to roc_alloc and roc_realloc to create a heat map of allocations. Then we can point users to specific functions and lines of code that are leading to the copies. Of course map through transforms will be a bit complex, but i think a tool of this nature would be leaps and bounds more useful than expect unique.</p>",
+        "id": 305829610,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1666620929
+    },
+    {
+        "content": "<p>here's an idea on this topic: what if we had a way to say \"between when this value was defined and right now, I expect it will never have its reference count incremented\"</p>",
+        "id": 338693973,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677619152
+    },
+    {
+        "content": "<p>for example, let's say the syntax was (I'm just making this up, it's not important) <code>foo!</code></p>",
+        "id": 338694003,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677619167
+    },
+    {
+        "content": "<p>so then if I have a function like <code>\\foo, bar -&gt; ...</code> and then at some point deep in the function I write <code>someOtherFn foo! bar</code></p>",
+        "id": 338694041,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677619185
+    },
+    {
+        "content": "<p>then what that's saying is \"give me  compile error if there is any possible code path between where I defined <code>foo</code> as an argument and where I wrote <code>foo!</code> in which <code>foo</code>'s reference count could be incremented\"</p>",
+        "id": 338694124,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677619207
+    },
+    {
+        "content": "<p>so I'm not guaranteeing <em>uniqueness</em> but I am guaranteeing that if I received a unique <code>foo</code> it will still be unique when I reference it as <code>foo!</code></p>",
+        "id": 338694177,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677619233
+    },
+    {
+        "content": "<p>in other words it's not that <code>foo</code> is \"unique\" but rather that its uniqueness is preserved between when it was declared and a particular usage site</p>",
+        "id": 338694220,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677619259
+    },
+    {
+        "content": "<p>I wonder how useful that would be (assuming it were a reasonable thing to implement in the compiler, which seems plausible) <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 338694268,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677619277
+    },
+    {
+        "content": "<blockquote>\n<p>between when this value was defined and right now, I expect it will never have its reference count incremented</p>\n</blockquote>\n<p>Seems like it could be potentially interesting to just say that between the introduction of the value and the <code>foo!</code> use, there is no net change in reference count. I think that enables the same optimizations?</p>",
+        "id": 338694796,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1677619456
+    },
+    {
+        "content": "<p>That definitely sounds more useful than <code>expect-unique</code></p>",
+        "id": 338697426,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677620499
+    },
+    {
+        "content": "<p>Though, not exactly sure how you track a variable though all code paths. Likely, it's name will change because you would pass the value through a pipeline of some sort and want it to be modified in place if it is unique and copied only once if not unique</p>",
+        "id": 338697758,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677620632
+    },
+    {
+        "content": "<p>right, it wouldn't do that; the question is how useful that would be in practice</p>",
+        "id": 338699972,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677621474
+    },
+    {
+        "content": "<p>I'm not really sure, tbh!</p>",
+        "id": 338700053,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677621487
+    },
+    {
+        "content": "<p>I guess you could look at cases where you've wanted this sort of thing and see how useful it would have been if it existed?</p>",
+        "id": 338700126,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1677621515
+    },
+    {
+        "content": "<p>Would it work to just issue warnings any time the compiler knows it will have to clone a possibly-large value (e.g. a collection) - and have  a way to suppress those warnings?</p>",
+        "id": 338702847,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1677622612
+    },
+    {
+        "content": "<p>But every List is \"possibly large\". So now the compiler shouts at you whenever you use a list!</p>",
+        "id": 338761909,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1677656646
+    },
+    {
+        "content": "<p>I was thinking about this more and I don't think stopping all refcounts will be generally useful. I think a lot of the time refcount changes are totally fine, but copies are the problem. For example:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">x</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">loadGiantConfig</span>\n\n<span class=\"nv\">y</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">doThing1</span><span class=\"w\"> </span><span class=\"nx\">x</span>\n\n<span class=\"c1\"># do other stuff with y</span>\n\n<span class=\"c1\"># Ope, time to use x again.</span>\n<span class=\"c1\"># This is the last use, so putting `x!` to make sure no one accidentally copies `x`</span>\n<span class=\"nx\">doThing2</span><span class=\"w\"> </span><span class=\"nx\">x</span><span class=\"o\">!</span>\n</code></pre></div>\n<p>In the case above we would get an error. The refcount of <code>x</code> is incremented before and decremented after <code>doThing1</code>. If <code>doThing1</code> and <code>doThing2</code> are written correctly, <code>x</code> will never be copied, but it is guaranteed to have it's refcount change.</p>",
+        "id": 338889016,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677687592
+    },
+    {
+        "content": "<p>I guess technically we want to stop all refcount checks (places that could copy <code>x</code>) that are using a version of <code>x</code> with a changed refcount. That is to say, <code>x</code>'s refcount can change as long as it is not used by a function that would add an additional copy if <code>x</code> has a non-unique refcount.</p>",
+        "id": 338889451,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677687681
+    },
+    {
+        "content": "<p>In the example above, <code>doThing1</code> would only be allowed to use <code>x</code> in ways that never check the refcount. <code>doThing2</code>, on the other hand, should be allowed to use <code>x</code> in a way that checks the refcount. This is because it is consuming <code>x</code> without any sort of refcount changes.</p>",
+        "id": 338890110,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677687819
+    },
+    {
+        "content": "<p>As I am writting this, I think I am just describing an implicit form of something close to the rust borrowing system, just through refcounts.</p>",
+        "id": 338890295,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677687854
+    },
+    {
+        "content": "<p>Also, I think <code>x!</code> syntax would work best if it was an annotation on a standalone line. In the example above, does <code>x!</code> apply to <code>doThing2</code> or does it apply up to <code>doThing2</code>. What would I write if I want to ensure that <code>doThing2</code> does not change the refcount of <code>x</code>?</p>",
+        "id": 338891537,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677688130
+    },
+    {
+        "content": "<blockquote>\n<p>But every List is \"possibly large\". So now the compiler shouts at you whenever you use a list!</p>\n</blockquote>\n<p>I was thinking we'd exempt any locations where the compiler was either able to see that it doesn't need a copy - either because the code (recursively) doesn't call anything that would want to be able to do an in-place update - or because there is an in-place-update, and morphic(?) can prove that the refcount is guaranteed to be 1 there.</p>",
+        "id": 338892806,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1677688404
+    },
+    {
+        "content": "<blockquote>\n<p>I was thinking we'd exempt any locations where the compiler was either able to see that it doesn't need a copy</p>\n</blockquote>\n<p>I think this would be much more limited than you expect (at least with the current compiler).</p>\n<p>It also would likely confuse end users who just want to use roc as a delightful language and maybe don't want to figure out the hacks to avoid a few additional copies.</p>",
+        "id": 338894089,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677688711
+    },
+    {
+        "content": "<p>I definitely think any system we add for performance optimization should either be:</p>\n<ul>\n<li>opt in (<code>roc build --complain-about-copying ..</code> - for warnings on potentially copies, though I think it would be way too noisy)</li>\n<li>a separate tool/command on the compiler (<code>roc memgraph-run ...</code> - to get a chart of memory usage by line)</li>\n<li>exceptionally rare that it fires such that it doesn't break the delightful experience of developing roc and letting it handle your memory.</li>\n</ul>",
+        "id": 338895680,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677689074
+    },
+    {
+        "content": "<p>I would assume most people don't want to write string processing functions in Roc like this to hopefully avoid copies of data and duplicate work: <a href=\"https://github.com/roc-lang/roc/blob/a07f3226b61da9a71e5e7621bf81327f67b82bf1/crates/glue/src/RustGlue.roc#L392\">https://github.com/roc-lang/roc/blob/a07f3226b61da9a71e5e7621bf81327f67b82bf1/crates/glue/src/RustGlue.roc#L392</a></p>",
+        "id": 338896270,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677689212
+    },
+    {
+        "content": "<p>I was messing around, and at least at the function level we could aggregate allocations currently. Would need better debug info to aggregate by line, which would be more useful. Also, lambdas having no name is quite inconvenient without line numbers. That said, the base idea definitely could work and even with just this level of names could potentially be mapped back to the original file by looking at the exact call chain. This of course would be aggregated in a frame graph based on the allocation size:</p>\n<div class=\"codehilite\"><pre><span></span><code>New alloc of size: 120\n    roc.builtins.utils.allocate_withrefcount\n\nNew alloc of size: 840\n    List.withCapacity\n    List.repeat\n    Context.66\n    File.15\n    Task.42\n\nNew alloc of size: 24\n    roc.fxgetFileBytes\n    roc.fx_getFileBytes_fastccwrapper\n    Effect.loop_inner\n\nNew alloc of size: 120\n    List.replaceUnsafe\n    List.replace\n    List.set\n    Context.74\n    Task.42\n    Effect.loop_inner\n\nNew alloc of size: 24\n    roc.fxgetFileBytes\n    roc.fx_getFileBytes_fastccwrapper\n    Effect.loop_inner\n</code></pre></div>",
+        "id": 339016750,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677740162
+    },
+    {
+        "content": "<p>Just did the aggregation for false interpreter:</p>\n<div class=\"spoiler-block\"><div class=\"spoiler-header\">\n<p>Top 5 allocating functions from nqueens in false</p>\n</div><div class=\"spoiler-content\" aria-hidden=\"true\">\n<div class=\"codehilite\"><pre><span></span><code>Allocated 26079664 bytes at:\n    List.replaceUnsafe\n    List.replace\n    List.set\n    Context.74\n    Task.42\n    Effect.loop_inner\n\nAllocated 3783576 bytes at:\n    List.reserve\n    List.append\n    Context.pushStack\n    app.89\n    Task.34\n    Effect.loop_inner\n\nAllocated 2296422 bytes at:\n    List.reserve\n    List.append\n    app.120\n    Task.34\n    Effect.loop_inner\n\nAllocated 2075616 bytes at:\n    List.reserve\n    List.append\n    Context.pushStack\n    app.stepExecCtx\n    app.67\n    Task.34\n    Effect.loop_inner\n\nAllocated 1993272 bytes at:\n    List.dropAt\n    Context.popStack\n    app.popNumber\n    app.binaryOp\n    app.stepExecCtx\n    app.67\n    Task.34\n    Effect.loop_inner\n</code></pre></div>\n</div></div>\n<p>I can actually pinpoint the exact line of code from most of these stack traces:</p>\n<ol>\n<li><a href=\"https://github.com/roc-lang/roc/blob/82663fd30db7e68f7a09e5c57084c2f7b75f3fdf/examples/cli/false-interpreter/Context.roc#L74\">https://github.com/roc-lang/roc/blob/82663fd30db7e68f7a09e5c57084c2f7b75f3fdf/examples/cli/false-interpreter/Context.roc#L74</a></li>\n<li><a href=\"https://github.com/roc-lang/roc/blob/82663fd30db7e68f7a09e5c57084c2f7b75f3fdf/examples/cli/false-interpreter/Context.roc#L17\">https://github.com/roc-lang/roc/blob/82663fd30db7e68f7a09e5c57084c2f7b75f3fdf/examples/cli/false-interpreter/Context.roc#L17</a></li>\n<li>not actually sure. There are 9 possible locations. Would need to either dump the mono or start changing lambdas to properly named functions to figure this one out.</li>\n<li><a href=\"https://github.com/roc-lang/roc/blob/82663fd30db7e68f7a09e5c57084c2f7b75f3fdf/examples/cli/false-interpreter/Context.roc#L17\">https://github.com/roc-lang/roc/blob/82663fd30db7e68f7a09e5c57084c2f7b75f3fdf/examples/cli/false-interpreter/Context.roc#L17</a> with a different call chain than above.</li>\n<li><a href=\"https://github.com/roc-lang/roc/blob/82663fd30db7e68f7a09e5c57084c2f7b75f3fdf/examples/cli/false-interpreter/Context.roc#L26\">https://github.com/roc-lang/roc/blob/82663fd30db7e68f7a09e5c57084c2f7b75f3fdf/examples/cli/false-interpreter/Context.roc#L26</a></li>\n</ol>",
+        "id": 339022693,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677742682
+    },
+    {
+        "content": "<p>Also, still insane how much data is allocated by the false interpreter. The top allocation chain allocated 26 megabytes when doing a super simple nqueens problem.</p>",
+        "id": 339022939,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677742774
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/22008/hoouaOl4_Qfj4fumClSycnws/folded.svg\">false-nqueens-allocations.svg</a></p>",
+        "id": 339026498,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677744114
+    },
+    {
+        "content": "<p>Do we have enough information when we create the name of a lambda that we could instead name them something like <code>#Userapp_lambda_on_line_x</code> instead of just naming them with an incrementing number?</p>",
+        "id": 339027515,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677744434
+    },
+    {
+        "content": "<p>Not right now, but it should be straightforward to start keeping debug info alongside the data structures mono produces from can</p>",
+        "id": 339103791,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1677765030
+    },
+    {
+        "content": "<p>However if you’re willing to hack the compiler <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> you can use can/src/debug/print.rs to print the AST for each module you’re interested in, and the printed representation will include what lambdas are named what</p>",
+        "id": 339104060,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1677765100
+    },
+    {
+        "content": "<p>Ok. I'll probably take a look at that</p>",
+        "id": 339123434,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677769136
+    },
+    {
+        "content": "<p>Apparently I got the format wrong and uploaded a slightly off svg. Here is a corrected version: <a href=\"/user_uploads/22008/BzNItdsugaHD3sOiRREKLmPk/folded.svg\">false-nqueens-allocations.svg</a></p>",
+        "id": 339134028,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677771377
+    },
+    {
+        "content": "<p>Also as a png, cause I think zulip will directly display that:  <a href=\"/user_uploads/22008/pF4MbegvP0VS9QwyjEG1lQeZ/folded.png\">false-nqueens-allocations.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/pF4MbegvP0VS9QwyjEG1lQeZ/folded.png\" title=\"false-nqueens-allocations.png\"><img src=\"/user_uploads/22008/pF4MbegvP0VS9QwyjEG1lQeZ/folded.png\"></a></div>",
+        "id": 339134164,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1677771421
+    }
+]

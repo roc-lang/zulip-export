@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>With <code>List.sortWith</code>, we pass a compare function to zig. </p>\n<p>The compare function could be capturing closure data. Which I think will actually be quite problematic.<br>\nWe theoretically need to increment the captures to that function for every time the sort function calls compare.<br>\nCurrently we just increment it for every element in the list.</p>\n<p>To instead increment it for every call to the function, the only way would be to put the increment into the hot loop for sorting. I think that is a terrible idea.</p>\n<p>I think we should either figure out a way to ban captures for the compare function or find a way to save and then reload the refcounts. Essentially, save the refcount, set the refcount to constant, run sort, set the refcount back to what it was originally.</p>\n<p>Thoughts?</p>",
+        "id": 453073615,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721621422
+    },
+    {
+        "content": "<p>I'm assuming this doesn't cause problems today cause in practice compare functions for lists never capture anything.</p>",
+        "id": 453073730,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721621448
+    },
+    {
+        "content": "<p>For example worst case of quicksort is <code>n^2</code> comparisons. Adding <code>n^2</code> refcount increments to sorting would be brutal.</p>",
+        "id": 453074540,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721621584
+    },
+    {
+        "content": "<blockquote>\n<p>ban captures for the compare function</p>\n</blockquote>\n<p>Would this prevent us from using curried functions? </p>\n<p>Maybe this is a silly example...</p>\n<div class=\"codehilite\"><pre><span></span><code>module []\n\nColor : [Red, Green, Blue]\n\npriority : Color -&gt; U64\npriority = \\c -&gt;\n    when c is\n        Red -&gt; 1\n        Green -&gt; 2\n        Blue -&gt; 3\n\nsortFn = \\priorityFn -&gt; \\left,right -&gt;\n    pl = priorityFn left\n    pr = priorityFn right\n    if pl &lt; pr then\n        LT\n    else if pl &gt; pr then\n        GT\n    else\n        EQ\n\nexpect\n    input = [Red, Blue, Green]\n    actual = input |&gt; List.sortWith (sortFn priority)\n    expected = [Red, Green, Blue]\n    actual == expected # true\n</code></pre></div>",
+        "id": 453080470,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1721623895
+    },
+    {
+        "content": "<p>Yeah, it probably too restrictive. So probably need to do the constant thing.</p>",
+        "id": 453081229,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721624415
+    },
+    {
+        "content": "<p>If you made <code>priorityFn</code> instead be something refcounted, like a list, it should break in current roc due to a double free.</p>",
+        "id": 453081379,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721624505
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/SortWith.20Compare.20Capture.20Refcounting/near/453073615\">said</a>:</p>\n<blockquote>\n<p>I think we should either figure out a way to ban captures for the compare function or find a way to save and then reload the refcounts. Essentially, save the refcount, set the refcount to constant, run sort, set the refcount back to what it was originally.</p>\n</blockquote>\n<p>I don't think introducing the concept of banning captures is something we should do from a language complexity perspective, but the save/restore wouldn't be thread safe, right?</p>",
+        "id": 453156790,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721648722
+    },
+    {
+        "content": "<p>as in, if the host had that roc value shared across multiple threads, potentially having its refcount (try to be) incremented and/or decremented on the other threads, then the save/restore would break those because it would be set to constant</p>",
+        "id": 453157780,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721649106
+    },
+    {
+        "content": "<blockquote>\n<p>We theoretically need to increment the captures to that function for every time the sort function calls compare.</p>\n</blockquote>\n<p>since we know the length of the list before we start sorting, couldn't we increment it once by N up front, where N is the length of the list?</p>",
+        "id": 453159129,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721649608
+    },
+    {
+        "content": "<p>(and then decrement by N at the end)</p>",
+        "id": 453159159,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721649619
+    },
+    {
+        "content": "<p>This is for sorting and is the compare function. It isn't N increments. It is one increment per compare.</p>",
+        "id": 453203455,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721661254
+    },
+    {
+        "content": "<p>So n log n on average, but an unknown amount in general.</p>",
+        "id": 453203794,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721661328
+    },
+    {
+        "content": "<p>ah right <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 453207509,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721662009
+    },
+    {
+        "content": "<p>so far it seems like doing the refcount increment/decrement each time is the best option to me, although it is definitely unfortunate for performance</p>",
+        "id": 453209012,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721662279
+    },
+    {
+        "content": "<p>at least in the case where you actually capture something</p>",
+        "id": 453209050,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721662291
+    },
+    {
+        "content": "<p>Yeah, I guess this is a case where I should have zig generate two version of the code to also get the conditional out of the hot loop. Though the conditional would be 100% predictable, so maybe not a big deal.</p>",
+        "id": 453211872,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721662813
+    },
+    {
+        "content": "<p>One other related topic (that maybe we need to collect more data on before we decide), but we could technically have zig generate <code>n</code> different functions at comptime to dispatch across things like element width.</p>\n<p>So code bloat that will be garbage collected by llvm for perf gains.</p>\n<p>I think this makes solid sense for sorting cause after a certain element width it will become more economical to create a list of pointers and sort that instead of sorting the original list. So we just need to support element width up to that size.</p>\n<p>I'm not sure the perf cost of an indirection to call the copy function (I'm also not sure if llvm may also be smart enough to realize the function is constant, propagate it down the call stack, and inline it), but from looking at the implementation for <code>fluxsort</code>, they mention that using indirection to call the compare function when sorting primitives like integers costs about 2x in terms of perf. Given copy is called more often than cmp, I would assume it has an even higher perf cost. Will definitely depend on whether or not llvm is smart enough to optimize it.</p>",
+        "id": 453215020,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721663760
+    },
+    {
+        "content": "<p>Also, I am thinking of porting <a href=\"https://github.com/scandum/blitsort/tree/main\">blitsort</a> to zig as our new base sorting algorithm. It is very similar to glidesort overall (not quite inplace, quicksort mixed with other sorting algorithm to deal with bad cases), but simpler and written is very clean <code>c</code>. Also glidesort makes a number of rust specific tradeoffs to make it easier to support panic safety. I don't think panic safety is worth it (nor does the glidesort author really, costs 15 to 20% of perf). If a compare function in roc passed to a sorting algorithm panics, I think it is fine to just accept the list may be in a broken state.</p>\n<p>Otherwise, <code>blitsort</code> and <code>glidesort</code> are both based off of <code>fluxsort</code> and seem to have very similar perf and default memory characteristics. <code>glidesort</code> theoretically can reach a higher speed on super new hardware with more execution and memory channels due to some interleaving, but that doesn't seem worth the complexity.</p>",
+        "id": 453221671,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721665407
+    },
+    {
+        "content": "<p>Also debated porting good old <code>timsort</code>, but it is significantly slower than <code>glidesort</code> and <code>blitsort</code> in many cases. For example, <code>glidesort</code> can be 2-4x faster than the standard rust sort (which is <code>timsort</code>).</p>",
+        "id": 453222383,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721665532
+    },
+    {
+        "content": "<p>I like both of those ideas!</p>",
+        "id": 453224403,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721665979
+    },
+    {
+        "content": "<p>I also agree that a totally predictable condition is fine to leave in <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 453224507,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1721666031
+    },
+    {
+        "content": "<p>Also, did a quick check of llvm ir, at least for the simple case of a short app that only sorts, it looks to be inlining the compare and copy functions.</p>\n<p>Of course we are at the mercy of llvm inlining and constant propagation heuristics, but a good base note.</p>",
+        "id": 453225095,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721666232
+    },
+    {
+        "content": "<p>I just realized that <code>blitsort</code> uses <code>goto</code>. That might make it hard to translate into zig (given zig doesn't support <code>goto</code>).</p>\n<p>That said, most of it looks like it should translate ok, just not sure the perf impacts.</p>",
+        "id": 453307191,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721700011
+    },
+    {
+        "content": "<p>A handful of it looks like it can be replaced with loops and labelled breaks.</p>\n<p>Some of it looks like it will require move some code into a function.<br>\nThe function would be inlined in multiple places in the same wrapper function. So may lead to duplicate code if llvm doesn't realize it can merge the duplicate code blocks and insert jumps. Otherwise, if the functions don't inline, it is the cost of an extra function call in the middle of some code. So worst case, I think I would force inlining and llvm may duplicate some code, but that is probably fine.</p>",
+        "id": 453308217,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1721700684
+    }
+]

@@ -1,0 +1,236 @@
+[
+    {
+        "content": "<p>So I have a benchmark program that stack overflows and is really confusing me. I think it is an llvm codegen bug, but I am not fully sure.</p>\n<p>I don't have a minimized example yet, but this example is not that big: <a href=\"https://github.com/bhansconnect/roc-dict-bench/blob/main/random-find-u64.roc\">https://github.com/bhansconnect/roc-dict-bench/blob/main/random-find-u64.roc</a></p>\n<p>Run as:</p>\n<div class=\"codehilite\"><pre><span></span><code>roc build --optimize --profiling random-find-u64.roc --linker=legacy\n./random-find-u64 500000 1000\n</code></pre></div>\n<p>It will segfault. If run with <code>valgrind</code>, it will comment that the segfault was due to accessing byte off the end of the stack due to a stack overflow.</p>\n<p>If run with a debugger, the stack trace is never deep. So we aren't generating a giant chain of calls leading to a stack overflow. That said, if you every few seconds interupt the app with <code>ctrl + c</code> then print the stack pointer <code>p $sp</code> or <code>p $rsp</code> depending on arch. With each print, the stack pointer will get lower and lower. So the stack keeps growing.</p>\n<p>My guess is that somehow our joinpoint loop is leaking stack. So each iteration the stack is a bit larger even though we are in a tail recursive function taht shouldn't grow the stack at all.</p>\n<p>I think there is a good chance that this is related to the bug mentioned here: <a href=\"#narrow/stream/358903-Advent-of-Code/topic/2023.20Day.202/near/406983404\">https://roc.zulipchat.com/#narrow/stream/358903-Advent-of-Code/topic/2023.20Day.202/near/406983404</a></p>\n<p>Somehow our joinpoints aren't clean in relation to variables being loading and stored to the stack. This can lead to mutation or stack overflow despite having tail recursion and joinpoints.</p>\n<p>That is my guess, but I am having quite a hard time debugging or verifying this. Any help would be greatly appreciated.</p>",
+        "id": 407022852,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702194212
+    },
+    {
+        "content": "<p>Ah, some alloca that is not put in the initial basic block?</p>",
+        "id": 407046537,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702205301
+    },
+    {
+        "content": "<p>We've had that before</p>",
+        "id": 407046556,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702205316
+    },
+    {
+        "content": "<p>yeah, I suspect this is the problem</p>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"nl\">then_block14:</span><span class=\"w\">                                     </span><span class=\"c\">; preds = %Num_add_30b4e3263e25f386953934b64a917c5af1369696c8155e3052c6ba1bb8ddcba7.exit57</span>\n<span class=\"w\">  </span><span class=\"nv\">%struct_alloca</span><span class=\"w\"> </span><span class=\"p\">=</span><span class=\"w\"> </span><span class=\"k\">alloca</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"p\">},</span><span class=\"w\"> </span><span class=\"kt\">i32</span><span class=\"w\"> </span><span class=\"p\">},</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!753</span>\n<span class=\"w\">  </span><span class=\"k\">store</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"p\">},</span><span class=\"w\"> </span><span class=\"kt\">i32</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"nv\">%insert_record_field16</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"nv\">%struct_alloca</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"k\">align</span><span class=\"w\"> </span><span class=\"m\">8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!753</span>\n<span class=\"w\">  </span><span class=\"k\">br</span><span class=\"w\"> </span><span class=\"kt\">label</span><span class=\"w\"> </span><span class=\"nv\">%joinpointcont10</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!753</span>\n</code></pre></div>",
+        "id": 407069177,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702215120
+    },
+    {
+        "content": "<p>lol</p>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"c\">; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)</span>\n<span class=\"k\">define</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@roc__mainForHost_1_exposed_generic</span><span class=\"p\">(</span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"k\">nocapture</span><span class=\"w\"> </span><span class=\"k\">readnone</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%0</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">local_unnamed_addr</span><span class=\"w\"> </span><span class=\"vg\">#10</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!105</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"nl\">entry:</span>\n<span class=\"w\">  </span><span class=\"k\">ret</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!110</span>\n<span class=\"p\">}</span>\n\n<span class=\"c\">; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)</span>\n<span class=\"k\">define</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@roc__mainForHost_1_exposed</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"k\">local_unnamed_addr</span><span class=\"w\"> </span><span class=\"vg\">#10</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!112</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"nl\">entry:</span>\n<span class=\"w\">  </span><span class=\"k\">ret</span><span class=\"w\"> </span><span class=\"k\">void</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!113</span>\n<span class=\"p\">}</span>\n\n<span class=\"c\">; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(none)</span>\n<span class=\"k\">define</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"vg\">@roc__mainForHost_1_exposed_size</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"k\">local_unnamed_addr</span><span class=\"w\"> </span><span class=\"vg\">#10</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!115</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"nl\">entry:</span>\n<span class=\"w\">  </span><span class=\"k\">ret</span><span class=\"w\"> </span><span class=\"kt\">i64</span><span class=\"w\"> </span><span class=\"m\">0</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">!dbg</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">!116</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 407069710,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702215564
+    },
+    {
+        "content": "<p>Ah, when we have join's we have to also reuse allocas to avoid eating stack space.</p>",
+        "id": 407083639,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702225088
+    },
+    {
+        "content": "<p>yeah, but if you do that here you get a very odd program with just tons of allocas</p>",
+        "id": 407086229,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702227585
+    },
+    {
+        "content": "<p>Why would you have more allocas? I'm just saying if the join point arg is already an alloca, reuse the alloca. So track when creating a join point generate all allocas right before the join point instead of in each branch jumping into the alloca</p>",
+        "id": 407087272,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702228338
+    },
+    {
+        "content": "<p>I meant this as an observation. e.g. for your <code>Bug.roc</code> program from that example,  I get</p>\n<div class=\"codehilite\"><pre><span></span><code>  %incrementing_element_loop_load.i300 = alloca %str.RocStr, align 8, !dbg !159\n  %incrementing_element_loop_load.i277 = alloca %str.RocStr, align 8, !dbg !189\n  %incrementing_element_loop_load.i254 = alloca %str.RocStr, align 8, !dbg !193\n  %incrementing_element_loop_load.i231 = alloca %str.RocStr, align 8, !dbg !197\n  %incrementing_element_loop_load.i213 = alloca %str.RocStr, align 8, !dbg !199\n  %str_alloca.i.i18.i.i.i = alloca %str.RocStr, align 8\n  %result_value.i9.i.i.i = alloca %str.RocStr, align 8\n  %const_str_store2.i.i.i = alloca %str.RocStr, align 8\n  %result_value1.i.i.i = alloca %str.RocStr, align 8\n  %result_value.i.i9.i = alloca %str.RocStr, align 8\n  %const_str_store.i.i.i = alloca %str.RocStr, align 8\n  %result_value1.i211 = alloca %str.RocStr, align 8, !dbg !249\n  %result_value.i212 = alloca %str.RocStr, align 8, !dbg !249\n  %const_str_store.i = alloca %str.RocStr, align 8, !dbg !249\n  %struct_field.i = alloca %str.RocStr, align 8, !dbg !249\n  %incrementing_element_loop_load.i188 = alloca %str.RocStr, align 8, !dbg !253\n  %incrementing_element_loop_load.i = alloca %str.RocStr, align 8, !dbg !258\n  %element_to_pass_as_opaque.i.i = alloca %str.RocStr, align 8, !dbg !260\n  %str_alloca.i.i19.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8\n  %str_alloca.i.i8.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8\n  %result_value.i9.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8\n  %str_alloca.i.i.i.i.i.i.i.i.i.i.i.i.i154 = alloca %str.RocStr, align 8\n  %result_value.i.i.i.i.i.i.i.i.i.i.i.i155 = alloca %str.RocStr, align 8\n  %const_str_store2.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8\n  %result_value1.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8\n  %result_value.i.i.i.i.i.i.i.i.i.i.i156 = alloca %str.RocStr, align 8\n  %const_str_store.i.i.i.i.i.i.i.i.i.i.i157 = alloca %str.RocStr, align 8\n  %result_value.i.i.i.i.i.i.i.i.i162 = alloca %str.RocStr, align 8, !dbg !267\n  %const_str_store.i.i.i.i.i.i.i.i.i163 = alloca %str.RocStr, align 8, !dbg !267\n  %struct_field.i.i.i.i.i.i.i.i.i164 = alloca %str.RocStr, align 8, !dbg !267\n  %result_value.i.i.i.i.i.i.i.i166 = alloca %str.RocStr, align 8, !dbg !271\n  %str_alloca.i.i.i.i.i.i.i167 = alloca %str.RocStr, align 8\n  %const_str_store2.i.i.i.i.i170 = alloca %str.RocStr, align 8\n  %result_value1.i.i.i.i.i171 = alloca %str.RocStr, align 8\n  %const_str_store.i.i.i.i.i173 = alloca %str.RocStr, align 8\n  %struct_field1.i.i.i = alloca %str.RocStr, align 8, !dbg !272\n  %result_value.i3.i.i177 = alloca %str.RocStr, align 8, !dbg !272\n  %struct_field.i.i.i178 = alloca %str.RocStr, align 8, !dbg !272\n  %result_value1.i.i181 = alloca %str.RocStr, align 8\n  %result_value.i.i182 = alloca { %str.RocStr, %str.RocStr }, align 8\n  %list_alloca.i133 = alloca %list.RocList, align 8\n  %list_alloca.i = alloca %list.RocList, align 8\n  %str_alloca.i.i10.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8\n  %result_value.i.i.i.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !273\n  %str_alloca.i.i.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8\n  %const_str_store4.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !274\n  %result_value3.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !274\n  %const_str_store.i.i.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !274\n  %str_alloca.i.i20.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8\n  %result_value.i10.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8\n  %const_str_store3.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !275\n  %result_value2.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !275\n  %result_value.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !275\n  %const_str_store.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !275\n  %load_element.i.i.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !275\n  %result_value.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !279\n  %const_str_store.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !279\n  %struct_field.i.i.i.i.i.i.i.i.i = alloca %str.RocStr, align 8, !dbg !279\n  %result_value.i.i.i.i.i.i.i.i = alloca { [0 x i64], [3 x i64], i8, [7 x i8] }, align 8, !dbg !280\n  %str_alloca.i.i.i.i.i.i.i = alloca %str.RocStr, align 8\n  %const_str_store2.i.i.i.i.i = alloca %str.RocStr, align 8\n  %result_value1.i.i.i.i.i = alloca %str.RocStr, align 8\n  %const_str_store.i.i.i.i.i = alloca %str.RocStr, align 8\n  %struct_field.i.i.i = alloca %str.RocStr, align 8, !dbg !281\n  %result_value1.i.i = alloca %str.RocStr, align 8\n  %result_value21 = alloca %str.RocStr, align 8, !dbg !282\n  %result_value15 = alloca %str.RocStr, align 8, !dbg !282\n  %const_str_store = alloca %str.RocStr, align 8, !dbg !282\n  %result_value14 = alloca %str.RocStr, align 8, !dbg !282\n  %result_value8 = alloca %str.RocStr, align 8, !dbg !282\n  %result_value = alloca %str.RocStr, align 8, !dbg !282\n</code></pre></div>",
+        "id": 407100338,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702238218
+    },
+    {
+        "content": "<p>we should not need this number of allocas for that example, really</p>",
+        "id": 407100386,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702238245
+    },
+    {
+        "content": "<p>Ah</p>",
+        "id": 407100433,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702238269
+    },
+    {
+        "content": "<p>this problem is much worse with <code>dbg</code>s</p>",
+        "id": 407102394,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702239088
+    },
+    {
+        "content": "<p>Can we tell llvm to free allocas? Like make it so that at the jump we clear all allocas and only keep more global things?</p>",
+        "id": 407103019,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702239408
+    },
+    {
+        "content": "<p>Cause even if we make too many allocas, they should be cheap if we don't stack overflow</p>",
+        "id": 407103052,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702239425
+    },
+    {
+        "content": "<p>Feels like a lifetime issue of locals living too long</p>",
+        "id": 407103081,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702239439
+    },
+    {
+        "content": "<p>Aside, have you seen: <a href=\"https://github.com/roc-lang/roc/issues/6139\">https://github.com/roc-lang/roc/issues/6139</a></p>\n<p>It feels related. Allocas and bad lifetime assumptions leading to overwriting data</p>",
+        "id": 407103229,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702239508
+    },
+    {
+        "content": "<p>yes these all seem related</p>",
+        "id": 407109900,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702244113
+    },
+    {
+        "content": "<p>So, may not be the right solution in this case, but <a href=\"https://llvm.org/docs/LangRef.html#llvm-stacksave-intrinsic\">llvm.stacksave</a> and <a href=\"https://llvm.org/docs/LangRef.html#llvm-stackrestore-intrinsic\">llvm.stackrestore</a> may be what we need.</p>\n<p>The idea would be:</p>\n<ol>\n<li>All joinpoint args are stored either by value or in allocas that are defined before the joinpoint.</li>\n<li>At the start of the joined code, we <code>llvm.stacksave</code></li>\n<li>We use allocas in the function and locally define as normal.</li>\n<li>All final values for the joinpoint are copied into the allocas defined above the joinpoint</li>\n<li>We <code>llvm.stackrestore</code>.</li>\n<li>We jump to the joinpoint.</li>\n</ol>",
+        "id": 407112127,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702245836
+    },
+    {
+        "content": "<p>stack save and restore just save and restore the stack pointer. They don't do anything fancy.</p>",
+        "id": 407112219,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702245904
+    },
+    {
+        "content": "<p>well if you do the copying anyway, you can just define all of the allocas in the entry block</p>",
+        "id": 407117553,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702250794
+    },
+    {
+        "content": "<p>there is no reason to define them locally. But in the example case we'd need an extra alloca to keep both the old and new value alive till the jump</p>",
+        "id": 407117570,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702250822
+    },
+    {
+        "content": "<p>Just define the allocas for the join point args in the entry. Not all allocas</p>",
+        "id": 407117616,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702250867
+    },
+    {
+        "content": "<p>why not?</p>",
+        "id": 407117698,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702250931
+    },
+    {
+        "content": "<p>if you define any allocas in the loop you grow the stack. There is no need to define them at the use site, you can have them predefined in the entry block</p>",
+        "id": 407117721,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702250971
+    },
+    {
+        "content": "<p>Nested joinpoints and functions that aren't inlined yet.</p>",
+        "id": 407117729,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702250984
+    },
+    {
+        "content": "<p>Wouldn't that mess up the allocas that need to be defined in the entry block to avoid stack growth?</p>",
+        "id": 407117800,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702251019
+    },
+    {
+        "content": "<p>I don't think nested join points are a problem if you define in the entry block. I believe llvm is smart about floating allocas when inlining</p>",
+        "id": 407117818,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702251042
+    },
+    {
+        "content": "<p>Cause theoretically in the nested case all need to defined before the first joinpoint</p>",
+        "id": 407117822,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702251046
+    },
+    {
+        "content": "<p>Oh, llvm will fix. Cool</p>",
+        "id": 407117835,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702251060
+    },
+    {
+        "content": "<p>that has been my experience if the allocas are in the entry point</p>",
+        "id": 407117856,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702251079
+    },
+    {
+        "content": "<p>that is nicer than doing stack save and restore</p>",
+        "id": 407117867,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702251094
+    },
+    {
+        "content": "<p>we'll need to validate that properly now though. Certainly if you define the alloca in a weird place LLVM will not float it. So in that case inlining can cause stack overflows</p>",
+        "id": 407117877,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702251108
+    },
+    {
+        "content": "<p>hmm actually I may have run into that in rust</p>",
+        "id": 407117932,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702251129
+    },
+    {
+        "content": "<p>yeah I'd rather not mess with the stack pointer manually</p>",
+        "id": 407117947,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702251154
+    },
+    {
+        "content": "<p>Fair</p>",
+        "id": 407117952,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702251162
+    },
+    {
+        "content": "<p>Ok. So I guess goal one would be hoist alloca out of joinpoints and ensure uniqueness of joinpoint args so they don't get accidentally overwritten?</p>",
+        "id": 407118006,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702251232
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> just curious, is this something you will have time to look at and hopefully fix?</p>",
+        "id": 407128968,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702258466
+    },
+    {
+        "content": "<p>yeah, I've done some investigation but no clear solution presented itself so far. I think it's a bunch of issues combining into one</p>",
+        "id": 407187067,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702282612
+    },
+    {
+        "content": "<p>we also just have some allocas that happen in the non-entry block which should be lifted to the entry block</p>",
+        "id": 407187117,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1702282632
+    }
+]
