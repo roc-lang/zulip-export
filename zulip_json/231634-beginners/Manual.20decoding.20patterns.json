@@ -1,0 +1,176 @@
+[
+    {
+        "content": "<p>So I know Roc has <code>Decode</code> which is great. However, sometimes our types do not capture how something needs to be decoded. In those cases, have we come up with an idiomatic way to compose manual decoders?</p>\n<p>These are some of the options I have thought about: </p>\n<h3>1. <code>mapN</code></h3>\n<p>In Elm, it's common to use <code>mapN</code> functions which get passed the automatically generated record constructors: </p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kr\">type</span><span class=\"w\"> </span><span class=\"kr\">alias</span><span class=\"w\"> </span><span class=\"kt\">Person</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">name</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">age</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Int</span><span class=\"w\"> </span><span class=\"p\">}</span>\n\n<span class=\"nv\">decodePerson</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">     </span><span class=\"nv\">map2</span><span class=\"w\"> </span><span class=\"kt\">Person</span>\n<span class=\"w\">         </span><span class=\"p\">(</span><span class=\"nv\">field</span><span class=\"w\"> </span><span class=\"s\">\"name\"</span><span class=\"w\"> </span><span class=\"nv\">string</span><span class=\"p\">)</span>\n<span class=\"w\">         </span><span class=\"p\">(</span><span class=\"nv\">field</span><span class=\"w\"> </span><span class=\"s\">\"age\"</span><span class=\"w\"> </span><span class=\"nv\">int</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>Roc doesn't seem to generate a function like <code>Person</code> automatically, so you'd have to do this:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">decodePerson</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">     </span><span class=\"nv\">map2</span>\n<span class=\"w\">         </span><span class=\"p\">(</span><span class=\"nv\">field</span><span class=\"w\"> </span><span class=\"s\">\"name\"</span><span class=\"w\"> </span><span class=\"nv\">str</span><span class=\"p\">)</span>\n<span class=\"w\">         </span><span class=\"p\">(</span><span class=\"nv\">field</span><span class=\"w\"> </span><span class=\"s\">\"age\"</span><span class=\"w\"> </span><span class=\"nv\">u8</span><span class=\"p\">)</span>\n<span class=\"w\">         </span><span class=\"p\">(</span><span class=\"nf\">\\</span><span class=\"nv\">name</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">age</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">name</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">age</span><span class=\"w\"> </span><span class=\"p\">})</span>\n</code></pre></div>\n<p>This is more verbose and will only get longer as you add more fields. </p>\n<p>However, I prefer this overall because <code>decodePerson</code> can't depend on the order of the fields in the record alias, which can lead to errors if somebody decides to change it in the future and two fields have the same type.</p>\n<p>That said, you can still mess up the order of decoders.</p>\n<h3>2. Applicatives</h3>\n<p>An alternative that is also common in Elm is applicative pipelines:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">decodePerson</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">     </span><span class=\"nv\">succeed</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nf\">\\</span><span class=\"nv\">name</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">age</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"nv\">name</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">age</span><span class=\"p\">})</span>\n<span class=\"w\">         </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"nv\">andMap</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">field</span><span class=\"w\"> </span><span class=\"s\">\"name\"</span><span class=\"w\"> </span><span class=\"nv\">str</span><span class=\"p\">)</span>\n<span class=\"w\">         </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"nv\">andMap</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">field</span><span class=\"w\"> </span><span class=\"s\">\"age\"</span><span class=\"w\"> </span><span class=\"nv\">u8</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>These allow you to compose any number of decoders. But, besides that, they have the same downside as <code>mapN</code> regarding the order of decoders.</p>\n<h3>3. Backpassing / await</h3>\n<p>An option I quite like is having an <code>await</code> function and using backpassing:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">decodePerson</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">    </span><span class=\"nv\">name</span><span class=\"w\"> </span><span class=\"nf\">&lt;-</span><span class=\"w\"> </span><span class=\"nv\">field</span><span class=\"w\"> </span><span class=\"s\">\"name\"</span><span class=\"w\"> </span><span class=\"nv\">str</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"nv\">await</span>\n<span class=\"w\">    </span><span class=\"nv\">age</span><span class=\"w\"> </span><span class=\"nf\">&lt;-</span><span class=\"w\"> </span><span class=\"nv\">field</span><span class=\"w\"> </span><span class=\"s\">\"age\"</span><span class=\"w\"> </span><span class=\"nv\">u8</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"nv\">map</span>\n<span class=\"w\">    </span><span class=\"p\">{</span><span class=\"nv\">name</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">age</span><span class=\"p\">}</span>\n</code></pre></div>\n<p>What's cool about this is that the field's name appears right next to the argument with our decoded value, which makes it much easier to notice a mismatch.</p>\n<p>The downside of this approach is that you cannot use it in cases where the library needs to know all the fields ahead of time. So, for example, you couldn't build something like <a href=\"https://package.elm-lang.org/packages/dillonkearns/elm-graphql/latest/\"><code>dillonkearns/elm-graphql</code></a>, which mixes decoding and selecting in one step.</p>\n<h3>--</h3>\n<p>Are there other options folks have considered?</p>",
+        "id": 342094101,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678894740
+    },
+    {
+        "content": "<p>yeah, I have a proposed syntax to address the downsides of <a href=\"https://github.com/roc-lang/roc/issues/2\">#2</a>: <a href=\"https://docs.google.com/document/d/1Jo9nZCekkoF6SaDcRqPqoPcgPaAAvlNZC7v3kgVQ3Tc/edit?usp=sharing\">https://docs.google.com/document/d/1Jo9nZCekkoF6SaDcRqPqoPcgPaAAvlNZC7v3kgVQ3Tc/edit?usp=sharing</a></p>",
+        "id": 342107792,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678897624
+    },
+    {
+        "content": "<p>it's not a high priority though <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 342107840,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678897633
+    },
+    {
+        "content": "<p>Ooh, this is exactly what I was hoping you'd say <span aria-label=\"heart eyes\" class=\"emoji emoji-1f60d\" role=\"img\" title=\"heart eyes\">:heart_eyes:</span></p>",
+        "id": 342110271,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678898179
+    },
+    {
+        "content": "<blockquote>\n<p>Can I have the definition of posts refer to users? It looks like it's in scope, so I should be able to, right? (No, applicatives don't let you do that. That's maybe easier to understand with this example where the whole point is for them to run in parallel, but the reason for why not would be less obvious with a CLI arg parser.)</p>\n</blockquote>\n<p>This is great</p>",
+        "id": 342110481,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678898232
+    },
+    {
+        "content": "<p>How's the general feeling about this? I know it's low priority but does it look like something you'd want to implement in practice</p>",
+        "id": 342120495,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678900624
+    },
+    {
+        "content": "<p>I was actually musing about a more general version of this (I think...) - where any expression can be prefixed with <code>&lt;-</code>, and the entire expression would be desugared into a sequence of backpassing steps.</p>\n<p>So, e.g. this:</p>\n<div class=\"codehilite\"><pre><span></span><code>(&lt;- getAnswer 5) + (&lt;- getAnswer 6)\n</code></pre></div>\n<p>Would desugar to:</p>\n<div class=\"codehilite\"><pre><span></span><code>a &lt;- getAnswer 5\nb &lt;- getAnswer 6\na + b\n</code></pre></div>",
+        "id": 342120741,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1678900688
+    },
+    {
+        "content": "<p>hm, that wouldn't work for parallel stuff though, would it?</p>",
+        "id": 342121251,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678900837
+    },
+    {
+        "content": "<p>True</p>",
+        "id": 342121471,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1678900904
+    },
+    {
+        "content": "<p>There could be a separate syntax in the language that indicates you want parallism in otherwise normal backpassing syntax, without having to dip down to the level of <code>Task.collect</code></p>",
+        "id": 342121927,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1678901023
+    },
+    {
+        "content": "<p>What I like about Richard's proposal is that it's not specifically about task parallelism. Being able to collect all the dependencies ahead of time with a syntax that doesn't look crazy would be great for a lot of DSLs</p>",
+        "id": 342122638,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678901229
+    },
+    {
+        "content": "<p>Yeah that makes sense</p>",
+        "id": 342122769,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1678901272
+    },
+    {
+        "content": "<p>I also like the idea of the more general syntax - where I can specify exactly how the results of the tasks are used (e.g. it doesn't have to be a record)</p>",
+        "id": 342122939,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1678901309
+    },
+    {
+        "content": "<p>Something like this?</p>\n<div class=\"codehilite\"><pre><span></span><code>Task.collect (\n  &lt;- getAnswer 5,\n  &lt;- getAnswer 6\n)\n</code></pre></div>",
+        "id": 342123713,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678901479
+    },
+    {
+        "content": "<p>Yeah</p>",
+        "id": 342124061,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1678901569
+    },
+    {
+        "content": "<p>So, let me modify my proposal to instead desugar to:</p>\n<div class=\"codehilite\"><pre><span></span><code>\\wrap -&gt;\n  wrap (\\a, b -&gt; a + b)\n  |&gt; getAnswer 5\n  |&gt; getAnswer 6\n</code></pre></div>\n<p>(I think, If I read the proposal right?)</p>",
+        "id": 342124118,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1678901584
+    },
+    {
+        "content": "<p>right</p>",
+        "id": 342124198,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678901605
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> what actually gets passed to the host with <code>Task.batch</code>? Cause I don't think it can work in roc alone (would be serial).</p>",
+        "id": 342124647,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1678901710
+    },
+    {
+        "content": "<p>Actually the input would be more like:</p>\n<div class=\"codehilite\"><pre><span></span><code>Task.collect (\n  (&lt;- getAnswer 5) +\n  (&lt;- getAnswer 6)\n)\n</code></pre></div>\n<p>i.e. just using a normal binary operator here</p>",
+        "id": 342124662,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1678901713
+    },
+    {
+        "content": "<p>Not sure if those parens would be needed, depends on the predence of <code>&lt;-</code></p>",
+        "id": 342124776,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1678901751
+    },
+    {
+        "content": "<p>if it supported all expressions generally, I guess the record example would look like this instead:</p>\n<div class=\"codehilite\"><pre><span></span><code>Task.collect {\n    users: &lt;- Http.get &quot;/users&quot; |&gt; Task.batch,\n    posts: &lt;- Http.get &quot;/posts&quot; |&gt; Task.batch\n}\n</code></pre></div>",
+        "id": 342125095,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678901829
+    },
+    {
+        "content": "<p>These syntaxes are starting to look really strange and unclear. Especially \"anonymous(unnamed?) backpassing\".</p>",
+        "id": 342125673,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1678901996
+    },
+    {
+        "content": "<p>I guess you could even do something like this:</p>\n<div class=\"codehilite\"><pre><span></span><code>Task.collect (\n   if (&lt;- getBool) then\n       ...\n)\n</code></pre></div>",
+        "id": 342125797,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678902016
+    },
+    {
+        "content": "<p>Yeah, I can see how this could be powerful but I'd be more than happy with only the record option</p>",
+        "id": 342125931,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678902057
+    },
+    {
+        "content": "<p>I think it strikes the right balance of weirdness and convenience</p>",
+        "id": 342126059,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1678902090
+    },
+    {
+        "content": "<p>yeah, I would definitely perfer:</p>\n<div class=\"codehilite\"><pre><span></span><code>Task.collect (\n    doThing &lt;- getBool\n    if doThing then\n         ...\n)\n</code></pre></div>\n<p>or something that uses a wraper function for the code. Or maybe getting a list of results back from <code>Task.collect</code> and using those.</p>",
+        "id": 342126464,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1678902209
+    },
+    {
+        "content": "<p>Oh, I just realized the original proposal is just for building a record. I definitely prefer that to these generic code alternatives.</p>",
+        "id": 342134477,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1678904322
+    },
+    {
+        "content": "<p>The reason I like the general expression syntax is it provides a nice way to parallelize things, without having to clutter the code with a bunch of extra <code>Task.whatever</code> calls.</p>",
+        "id": 342152670,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1678909681
+    },
+    {
+        "content": "<p>Thats totally fair. I think I might like it with some different form of syntax.</p>",
+        "id": 342154241,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1678910210
+    }
+]

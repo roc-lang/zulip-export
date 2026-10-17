@@ -1,0 +1,230 @@
+[
+    {
+        "content": "<p>I haven't touched any code today. Instead I spent my time re-reading through the design documents and trying to understand/scope out the intended behaviour of <code>Scope</code>s specifically... and their interaction with lambdas, <code>var</code> re-assignment, and the loops <code>for</code>/<code>while</code>.</p>\n<p>I've put it all together into the following design document <br>\n<a href=\"https://gist.github.com/lukewilliamboswell/9175249d51fa89b26d7a32bd308fc531\">https://gist.github.com/lukewilliamboswell/9175249d51fa89b26d7a32bd308fc531</a></p>\n<p>I've been through the scenarios a few times, but I'm not super confident I've got everything correct. I feel like I'm close, but would appreciate a second pair of eyes to sense check the behaviour. </p>\n<p>It will be much easier for me to implement (and verify correctness) once I know for sure how it's meant to behave.</p>",
+        "id": 524678936,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750243874
+    },
+    {
+        "content": "<p>I read this today and discussed in detail with Luke, but in summary this is my feedback:</p>\n<ul>\n<li>Top level <code>var</code>'s are illegal, but their ident should still be introduced</li>\n<li><code>for</code> isn't special</li>\n<li><code>Levels</code> should be renamed <code>Scope</code></li>\n<li><code>Scope</code>s are owned by the canonicalizer and doesn't need a separate struct to own/manage them. So get rid of the current <code>Scope</code> struct and move the functions for managing the <code>Levels</code> if they are useful to the <code>Canonicalizer</code>.</li>\n<li>We need to align with Richard on how <code>var</code> can be used.  Is it a special type of statement as it is now in the ParseIR, or is it a part of a pattern? I think the latter has some issues.</li>\n<li>I also would prefer if we always treat <code>x</code> and <code>x_</code> as different identifiers.</li>\n</ul>",
+        "id": 524686300,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750246695
+    },
+    {
+        "content": "<p>I thought we needed <code>Scope</code> in the parser to avoid an extra pass through the AST. Anthony has an idea for how we avoid that. It sounds like a good idea to try. If we can keep the <code>Scope</code> functionality in Can, then we should rename <code>Level</code> to <code>Scope</code> and move the <code>levels: std.ArrayListUnmanaged(Level) = .{},</code> -&gt; <code>scopes: std.ArrayListUnmanaged(Level) = .{},</code> into <code>src/check/canonicalize.zig</code>.</p>",
+        "id": 524687350,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750247063
+    },
+    {
+        "content": "<p>I don't think a single iteration through the top-level decls in a module is expensive enough to justify <code>Scope</code> in parsing</p>",
+        "id": 524687696,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750247181
+    },
+    {
+        "content": "<p>And we can toss levels away after Can, as we only need CanIR and the exposed members after that</p>",
+        "id": 524687818,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750247225
+    },
+    {
+        "content": "<p>It wouldn't be that hard to change it later if we decided we really needed to save a pass through the AST (in the worst case)</p>",
+        "id": 524687942,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750247270
+    },
+    {
+        "content": "<p>To be clear, it's not a pass through the AST.  The module has the top-level decl StatementIds in a slice, iteration should be _very_ straightforward as we only need to find decls and introduce idents in the patterns</p>",
+        "id": 524688145,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750247350
+    },
+    {
+        "content": "<blockquote>\n<ul>\n<li>I also would prefer if we always treat <code>x</code> and <code>x_</code> as different identifiers.</li>\n</ul>\n</blockquote>\n<p>Does that mean I can have both of these next to each other?</p>\n<div class=\"codehilite\"><pre><span></span><code>x = 2\nvar x_ = 3\n</code></pre></div>",
+        "id": 524688150,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750247352
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Scope.20behaviour/near/524688150\">said</a>:</p>\n<blockquote>\n<blockquote>\n<ul>\n<li>I also would prefer if we always treat <code>x</code> and <code>x_</code> as different identifiers.</li>\n</ul>\n</blockquote>\n<p>Does that mean I can have both of these next to each other?</p>\n<p><div class=\"codehilite\"><pre><span></span><code>x = 2\nvar x_ = 3\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>Yes. Though I doubt that exact scenario would often creep up.</p>\n<p>You might want to do something like</p>\n<div class=\"codehilite\" data-code-language=\"Ruby\"><pre><span></span><code><span class=\"n\">var</span><span class=\"w\"> </span><span class=\"n\">count_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">0</span>\n<span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">something</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"n\">some_list</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">count</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">something</span><span class=\"o\">.</span><span class=\"n\">get_count</span><span class=\"p\">()</span>\n<span class=\"w\">    </span><span class=\"n\">count_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">count</span><span class=\"w\"> </span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"mi\">5</span><span class=\"w\"> </span><span class=\"n\">count_</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"n\">count</span><span class=\"w\"> </span><span class=\"k\">else</span><span class=\"w\"> </span><span class=\"n\">count_</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Which looks dumb but in a realistic scenario like this, not naming <code>count</code> that seems like an unnecessary inconvenience</p>",
+        "id": 524688224,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750247386
+    },
+    {
+        "content": "<p>My thought process is a bit silly, consider these scenarios the <code>_</code>;</p>\n<ul>\n<li>in <code>100_000_000</code> is a separator for thousands</li>\n<li>in <code>_foo</code> means this ident <code>foo</code> is not used</li>\n<li>in <code>foo_</code> means this ident <code>foo</code> is re-used</li>\n</ul>\n<p>So it feels to me more like a semantic meaning thing that modifies an ident, and not a syntax thing.</p>",
+        "id": 524689265,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750247808
+    },
+    {
+        "content": "<p>So, do you think <code>_foo</code> and <code>foo</code> are different?</p>",
+        "id": 524689703,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750247969
+    },
+    {
+        "content": "<p>They feel like the same thing.</p>",
+        "id": 524690079,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750248084
+    },
+    {
+        "content": "<p>Interesting.  I disagree, but we should get a lot of feedback and thoughts on it.</p>",
+        "id": 524690881,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750248323
+    },
+    {
+        "content": "<p>I also don't mind (and actually kind of love) being able to use <code>'</code> as much as you want at the end of an ident like you can in OCaml and F#</p>",
+        "id": 524691132,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750248385
+    },
+    {
+        "content": "<p>And they are all unique</p>",
+        "id": 524691162,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750248398
+    },
+    {
+        "content": "<blockquote>\n<p><code>_foo</code> and <code>foo</code> are different</p>\n</blockquote>\n<p>This seems to be the simplest approach</p>",
+        "id": 524695192,
+        "sender_full_name": "Anton",
+        "timestamp": 1750249747
+    },
+    {
+        "content": "<p>yeah</p>",
+        "id": 524700583,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1750251380
+    },
+    {
+        "content": "<p>I appreciate the concerns about it, but in literally every language I've ever heard of, identifiers are different if their names are different, full stop</p>",
+        "id": 524700685,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1750251419
+    },
+    {
+        "content": "<p>I don't think this is worth the strangeness cost</p>",
+        "id": 524700747,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1750251435
+    },
+    {
+        "content": "<p>regarding reassignment being disallowed across function boundaries, here's what I was thinking:</p>\n<ul>\n<li>when we're canonicalizing and we encounter a lambda, push its Region onto a list</li>\n<li>when we leave that lambda, pop the list</li>\n<li>now the \"current function\" is always the last entry in that list (only its Region; I'll explain why later)</li>\n<li>when we see a <code>var</code>, we record the Region of the current function along with it, so later we can ask \"what function was this <code>var</code> declared in?\"</li>\n<li>when we've just decided something is a reassignment, based on it resolving to a <code>var</code>, go ask that <code>var</code> what function it was declared in (which we just wrote down in the previous step)</li>\n<li>if that's different from the current function, give a hard error and emit a crash instead of a Reassign (the rest of the compiler will not be capable of making reassignment across function boundaries Just Work, so we have to crash if you try to do that)</li>\n<li>the hard error needs the Region in order to report where the current function is, and that's all it needs - so that's why we only bother writing that down. (We don't yet have a Can Idx since we just started working on the function, the region uniquely identifies it, and we need the region anyway for error reporting)</li>\n</ul>",
+        "id": 524702298,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1750251865
+    },
+    {
+        "content": "<p>happy to elaborate/clarify/restate any of that <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 524705457,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1750252710
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Scope.20behaviour/near/524700685\">said</a>:</p>\n<blockquote>\n<p>I appreciate the concerns about it, but in literally every language I've ever heard of, identifiers are different if their names are different, full stop</p>\n</blockquote>\n<p>I can think of a few exceptions, but they are very niche.</p>",
+        "id": 524746085,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1750264757
+    },
+    {
+        "content": "<p>What does <code>for</code> is not special mean?</p>",
+        "id": 524746111,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1750264771
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Scope.20behaviour/near/524746111\">said</a>:</p>\n<blockquote>\n<p>What does <code>for</code> is not special mean?</p>\n</blockquote>\n<p>just means that for introduces a normal scope just like a when branch, not anything special like a function scope</p>",
+        "id": 524753499,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750267652
+    },
+    {
+        "content": "<p>I've updated my scope analysis above. I've also started implementing this refactor. </p>\n<p>There's a few things that need implementing/fixing along the way before I can properly validate the behaviour is correct <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 524795069,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750288426
+    },
+    {
+        "content": "<p>such as...?</p>",
+        "id": 524797264,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750290056
+    },
+    {
+        "content": "<p>Parsing statements in lambdas</p>",
+        "id": 524797297,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750290079
+    },
+    {
+        "content": "<p>Ok</p>",
+        "id": 524797329,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750290101
+    },
+    {
+        "content": "<p>that should be relatively easy if we constrain it at first to decls and a limited set of exprs</p>",
+        "id": 524797369,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750290127
+    },
+    {
+        "content": "<p>My methodology is basically write out a snapshot test that I want to work. </p>\n<p>Then step through the tokens, parser, problems etc and work my way down the compiler stages ensuring everything is behaving the way I think it should.</p>",
+        "id": 524797401,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750290151
+    },
+    {
+        "content": "<p>and then we can move to ifs, when's, crash, expect, etc</p>",
+        "id": 524797407,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750290158
+    },
+    {
+        "content": "<p>so is that what you would like me to help<br>\nwith?</p>",
+        "id": 524797460,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750290200
+    },
+    {
+        "content": "<p>No thank you. I'm chipping away at that. I'm posting things here just to keep everyone informed of what I'm doing so we avoid duplicating efforts.</p>",
+        "id": 524797670,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750290384
+    },
+    {
+        "content": "<p>We talked about a top-level var being an error, but we thought we should introduce it to our scope anyway. It's currently a parser error so we have a malformed node and therefore we don't have any information to handle it in Can. </p>\n<div class=\"codehilite\"><pre><span></span><code>~~~SOURCE\nmodule []\n\n# This should cause an error - var not allowed at top level\nvar topLevelVar_ = 0\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>(file (1:1-39:33)\n    (module (1:1-1:10) (exposes (1:8-1:10)))\n    (statements\n        (malformed_stmt (4:1-4:4) &quot;var_only_allowed_in_a_body&quot;)\n</code></pre></div>\n<p>If we want to continue, we could potentially make this a diagnostic instead of a malformed AST node, then convert it to an assignment without the <code>var</code> or trailing underscore. This would be a change to the Parser.</p>",
+        "id": 524799909,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750292440
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/pull/7842\">#7842</a> -- DRAFT </p>\n<p>Implements some of what I described in the Scope behaviour above. I'd like to re-read with fresh eyes tomorrow before marking as ready for review. </p>\n<p>Here is a demo of it so far...</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nx\">module</span><span class=\"w\"> </span><span class=\"p\">[]</span>\n\n<span class=\"nv\">my_long_ident</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"s\">\"global\"</span>\n\n<span class=\"nv\">foo</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"nx\">_</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"nv\">my_long_ident</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"s\">\"shadowing here\"</span>\n\n<span class=\"w\">    </span><span class=\"nx\">var</span><span class=\"w\"> </span><span class=\"nv\">sum_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"mi\">0</span>\n\n<span class=\"w\">    </span><span class=\"nv\">sum_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">sum_</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"mi\">1</span>\n<span class=\"w\">    </span><span class=\"nv\">sum_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">sum_</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"mi\">1</span>\n<span class=\"w\">    </span><span class=\"nv\">sum_</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">sum_</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"mi\">1</span>\n\n<span class=\"w\">    </span><span class=\"nx\">sum_</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p><a href=\"/user_uploads/22008/XOWr2GO4ynsaEl0m4z2PfT6-/Screenshot-2025-06-19-at-18.38.10.png\">Screenshot 2025-06-19 at 18.38.10.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/XOWr2GO4ynsaEl0m4z2PfT6-/Screenshot-2025-06-19-at-18.38.10.png\" title=\"Screenshot 2025-06-19 at 18.38.10.png\"><img data-original-content-type=\"image/png\" data-original-dimensions=\"1548x974\" src=\"/user_uploads/thumbnail/22008/XOWr2GO4ynsaEl0m4z2PfT6-/Screenshot-2025-06-19-at-18.38.10.png/840x560.webp\"></a></div>",
+        "id": 524840010,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750322334
+    },
+    {
+        "content": "<p>I am reasonably sure the CI failures are from snapshots we have that include invalid things in them, and then when a PROBLEM includes a slice of the original source this causes issues across OS's. I need to investigate further if we want to have pretty rendered problem reports included in snapshot files. </p>\n<p>One hack solution might be to add a flag in the <code>META</code> section to include pretty rendered problems, otherwise by default it just prints out the tag name, for example <code>PARSER .not_implemented</code>.</p>",
+        "id": 524840568,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750322550
+    },
+    {
+        "content": "<p>I know I would prefer to have the pretty printed errors so that we can have the snapshots also acting as test for the problem reports as well.</p>",
+        "id": 524854433,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1750327894
+    },
+    {
+        "content": "<p>We can have them. Maybe the flag behaviour is to turn the pretty off instead. So we could flag snapshots that are deliberately testing \"misuse\" or bad utf8 etc.</p>",
+        "id": 524864277,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1750332235
+    }
+]

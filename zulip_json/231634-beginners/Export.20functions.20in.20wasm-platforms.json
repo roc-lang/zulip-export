@@ -1,0 +1,350 @@
+[
+    {
+        "content": "<p>Before the update to zig 0.11 is was possible, to export functions in zig to wasm. Since then, only the function <code>_start</code> is exported.</p>\n<p>So in the past, it was possible to write something like this in zig:</p>\n<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"kr\">export</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"n\">foobar</span><span class=\"p\">(</span><span class=\"n\">some</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">args</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"kt\">u32</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">  </span><span class=\"p\">[...]</span>\n<span class=\"w\">  </span><span class=\"n\">roc__mainForHost_1_exposed_generic</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"n\">result</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">argument</span><span class=\"p\">);</span>\n<span class=\"w\"> </span><span class=\"p\">[...]</span>\n<span class=\"w\"> </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"n\">result_ptr</span><span class=\"p\">;</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>Now, you can only use <code>_start</code>, which does not accepts any arguments.</p>\n<p>The reason is, that zig does not automatically exports functions to wasm since 0.11: <a href=\"https://ziglang.org/download/0.11.0/release-notes.html#WebAssembly\">https://ziglang.org/download/0.11.0/release-notes.html#WebAssembly</a></p>\n<p>To solve this, the line <code>\"-rdynamic\",</code> has to be added here: <a href=\"https://github.com/roc-lang/roc/blob/2681d81de7b5aeb2e56b15efe9a89dc12dbf7a59/crates/compiler/build/src/link.rs#L1234\">https://github.com/roc-lang/roc/blob/2681d81de7b5aeb2e56b15efe9a89dc12dbf7a59/crates/compiler/build/src/link.rs#L1234</a></p>\n<p>Would you accept a PR that adds this line? Without it, I don't know how to use roc in a wasm context.</p>",
+        "id": 423245016,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1708850733
+    },
+    {
+        "content": "<p>Won't <code>-rdynamic</code> export everything breaking all dead code elimination?</p>",
+        "id": 423273783,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1708877388
+    },
+    {
+        "content": "<p>I don't know. The real solution will be the platform build script. But until this works, I don't see an alternative to rdynamic</p>",
+        "id": 423276547,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1708880096
+    },
+    {
+        "content": "<p>Sounds like it is equivalent to what they used to do. Even though it blocks dce, it fixes other issues for now... So go for it</p>",
+        "id": 423280345,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1708883878
+    },
+    {
+        "content": "<p>Thank you. Here is the PR: <a href=\"https://github.com/roc-lang/roc/pull/6542\">https://github.com/roc-lang/roc/pull/6542</a></p>",
+        "id": 423410445,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1708958606
+    },
+    {
+        "content": "<p>I see this differently. I don't think this breaks anything,<code>-rdynamic</code> only prevents DCE on things that are exported, which is desired behaviour. It don't think it will \"export everything\", just the stuff that the platform deliberately chose to export. Is that wrong?</p>",
+        "id": 423760870,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709105458
+    },
+    {
+        "content": "<p>Is this referring to things exported from the builtins?</p>",
+        "id": 423762623,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709106477
+    },
+    {
+        "content": "<p>All Wasm modules are dynamic libraries. There isn't really a concept of an executable because you always dynamically link to a host and you can only do IO by calling imported functions. There is no way to do a \"syscall\" without anybody knowing, like in a native binary. So <code>-rdynamic</code> makes sense for it.</p>",
+        "id": 423762880,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709106614
+    },
+    {
+        "content": "<p>Our Wasm dev backend does not have a problem with DCE in this situation because it knows the Roc concept of host and app. So it can just expose the things the host wants to expose and doesn't keep any builtins it doesn't need. It's trickier to express that to <code>wasm-ld</code> though. I think you have to give it a list of the things you want to expose. So the platform build script solves it.</p>",
+        "id": 423763758,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709107075
+    },
+    {
+        "content": "<p>I am currently not on my development pc, so I can not tell you the exact list of exported symbols, but there are more, then needed. You can see it, by calling <code>console.log(wasm.instance.exports)</code>.  For example, it contains all the <code>roc__mainForHost_1_exposed</code>, <code>roc__mainForHost_1_exposed_generic</code> and all other roc_functions, that should only be visible to zig and not to the wasm-host.</p>\n<p>This can be solved by the platform build scripts, as soon, as they are possible.</p>",
+        "id": 423766438,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709108168
+    },
+    {
+        "content": "<p>Another thing, that is currently not nice is, that the wasm-host has to export some wasi-functions. For example, the <a href=\"https://github.com/roc-lang/roc/blob/main/examples/platform-switching/web-assembly-platform\">wasm-platform-switching</a> example does currently not work, because javascript has to provide the function <code>random_get</code>. This seems not necessary. It works, if you provide a dummy function, that does nothing (<code>random_get: () =&gt; {}</code>).</p>\n<p>It would be nice, if it would be possible to build a wasm module, that does not require the wasi(nterface). <a href=\"#narrow/stream/304641-ideas/topic/wasm.20without.20main\">We discussed this before without a solution</a>. I don't think, this will change until the platform build scripts are supported.</p>",
+        "id": 423768307,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709108948
+    },
+    {
+        "content": "<p>Right I see, thanks.<br>\nHave you tried using the <code>--dev</code> option with Roc?<br>\nIt will give you unoptimised code but should solve this linking problem I think.</p>",
+        "id": 423789040,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709116311
+    },
+    {
+        "content": "<p>Since the PR <a href=\"https://github.com/roc-lang/roc/issues/6542\">#6542</a> is merged, there is no linking problem any more. I have not tested the <code>--dev</code> option. I did not think, that this would have made a difference. I can test this, when I am back home.</p>",
+        "id": 423789930,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709116601
+    },
+    {
+        "content": "<p>Great, please let me know if it works.<br>\nIt uses a custom linker that I wrote, that knows about Roc concepts. So it should expose the right things I hope.</p>",
+        "id": 423793261,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709117742
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"431893\">@Brian Carroll</span> it does not work. It creates a <code>.wasm</code> file, but if I try to run it in the browser, I get the error message <code>CompileError: wasm validation error: at offset 58727: expected number of function body bytes</code>.</p>\n<p>If I call <code>wasm2wat main.wasm</code>, I get the error message: <code>000e567: error: unable to read u32 leb128: function body size</code>.</p>\n<p>This happens on my wasm-project, but also on the <a href=\"https://github.com/roc-lang/roc/tree/main/examples/platform-switching\">platform-switching-example</a></p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>$<span class=\"w\"> </span><span class=\"nb\">cd</span><span class=\"w\"> </span>example/platform-switching\n$<span class=\"w\"> </span>roc<span class=\"w\"> </span>build<span class=\"w\"> </span>--target<span class=\"o\">=</span>wasm32<span class=\"w\"> </span>--dev<span class=\"w\"> </span>rocLovesWebAssembly.roc\n🔨<span class=\"w\"> </span>Rebuilding<span class=\"w\"> </span>platform...\n<span class=\"m\">0</span><span class=\"w\"> </span>errors<span class=\"w\"> </span>and<span class=\"w\"> </span><span class=\"m\">0</span><span class=\"w\"> </span>warnings<span class=\"w\"> </span>found<span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"m\">1018</span><span class=\"w\"> </span>ms<span class=\"w\"> </span><span class=\"k\">while</span><span class=\"w\"> </span>successfully<span class=\"w\"> </span>building:\n\n<span class=\"w\">    </span>rocLovesWebAssembly.wasm\n$<span class=\"w\"> </span>wasm2wat<span class=\"w\"> </span>rocLovesWebAssembly.wasm\n000bd24:<span class=\"w\"> </span>error:<span class=\"w\"> </span>unable<span class=\"w\"> </span>to<span class=\"w\"> </span><span class=\"nb\">read</span><span class=\"w\"> </span>u32<span class=\"w\"> </span>leb128:<span class=\"w\"> </span><span class=\"k\">function</span><span class=\"w\"> </span>body<span class=\"w\"> </span>size\n</code></pre></div>",
+        "id": 423823660,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709128707
+    },
+    {
+        "content": "<p>Do you know, when it worked? I am trying to bisec it, but it also fails for version before the zig 0.11 update. Maybe I am doing something wrong?</p>",
+        "id": 423826585,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709129536
+    },
+    {
+        "content": "<p>Yeah, this has been tricky for me too to narrow down when exactly the <code>rocLovesWebAssembly.roc</code> example used to be working most recently.</p>\n<p>It doesn't seem to cater nicely to a <code>git bisect</code> search, and I tried a linear search (across the entire git history) in steps of 100 commits. What makes it non-trivial it seems is the fact that the examples have been moved around, renamed etc (which isn't an issue in itself, of course).</p>\n<p>I think the authors of the example would be able to much more easily pinpoint where the discrepancy might've occurred (if it's indeed an actual discrepancy, and not a misunderstanding of mine how the platform rebuilding should be run; I have been successfully able to rebuild other platforms - just mentioning for completeness).</p>",
+        "id": 423845152,
+        "sender_full_name": "Hristo",
+        "timestamp": 1709134663
+    },
+    {
+        "content": "<p>For completeness, I'd like to confirm that I've been able to successfully (re)build the Wasm32 platform.</p>\n<p>I wasn't able to get it to work with the release version of Roc, however. I suppose with a little bit of further digging around the codebase, it should be possible to correctly indicate where the Wasi library lives and run int this way. My attempts involved specifying <code>WASI_LIBC_PATH</code> to the build command, but that didn't quite cut it.</p>\n<p>Up until this point, I was getting:</p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>%<span class=\"w\"> </span>roc<span class=\"w\"> </span>build<span class=\"w\"> </span>--target<span class=\"o\">=</span>wasm32<span class=\"w\"> </span>examples/platform-switching/rocLovesWebAssembly.roc\n🔨<span class=\"w\"> </span>Rebuilding<span class=\"w\"> </span>platform...\nAn<span class=\"w\"> </span>internal<span class=\"w\"> </span>compiler<span class=\"w\"> </span>expectation<span class=\"w\"> </span>was<span class=\"w\"> </span>broken.\nThis<span class=\"w\"> </span>is<span class=\"w\"> </span>definitely<span class=\"w\"> </span>a<span class=\"w\"> </span>compiler<span class=\"w\"> </span>bug.\nPlease<span class=\"w\"> </span>file<span class=\"w\"> </span>an<span class=\"w\"> </span>issue<span class=\"w\"> </span>here:<span class=\"w\"> </span>https://github.com/roc-lang/roc/issues/new/choose\nthread<span class=\"w\"> </span><span class=\"s1\">'main'</span><span class=\"w\"> </span>panicked<span class=\"w\"> </span>at<span class=\"w\"> </span><span class=\"s1\">'cannot find `wasi-libc.a`'</span>,<span class=\"w\"> </span>crates/compiler/build/src/link.rs:134:5\nnote:<span class=\"w\"> </span>run<span class=\"w\"> </span>with<span class=\"w\"> </span><span class=\"sb\">`</span><span class=\"nv\">RUST_BACKTRACE</span><span class=\"o\">=</span><span class=\"m\">1</span><span class=\"sb\">`</span><span class=\"w\"> </span>environment<span class=\"w\"> </span>variable<span class=\"w\"> </span>to<span class=\"w\"> </span>display<span class=\"w\"> </span>a<span class=\"w\"> </span>backtrace\n</code></pre></div>\n<p>Then I realised I could attempt via the locally built version of Roc (following the <a href=\"https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md\">instructions</a> from the official repo), and this actually solved the issue because the building process had generated <code>./target/release/build/wasi_libc_sys-.../out/wasi-libc.a</code>.</p>\n<p>The successful platform (re)build run looks like as follows now (please, note that <code>./target/release/roc</code> isn't the same executable as <code>roc</code>):</p>\n<div class=\"codehilite\"><pre><span></span><code>% ./target/release/roc build --target=wasm32 examples/platform-switching/rocLovesWebAssembly.roc\n🔨 Rebuilding platform...\n0 errors and 0 warnings found in 2000 ms\n while successfully building:\n\n    examples/platform-switching/rocLovesWebAssembly.wasm\n</code></pre></div>\n<p>The <code>--dev</code> option also works analogously.</p>\n<p>Hopefully, this could help someone else as well. Again, with a little bit of spare time for investigation (regarding how the WASI_LIBC_PATH should be set), it probably shouldn't be necessary to build Roc locally from source, in order to get this functionality working.</p>",
+        "id": 424667724,
+        "sender_full_name": "Hristo",
+        "timestamp": 1709562604
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"496321\">@Oskar Hahn</span>, perhaps you could double-check if a locally built-from-source Roc could solve your Wasm/Wasi issue (unless you're already using a locally built one). The latter might have to do with your local environment, and if the local <code>roc</code> works, this experiment would be a confirmation that it's the Wasm/Wasi environment that's the culprit in this particular context.</p>\n<p>My apologies if I've misunderstood the context/use-case, and have been actually providing effectively useless input.</p>",
+        "id": 424668565,
+        "sender_full_name": "Hristo",
+        "timestamp": 1709562838
+    },
+    {
+        "content": "<p>Quite strange that we need wasi at all. We should look into removing that dependency. Actual roc code should be free of all dependencies except those exposed by the platform</p>",
+        "id": 424682953,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1709566337
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span>, I hope I've understood the context correctly here.<br>\nIn general I do agree with what you've said. However, my understanding is this is in the context of example code, which has to do with platforms, and we can't have a Wasm-platform example code, without this dependency sorted.<br>\nPerhaps, it's a matter of better documenting how the example could be run?</p>",
+        "id": 424684998,
+        "sender_full_name": "Hristo",
+        "timestamp": 1709566921
+    },
+    {
+        "content": "<p>Roc code should never need WASI<br>\nWasm platforms designed for non-browser use cases may use WASI if they want to<br>\nWasm platforms designed for browser-only use cases should not need WASI because WASI is a library for running Wasm in non-browser contexts.<br>\nI believe our example is meant to run in the browser so if it is relying on WASI then that is a bug.</p>",
+        "id": 424685943,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709567178
+    },
+    {
+        "content": "<p>Thanks for clarifying <span class=\"user-mention\" data-user-id=\"431893\">@Brian Carroll</span>! I think I understand now better what <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> meant as well!</p>\n<p>When I get a chance, I'll try to reproduce the issue in a container for the purpose of confirming whether I consistently get the same error message. <code>crates/compiler/build/src/link.rs</code> is definitely not an examples-only file.</p>\n<p>It seems <a href=\"https://github.com/roc-lang/roc/commit/5fffea969a50a6af6432c652e39f76a56b9a0233\">this</a> commit might be relevant.</p>",
+        "id": 424689312,
+        "sender_full_name": "Hristo",
+        "timestamp": 1709568098
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"431893\">Brian Carroll</span> <a href=\"#narrow/stream/231634-beginners/topic/Export.20functions.20in.20wasm-platforms/near/424685943\">said</a>:</p>\n<blockquote>\n<p>Roc code should never need WASI<br>\nWasm platforms designed for non-browser use cases may use WASI if they want to<br>\nWasm platforms designed for browser-only use cases should not need WASI because WASI is a library for running Wasm in non-browser contexts.<br>\nI believe our example is meant to run in the browser so if it is relying on WASI then that is a bug.</p>\n</blockquote>\n<p>Currently, Roc could needs WASI. The roc compiler uses the <code>wasm32-wasi</code> target, to build the binary: <br>\n<a href=\"https://github.com/roc-lang/roc/blob/09e813166720a41af28bcae36b5c978cab6d183c/crates/compiler/build/src/link.rs#L302\">https://github.com/roc-lang/roc/blob/09e813166720a41af28bcae36b5c978cab6d183c/crates/compiler/build/src/link.rs#L302</a></p>\n<p>and/or</p>\n<p><a href=\"https://github.com/roc-lang/roc/blob/09e813166720a41af28bcae36b5c978cab6d183c/crates/compiler/build/src/link.rs#L1227\">https://github.com/roc-lang/roc/blob/09e813166720a41af28bcae36b5c978cab6d183c/crates/compiler/build/src/link.rs#L1227</a></p>\n<p>I would really like, if roc would use the <code>wasm32-freestanding</code> target. But this would mean, that it would be impossible to build a wasi module, or that roc would need two different targets (<code>--target=wasm32</code>, <code>--target=wasi</code>).</p>\n<p>When zig is compiled with <code>wasm32-wasi</code>, the wasm-module needs some wasi functions to start. For example <code>random_get</code> or <code>_start</code>.</p>",
+        "id": 424812743,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709625164
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"693045\">Hristo</span> <a href=\"#narrow/stream/231634-beginners/topic/Export.20functions.20in.20wasm-platforms/near/424668565\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"496321\">Oskar Hahn</span>, perhaps you could double-check if a locally built-from-source Roc could solve your Wasm/Wasi issue (unless you're already using a locally built one). The latter might have to do with your local environment, and if the local <code>roc</code> works, this experiment would be a confirmation that it's the Wasm/Wasi environment that's the culprit in this particular context.</p>\n</blockquote>\n<p>I also build roc from source. It was possible for me to build the wasm-module with the <code>--dev</code> argument, but the build <code>.wasm</code> file was broken. I was not able to run it in the browser or analyze it with <code>wasm2wat</code>. Without the <code>--dev</code> argument, it works for me. Are you able to run the wasm-module with the <code>--dev</code> flag? <a href=\"https://github.com/roc-lang/roc/blob/main/examples/platform-switching/web-assembly-platform/README.md\">Here is the description who to run it</a></p>",
+        "id": 424813238,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709625457
+    },
+    {
+        "content": "<p>Thanks <span class=\"user-mention\" data-user-id=\"496321\">@Oskar Hahn</span>! Now I'm able to understand the use-case better!</p>\n<p>Hmm.. with and without <code>--dev</code>, I'm getting this in the browser console, and no \"Hello, World\" message rendered on the page:</p>\n<div class=\"codehilite\" data-code-language=\"JavaScript\"><pre><span></span><code><span class=\"nx\">Uncaught</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"ow\">in</span><span class=\"w\"> </span><span class=\"nx\">promise</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nx\">CompileError</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">wasm</span><span class=\"w\"> </span><span class=\"nx\">validation</span><span class=\"w\"> </span><span class=\"nx\">error</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">at</span><span class=\"w\"> </span><span class=\"nx\">offset</span><span class=\"w\"> </span><span class=\"mf\">48420</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">expected</span><span class=\"w\"> </span><span class=\"nx\">number</span><span class=\"w\"> </span><span class=\"k\">of</span><span class=\"w\"> </span><span class=\"kd\">function</span><span class=\"w\"> </span><span class=\"nx\">body</span><span class=\"w\"> </span><span class=\"nx\">bytes</span>\n<span class=\"w\">    </span><span class=\"nx\">roc_web_platform_run</span><span class=\"w\"> </span><span class=\"nx\">http</span><span class=\"o\">:</span><span class=\"c1\">//localhost:8080/host.js:42</span>\n<span class=\"w\">    </span><span class=\"o\">&lt;</span><span class=\"nx\">anonymous</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"nx\">http</span><span class=\"o\">:</span><span class=\"c1\">//localhost:8080/:7</span>\n</code></pre></div>",
+        "id": 424821157,
+        "sender_full_name": "Hristo",
+        "timestamp": 1709628588
+    },
+    {
+        "content": "<p>Without --dev, it should work. Make sure to clear the browser cache after recompiling the module. Sometimes it helped for me to restart the python webserver, but not all the time. I have not invested this further.</p>",
+        "id": 424828290,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709631103
+    },
+    {
+        "content": "<p>Hmm .. I'm getting a different error (without <code>--dev</code>). I somehow think also the calling location matters, but I'll need to perform further tests later on, in order to be able to provide some constructive examples. This happens both in Chrome and Firefox (with a slight difference of the messages) - tried both to confirm that it's not due to browser cache. Also, for the sake of sanity checking (just in case), I've been restarting the server every time, upon recompilation:</p>\n<div class=\"codehilite\" data-code-language=\"JavaScript\"><pre><span></span><code><span class=\"nx\">Uncaught</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"ow\">in</span><span class=\"w\"> </span><span class=\"nx\">promise</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nx\">LinkError</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">WebAssembly</span><span class=\"p\">.</span><span class=\"nx\">instantiate</span><span class=\"p\">()</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Import</span><span class=\"w\"> </span><span class=\"err\">#</span><span class=\"mf\">2</span><span class=\"w\"> </span><span class=\"nx\">module</span><span class=\"o\">=</span><span class=\"s2\">\"wasi_snapshot_preview1\"</span><span class=\"w\"> </span><span class=\"kd\">function</span><span class=\"o\">=</span><span class=\"s2\">\"random_get\"</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"kd\">function</span><span class=\"w\"> </span><span class=\"k\">import</span><span class=\"w\"> </span><span class=\"nx\">requires</span><span class=\"w\"> </span><span class=\"nx\">a</span><span class=\"w\"> </span><span class=\"nx\">callable</span>\n</code></pre></div>",
+        "id": 424834861,
+        "sender_full_name": "Hristo",
+        "timestamp": 1709633423
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"496321\">Oskar Hahn</span> <a href=\"#narrow/stream/231634-beginners/topic/Export.20functions.20in.20wasm-platforms/near/423768307\">said</a>:</p>\n<blockquote>\n<p>For example does currently not work, because javascript has to provide the function <code>random_get</code>. This seems not necessary. It works, if you provide a dummy function, that does nothing (<code>random_get: () =&gt; {}</code>).</p>\n</blockquote>\n<p>You have to add the function <code>random_get</code> to the JavaScript file.</p>\n<p>Here is an example: <a href=\"https://github.com/roc-lang/roc/blob/09e813166720a41af28bcae36b5c978cab6d183c/examples/nodejs-interop/wasm/hello.js#L28\">https://github.com/roc-lang/roc/blob/09e813166720a41af28bcae36b5c978cab6d183c/examples/nodejs-interop/wasm/hello.js#L28</a></p>\n<p>But I think an empty function does also work.</p>",
+        "id": 424837949,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709634481
+    },
+    {
+        "content": "<blockquote>\n<p>currently Roc could need WASI</p>\n</blockquote>\n<p>Ok here's my argument.</p>\n<p>Roc is a pure functional language that cannot do I/O.</p>\n<p>We link to a libc that does all of its I/O through WASI syscalls. But you can't write Roc code that does I/O so it can't possibly use those parts of libc.</p>\n<p>Zig is not a pure functional language so it cannot provide these language level guarantees. The only way is to have a separate target for freestanding Wasm.</p>",
+        "id": 424842713,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709636097
+    },
+    {
+        "content": "<p>I don't understand where the random_get is coming from. I suspect the platform but not sure why it would use it.</p>",
+        "id": 424843070,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709636217
+    },
+    {
+        "content": "<p>Oh I just noticed something you said that it does come from Zig.</p>",
+        "id": 424843325,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709636307
+    },
+    {
+        "content": "<p>So the only reason to add a new target to Roc would be to fix this strange Zig behaviour where it does the random_get.</p>",
+        "id": 424843792,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709636477
+    },
+    {
+        "content": "<p>That doesn't seem like the right move for Roc as a project if it's Zig specific. But I wonder if they're doing this to meet some part of the WASI spec.</p>",
+        "id": 424844353,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709636665
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"431893\">Brian Carroll</span> <a href=\"#narrow/stream/231634-beginners/topic/Export.20functions.20in.20wasm-platforms/near/424843792\">said</a>:</p>\n<blockquote>\n<p>So the only reason to add a new target to Roc would be to fix this strange Zig behaviour where it does the random_get.</p>\n</blockquote>\n<p>Yes. And the other functions: <code>proc_exit</code>, <code>fd_write</code> and <code>_start</code>.</p>",
+        "id": 424844457,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709636701
+    },
+    {
+        "content": "<p>Hmm ok very good point!<br>\nThose are more understandable. Any host language will generate proc_exit and _start if you tell it you want WASI. And fd_write is often present for debug printing.<br>\nThis is a stronger case for adding a freestanding target.</p>",
+        "id": 424845348,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709636980
+    },
+    {
+        "content": "<p>It would mean changing the Rust enum of targets and fixing up any Rust errors. Then using it to modify the linker commands. Pretty straightforward to implement.</p>",
+        "id": 424846397,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709637314
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> I would be interested in your take.</p>\n<p>The summary of the above is that any host language build script should have 2 separate targets for browser Wasm and WASI. But currently that build script is inside the Roc compiler and we only have one target (which is implicitly always WASI)</p>\n<p>When developing for browser, people have to define dummy JS functions to stub out WASI stuff. It is confusing.</p>\n<p>It has been suggested to add a new target, which would only behave differently inside <a href=\"http://link.rs\">link.rs</a>.<br>\nIn the future if we remove <a href=\"http://link.rs\">link.rs</a> and move host build scripts to the platform developer, we could remove that target from Roc.</p>",
+        "id": 424847880,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709637921
+    },
+    {
+        "content": "<p>that makes sense, although I'd prefer if we instead made progress on removing <a href=\"http://link.rs\">link.rs</a> if possible <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 424851640,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1709639375
+    },
+    {
+        "content": "<p>Yeah!<br>\nWhat's needed for that? Make a bunch of separate build scripts for each platform we have?</p>",
+        "id": 424851949,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709639483
+    },
+    {
+        "content": "<p>I guess a good first step would be to extract the existing build commands.</p>",
+        "id": 424852119,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709639536
+    },
+    {
+        "content": "<p>I added an environment variable recently to dump all the commands. So if you set that flag and compile, it will print out your build commands and you can put them in a bash script or makefile</p>",
+        "id": 424852347,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709639630
+    },
+    {
+        "content": "<p>nice!</p>",
+        "id": 424852873,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1709639841
+    },
+    {
+        "content": "<p>yeah basically the goal would be that:</p>\n<ul>\n<li>we always build applications from a precompiled host, so no more <code>\"🔨 Rebuilding platform...\"</code> message</li>\n<li>this means that the individual platform needs to have a script which does the relevant parts of \"rebuilding platform\" for its host</li>\n<li>the goal of the platform build script should be outputting a Roc precompiled host file</li>\n</ul>",
+        "id": 424853384,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1709640021
+    },
+    {
+        "content": "<p>OK so we should start recommending that to people who are having build problems.</p>\n<ol>\n<li>Use <code>ROC_PRINT_BUILD_COMMANDS=1 roc build my-program.roc</code> to see the commands that Roc is using to build your host language code.</li>\n<li>Extract those commands into your favourite build system, like a build.zig or a <a href=\"http://build.rs\">build.rs</a> or a makefile.</li>\n<li>From then on, use <code>roc build my-program.roc --precompiled-host=&lt;path&gt;</code> and change the commands as you see fit.</li>\n</ol>",
+        "id": 424855562,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709640840
+    },
+    {
+        "content": "<p>And if anyone feels like doing this for the existing examples and basic-cli then that would be a very welcome contribution!</p>",
+        "id": 424855860,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709640955
+    },
+    {
+        "content": "<p>Oh I should mention that <code>ROC_PRINT_BUILD_COMMANDS=1</code> will only work with a development build of the Roc compiler.</p>",
+        "id": 424856050,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709641013
+    },
+    {
+        "content": "<p>This sounds amazing, but I was not able to build a non-wasi wasm object with that.</p>\n<p>There were different problems. One of them might be this zig issue: <a href=\"https://github.com/ziglang/zig/issues/15005\">https://github.com/ziglang/zig/issues/15005</a> It seems, that when zig 0.11 builds C-code to wasm, it always adds the <code>\"wasi_snapshot_preview1\" \"random_get\"</code>.  Roc-code probably counts as C-code. So until this is fixed in zig (and the milestone is set to zig 0.14), it will not be possible to build a wasm-file with roc, that does not need <code>wasi_snapshot_preview1</code>.</p>\n<p>When I changed <code>wasm32-wasi</code> to <code>wasm32-freestanding</code> in <code>link.rs</code>, then I was able to build a wasm module, that did not require <code>proc_exit</code>, <code>fd_write</code> or <code>_start</code> (only <code>random_get</code>).</p>\n<p>I was not able to get the same result with <code>ROC_PRINT_BUILD_COMMANDS</code> and <code>--precompiled-platform</code> (you write <code>--precompiled-host=&lt;path&gt;</code>, but you probably mean <code>--precompiled-platform</code>).</p>\n<p>The reason is, that you not only have to change the \"build\"-target, but also the \"link\"-target. See the difference in line 268 and line 1209 in <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/build/src/link.rs\">link.rs</a>.</p>\n<p>After I change <a href=\"https://github.com/roc-lang/roc/blob/d232a843e44ee0f93ea63b5ad4ec7eae17067956/crates/compiler/build/src/link.rs#L1225\">line 1225 in link.rs</a>  from <code>build-exe</code> to <code>build-lib</code>  and <a href=\"https://github.com/roc-lang/roc/blob/d232a843e44ee0f93ea63b5ad4ec7eae17067956/crates/compiler/build/src/link.rs#L1234\">line 1234 </a> to <code>wasm32-freestanding-musl</code> and also added the argument <code>-dynamic</code>, I got a wasm-module, that only depends on <code>random_get</code>.</p>\n<p>Another problem with <code>ROC_PRINT_BUILD_COMMANDS</code> is, that the build command contains a local path to <code>glue.zig</code>. In my case <code>--mod glue::/home/ossi/src/roc/crates/compiler/builtins/bitcode/src/glue.zig</code>. So it is not possible to add this in a <a href=\"http://build.rs\">build.rs</a> in a git-repo.</p>\n<p>In conclusion, I don't think, that the <code>ROC_PRINT_BUILD_COMMANDS</code> is a solution for a freestanding wasm-module.</p>",
+        "id": 424913500,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709657256
+    },
+    {
+        "content": "<p>What solution could ever possibly exist that does not have this problem?</p>",
+        "id": 424926194,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709661227
+    },
+    {
+        "content": "<p>This seems to be an input into the build so I suppose it has to be configured somehow.</p>",
+        "id": 424926837,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709661431
+    },
+    {
+        "content": "<p>That flag was not meant to be a finished solution, it was a starting point to modify.</p>",
+        "id": 424927217,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709661573
+    },
+    {
+        "content": "<p>We do include crates/compiler/builtins/bitcode/src/glue.zig in our nightly releases, so the build script could retrieve it from there.</p>",
+        "id": 424931997,
+        "sender_full_name": "Anton",
+        "timestamp": 1709663164
+    },
+    {
+        "content": "<p>I am sorry, if my last comment sounded negative. My English is not so good and it is hard for me to express myself. I really liked to look at the build command from <code>ROC_PRINT_BUILD_COMMANDS</code>. I played around with it for more then an hour. I learned so much.</p>",
+        "id": 424961259,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1709674585
+    },
+    {
+        "content": "<p>No problem! Glad you found it useful.</p>",
+        "id": 424966657,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1709676710
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/231634-beginners/topic/Export.20functions.20in.20wasm-platforms/near/424853384\">said</a>:</p>\n<blockquote>\n<p>yeah basically the goal would be that:</p>\n<ul>\n<li>we always build applications from a precompiled host, so no more <code>\"🔨 Rebuilding platform...\"</code> message</li>\n<li>this means that the individual platform needs to have a script which does the relevant parts of \"rebuilding platform\" for its host</li>\n<li>the goal of the platform build script should be outputting a Roc precompiled host file</li>\n</ul>\n</blockquote>\n<p>We have an issue for tracking this <a href=\"https://github.com/roc-lang/roc/issues/6414\">#6414</a> if anyone is interested.</p>",
+        "id": 424973522,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1709679714
+    },
+    {
+        "content": "<p>Related issue: <a href=\"https://github.com/roc-lang/roc/issues/6037\">#6037</a></p>",
+        "id": 424974789,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1709680363
+    },
+    {
+        "content": "<p>Might be duplicates to some extent</p>",
+        "id": 424974806,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1709680376
+    },
+    {
+        "content": "<p>Yeah looks like a duplicate. I dont mind closing, just want to check we have all the things covered. I wont be able to look at it in any detail for a couple of days.</p>",
+        "id": 425056233,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1709721965
+    }
+]

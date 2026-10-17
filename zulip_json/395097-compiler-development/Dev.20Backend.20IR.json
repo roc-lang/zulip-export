@@ -1,0 +1,1898 @@
+[
+    {
+        "content": "<p>This is a pretty open thought, but I am questioning if we should change the Dev backend to have an ir that can be stored in a flat array (rather than a tree structure/not existing), that is essentially a portable assembly (one op per function in the <a href=\"https://github.com/roc-lang/roc/blob/fc6b519b5948023981ac5751d2f6ee48bcef2316/crates/compiler/gen_dev/src/generic64/mod.rs#L153-L742\">current Assembler trait</a>).</p>\n<p>So it would kinda be akin to llvm ir, but just what we need to support the dev backend. It would also just be for defining within a single procedure and any jmp type instructions would just use a integer as the target that is which other instruction in the array to jump to.</p>\n<hr>\n<p>The main gain of doing this is for future minor optimizations that we want to run on the ir. The big one being register allocation. With the current IR, register allocation, and lifetimes in general, are very much not a clean problem. Mono is a tree. It also is not nearly as fine grain as individual assembly instructions. So it is very hard to have any idea how many registers will be needed for a specific mono ir node.</p>\n<p>I think that we should have a very fast pass that runs over mono and blits out a flat array of assembly like instructions. (essentially will be equivalent to the current dev backend but less complex due to having infinite registers for example).</p>\n<p>Then we would run register allocation on the flat array (lots of good algorithms with linear time exist for this). Given the assembly ir won't perfectly match to assembly instructions, we will have a backend dependent function that will label exactly how many temporary registers an instruction will need. That is all the information we should need to deal with register allocations.</p>\n<p>Once that works, we can consider other minor but fast optimizations:</p>\n<ul>\n<li>grouping instructions for final output</li>\n<li>intentionally reusing source and dest reg to avoid extra data movement instructions</li>\n<li>freeing up the base pointer by calculating all offsets with the stack pointer</li>\n<li>storing some aggregate values in registers if available instead of on the stack</li>\n<li>maybe some minor and quick rewrites.</li>\n</ul>\n<p>Especially given we generate at the procedure level, it should be possible to run this part of the dev backend in parallel. Only merging the final generated assembly into an output object file.</p>\n<p>I think this will help clean up some of the complexities of the dev backend related to where data is stored and how it is loaded. It should help separate that  work cleanly from the rest of the ir selection at a minimum. It also gives us some opportunities for minor but important optimization passes over dev backend ir.</p>\n<hr>\n<p>What are people's thoughts on this? I would guess <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> and <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> would have the most input.</p>",
+        "id": 419345319,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1706826834
+    },
+    {
+        "content": "<p>so my default thinking on anything to do with the dev backend is \"fewer passes is faster, so let's minimize passes\"</p>",
+        "id": 419351123,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1706829597
+    },
+    {
+        "content": "<p>obviously there can possibly exist a way to take a given implementation and actually make a faster implementation which does more passes, but by default it's going to be slower</p>",
+        "id": 419351254,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1706829638
+    },
+    {
+        "content": "<p>so my immediate reaction is \"to what extent could we achieve some of these goals without introducing any new passes or IRs?\"</p>",
+        "id": 419351318,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1706829667
+    },
+    {
+        "content": "<p>I think it is important to start with, we definitely want ok register allocation in the long term. It will be important to get enough performance that end users actually want to use the dev backend for reasonably sized projects. On top of that, it will be useful for making the dev backend output assembly easier to read and debug.</p>",
+        "id": 419352159,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1706830024
+    },
+    {
+        "content": "<p>I don't think it will be feasible to generate ok register allocation while depending only on Mono IR.</p>\n<p>Or more accurately, we probably could find a way to force it to happen, but it would be exceptionally messy. The current super simple register and stack allocation strategy built on mono is already messy.</p>",
+        "id": 419352349,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1706830120
+    },
+    {
+        "content": "<p>I'll just say that in principle I'm on board with this idea. The current register allocation is fundamentally limited, I don't think there is a (good) way to traverse the tree structure and perform the register allocation in one pass</p>",
+        "id": 419352373,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1706830134
+    },
+    {
+        "content": "<blockquote>\n<p>so my default thinking on anything to do with the dev backend is \"fewer passes is faster, so let's minimize passes\"</p>\n</blockquote>\n<p>My general thoughts are:</p>\n<ol>\n<li>The dev backend is already fast. Frontend and typechecking and such is likely to be the bottleneck by a large margin currently.</li>\n<li>The dev backend can easily be n times faster by running procedures in parallel.</li>\n<li>This change should make the dev backend simplier and easier to maintain my avoiding intermixing the handling of multiple different concerns.</li>\n<li>This is practically required to do ok register allocation</li>\n<li>All \"extra\" optimizations can be evaluated one at a time to see if they meet our tradeoffs.</li>\n</ol>",
+        "id": 419353346,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1706830624
+    },
+    {
+        "content": "<p>so could it be done in 1 extra pass?</p>",
+        "id": 419355097,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1706831413
+    },
+    {
+        "content": "<p>as in:</p>\n<ul>\n<li>today we do mono IR -&gt; bytes</li>\n<li>in this world we do mono IR -&gt; new IR -&gt; bytes</li>\n</ul>",
+        "id": 419355151,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1706831448
+    },
+    {
+        "content": "<p>Yeah. Though technically today we do one pass on mono to record lifetimes and in the new form we would do one pass on the new ir to do register allocation instead.</p>",
+        "id": 419355334,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1706831527
+    },
+    {
+        "content": "<p>that sounds good to me then! <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 419356935,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1706832251
+    },
+    {
+        "content": "<p>One extra note, if we do any of the other extra optimizations that I mentioned, they would all run on this IR (and some may actually just be extensions to the linear register allocator pass). So definitely no other IRs.</p>",
+        "id": 419357407,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1706832472
+    },
+    {
+        "content": "<p>What's the status of this?</p>",
+        "id": 485962338,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733263340
+    },
+    {
+        "content": "<p>nobody is working on it right now, as far as I know</p>",
+        "id": 485963024,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733263602
+    },
+    {
+        "content": "<p>but it would be awesome if anyone wanted to get it going! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 485963054,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733263617
+    },
+    {
+        "content": "<p>Yeah, totally unstarted</p>",
+        "id": 485964341,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733264116
+    },
+    {
+        "content": "<p>Just documented</p>",
+        "id": 485964357,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733264122
+    },
+    {
+        "content": "<p>also how would this pass / perserve registers when jumps happen (what's the calling convention)?</p>",
+        "id": 485967405,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733265341
+    },
+    {
+        "content": "<p>Jumps or calls?</p>",
+        "id": 485968227,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733265691
+    },
+    {
+        "content": "<p>Any, calls sound be c calling convention</p>",
+        "id": 485968685,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733265873
+    },
+    {
+        "content": "<p>Jumps are up to us but theoretically can keep everything alive.</p>",
+        "id": 485968788,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733265920
+    },
+    {
+        "content": "<p>If stashing out happen inside a loop from a join point, we would just want to hoist whatever possible before the join point so it isn't stashing on repeat in the loop</p>",
+        "id": 485969000,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733266009
+    },
+    {
+        "content": "<p>calls</p>",
+        "id": 485969030,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733266025
+    },
+    {
+        "content": "<p>Of course still might have stashing in a loop due to locals for the loop</p>",
+        "id": 485969053,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733266040
+    },
+    {
+        "content": "<p>Yeah, calls are just c abi.</p>",
+        "id": 485969064,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733266048
+    },
+    {
+        "content": "<p>c is just preserve the arguement on a stack right?</p>",
+        "id": 485969108,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733266074
+    },
+    {
+        "content": "<p>Anytime one comes up, we just ban a list of registers and have to stash what's in them</p>",
+        "id": 485969122,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733266082
+    },
+    {
+        "content": "<p>Yeah, we stash to the stack whenever out of register space</p>",
+        "id": 485969179,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733266094
+    },
+    {
+        "content": "<p>got it</p>",
+        "id": 485969199,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733266104
+    },
+    {
+        "content": "<p>In the GitHub issue, I link to some good article on linear time register allocation passes</p>",
+        "id": 485969528,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733266244
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"782426\">@Wizard ish</span> are you interested in diving into this? <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 485978254,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733270225
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> Perhaps, although I'll have to freshen up on my assembly first</p>",
+        "id": 485978925,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733270478
+    },
+    {
+        "content": "<p>that's awesome! feel free to post any questions here! <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 485979785,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1733270799
+    },
+    {
+        "content": "<p>For the most part you should not have to generate any assembly directly. Cause we already have the assembler trait. That said, brushing up on assembly will definitely help use the trait, map it to an ir, and debug issues.</p>",
+        "id": 485998547,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733279821
+    },
+    {
+        "content": "<p>yeah and i also want to re-famaliarize myself with just the whole thing yk</p>",
+        "id": 485998630,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733279874
+    },
+    {
+        "content": "<p>been like a year or two since ive done any assembly</p>",
+        "id": 485998684,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733279885
+    },
+    {
+        "content": "<p>Makes sense</p>",
+        "id": 485999158,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733280127
+    },
+    {
+        "content": "<p>only one thing i really disagree with, and that's that the ir should use a integer as the target for jumps, which, given that the whole point would be for optimization, seems like it would be pretty hard to deal with (i would make essientally \"label\" no-ops that are used when generating the actual machine code, so basically like assembly). For instance, if we have a function that is (this is a very contrived example and also i didn't test that this on any assembler (note that destination first is used)):</p>\n<div class=\"codehilite\" data-code-language=\"GAS\"><pre><span></span><code><span class=\"nf\">store</span><span class=\"w\"> </span><span class=\"no\">LOC</span><span class=\"w\"> </span><span class=\"no\">eax</span><span class=\"w\"> </span><span class=\"c1\">;0</span>\n<span class=\"nf\">add</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"no\">eax</span><span class=\"w\"> </span><span class=\"c1\">;1</span>\n<span class=\"nf\">load</span><span class=\"w\"> </span><span class=\"no\">eax</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"no\">LOC</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"c1\">;2</span>\n<span class=\"nl\">JumpTo:</span><span class=\"w\"> </span><span class=\"c1\">;3</span>\n<span class=\"nf\">sub</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"mi\">#1</span><span class=\"w\"> </span><span class=\"c1\">;4</span>\n<span class=\"nf\">cmp</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"mi\">#5</span><span class=\"w\"> </span><span class=\"c1\">;5</span>\n<span class=\"nf\">jge</span><span class=\"w\"> </span><span class=\"no\">JumpTo</span><span class=\"w\"> </span><span class=\"c1\">;6</span>\n</code></pre></div>\n<p>if we <em>first</em> transform the labels to the instructions they refrence (technically LOC is also a label but that's not important) we get:</p>\n<div class=\"codehilite\" data-code-language=\"GAS\"><pre><span></span><code><span class=\"nf\">store</span><span class=\"w\"> </span><span class=\"no\">LOC</span><span class=\"w\"> </span><span class=\"no\">eax</span><span class=\"w\"> </span><span class=\"c1\">;0</span>\n<span class=\"nf\">add</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"no\">eax</span><span class=\"w\"> </span><span class=\"c1\">;1</span>\n<span class=\"nf\">load</span><span class=\"w\"> </span><span class=\"no\">eax</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"no\">LOC</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"c1\">;2</span>\n<span class=\"nf\">nop</span><span class=\"w\"> </span><span class=\"c1\">;3</span>\n<span class=\"nf\">sub</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"mi\">#1</span><span class=\"w\"> </span><span class=\"c1\">;4</span>\n<span class=\"nf\">cmp</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"mi\">#5</span><span class=\"w\"> </span><span class=\"c1\">;5</span>\n<span class=\"nf\">jge</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"mi\">3</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"c1\">;6</span>\n</code></pre></div>\n<p>Then when optimized, we get </p>\n<div class=\"codehilite\" data-code-language=\"GAS\"><pre><span></span><code><span class=\"nf\">add</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"no\">eax</span><span class=\"w\"> </span><span class=\"c1\">;0</span>\n<span class=\"nf\">sub</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"mi\">#1</span><span class=\"w\"> </span><span class=\"c1\">;1</span>\n<span class=\"nf\">cmp</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"mi\">#5</span><span class=\"w\"> </span><span class=\"c1\">;2</span>\n<span class=\"nf\">jge</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"mi\">3</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"c1\">;3</span>\n</code></pre></div>\n<p>Where the <code>jge</code> is now a loop, not the desired behavior! However, if we looked up the labels after, it is first optimized to:</p>\n<div class=\"codehilite\" data-code-language=\"GAS\"><pre><span></span><code><span class=\"nf\">add</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"no\">eax</span><span class=\"w\"> </span><span class=\"c1\">;0</span>\n<span class=\"nl\">JumpTo:</span><span class=\"w\"> </span><span class=\"c1\">;1</span>\n<span class=\"nf\">sub</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"mi\">#1</span><span class=\"w\"> </span><span class=\"c1\">;2</span>\n<span class=\"nf\">cmp</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"mi\">#5</span><span class=\"w\"> </span><span class=\"c1\">;3</span>\n<span class=\"nf\">jge</span><span class=\"w\"> </span><span class=\"no\">JumpTo</span><span class=\"w\"> </span><span class=\"c1\">;4</span>\n</code></pre></div>\n<p>Then we realize the labels:</p>\n<div class=\"codehilite\" data-code-language=\"GAS\"><pre><span></span><code><span class=\"nf\">add</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"no\">eax</span><span class=\"w\"> </span><span class=\"c1\">;0</span>\n<span class=\"nf\">nop</span><span class=\"w\"> </span><span class=\"c1\">;1</span>\n<span class=\"nf\">sub</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"mi\">#1</span><span class=\"w\"> </span><span class=\"c1\">;2</span>\n<span class=\"nf\">cmp</span><span class=\"w\"> </span><span class=\"no\">ebx</span><span class=\"w\"> </span><span class=\"mi\">#5</span><span class=\"w\"> </span><span class=\"c1\">;3</span>\n<span class=\"nf\">jge</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"mi\">1</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"c1\">;4</span>\n</code></pre></div>\n<p>We fix the problem</p>",
+        "id": 486206798,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733361140
+    },
+    {
+        "content": "<p>I dont think we plan to support those kinds of optimizations</p>",
+        "id": 486208331,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362219
+    },
+    {
+        "content": "<p>Moving a nodes index is really expensive. Would requiring shifting all later nodes in the array.</p>",
+        "id": 486208360,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362248
+    },
+    {
+        "content": "<p>Not if it was a linked list</p>",
+        "id": 486208394,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733362277
+    },
+    {
+        "content": "<p>That is a lot of unnecessary cost</p>",
+        "id": 486208425,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362303
+    },
+    {
+        "content": "<p>We only want something super slim</p>",
+        "id": 486208449,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362322
+    },
+    {
+        "content": "<p>This is the dev backend</p>",
+        "id": 486208493,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362327
+    },
+    {
+        "content": "<p>got it</p>",
+        "id": 486208511,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733362344
+    },
+    {
+        "content": "<p>We can pattern match on final assembly generation if we want, but I don't think we want any passes that actually mutate this array in large ways (like inserting or deleting a node)</p>",
+        "id": 486208550,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362386
+    },
+    {
+        "content": "<p>Register and stack info probably will be sideband to avoid inserting a bunch of load and store instructions into the ir.</p>",
+        "id": 486208601,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362438
+    },
+    {
+        "content": "<p>At least that is the hope if it works out in practice</p>",
+        "id": 486208654,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362454
+    },
+    {
+        "content": "<p>Just one quick write to go from mono to a flat array of roughly assembly. N passes that just edit nodes inplace or add sideband info. A final pass to take all that info and actually generate the final assembly.</p>",
+        "id": 486208701,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362507
+    },
+    {
+        "content": "<p>That's roughly the theory and hope.</p>",
+        "id": 486208718,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362521
+    },
+    {
+        "content": "<p>Note: I totally could be off about a constraint here. I have not thought about this in a long time or dug through it in a ton of detail. For background context. There was debate around if we should even add another ir. What we do currently is super adhoc, but it generates assembly crazy fast. We really want to keep as much of that speed as possible, just get slightly more reasonable dev assembly.</p>",
+        "id": 486209280,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362945
+    },
+    {
+        "content": "<p>But the target is still roughly <code>-O0</code> assembly</p>",
+        "id": 486209304,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733362970
+    },
+    {
+        "content": "<p>oh yeah i thought it was gonna be something that would act as an IR for all the backends, so in other words, <code>Roc -&gt; IR</code> , and then <code>IR -&gt; LLVM</code>, <code>IR -&gt; WASM</code>, and, for the dev backend, just have an evaluator to get rid of the giant overhead of compilation</p>",
+        "id": 486211437,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733364397
+    },
+    {
+        "content": "<p>but that makes a lot less sense now that i think about it</p>",
+        "id": 486211505,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733364450
+    },
+    {
+        "content": "<p>Also why isn’t the dev backend just an interpreter? Wouldn’t that make it much faster</p>",
+        "id": 486381396,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733427935
+    },
+    {
+        "content": "<p>Roc isn't limited to being used through the cli, you can also compile it and embed it in other things. Also this interpreter would need to be platform specific.</p>",
+        "id": 486385192,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733429341
+    },
+    {
+        "content": "<p>No simply for the dev backend, as the idea for it is to be used for... devoloping. So keep LLVM, use that for release builds, and use <code>dev</code> for debugging.</p>",
+        "id": 486385334,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733429402
+    },
+    {
+        "content": "<p>I think <span class=\"user-mention\" data-user-id=\"453714\">@Ryan Barth</span> had some interesting ideas in this direction. Not sure where we got to with that.</p>",
+        "id": 486385414,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733429417
+    },
+    {
+        "content": "<p>ok, also, just because i feel like there is definitly something I'm doing wrong in <a href=\"https://github.com/roc-lang/roc/issues/7249\">#7249</a>, how does one sign old commits that have already been pushed</p>",
+        "id": 486385500,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733429458
+    },
+    {
+        "content": "<p>An admin can bypass and merge, or you can interactively rebase and sign. I have a note on my laptop how to do it if you want to try that.</p>",
+        "id": 486385725,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733429550
+    },
+    {
+        "content": "<p>yeah the rebasing, ive tried that a couple times but for some reason it appears to not fix the issue...</p>",
+        "id": 486385762,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733429574
+    },
+    {
+        "content": "<p>Nvm, I just realised what we were talking about. All done <span aria-label=\"grinning\" class=\"emoji emoji-1f600\" role=\"img\" title=\"grinning\">:grinning:</span></p>",
+        "id": 486385803,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733429590
+    },
+    {
+        "content": "<p>Thanks for working on that, and your patience</p>",
+        "id": 486385877,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733429627
+    },
+    {
+        "content": "<p>ok ty and np (alas this is why i need to read the fine print of stuff...)</p>",
+        "id": 486385902,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733429640
+    },
+    {
+        "content": "<p>Pro tip, you can do <code>git rebase --exec 'git commit --amend --no-edit -S' main</code> to rebase on main and sign all your commits.</p>",
+        "id": 486449115,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1733466583
+    },
+    {
+        "content": "<p>It can be a lot more complicated if you got merges in your commits as well</p>",
+        "id": 486489441,
+        "sender_full_name": "Anton",
+        "timestamp": 1733483076
+    },
+    {
+        "content": "<p>Merges?  I thought we lived in a civilized world?</p>",
+        "id": 486496237,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1733485498
+    },
+    {
+        "content": "<p>Sorry I did not see your comment, I did a force push after my rebase :p</p>",
+        "id": 486496664,
+        "sender_full_name": "Anton",
+        "timestamp": 1733485648
+    },
+    {
+        "content": "<p>Hopefully no one else is working on my feature branch :-)</p>",
+        "id": 486496810,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1733485690
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"781658\">Anthony Bullard</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Dev.20Backend.20IR/near/486496237\">said</a>:</p>\n<blockquote>\n<p>Merges?  I thought we lived in a civilized world?</p>\n</blockquote>\n<p>I think that a rebase only world is delightful, but I have really learned that many people can't cope with rebase. To be fair, rebase gets absolutely horrid if you make millions of small commits. (Which I think is way more common in open source).</p>\n<p>Also, gits and GitHub are only mid at best. If they were better, rebasing might be more common.</p>",
+        "id": 486549663,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733502164
+    },
+    {
+        "content": "<p>Should 128-bit registers be part of this IR? as far as I understand, 128-bit values have to be moved to stack, then mov'd to 2 64-bit registers in our current design, but if we're going to have some abstract IR register map to chip register anyway, I wonder how tricky it would be to allow 1 IR register to map to one or two chip registers based on the size?</p>",
+        "id": 486681700,
+        "sender_full_name": "shua",
+        "timestamp": 1733587245
+    },
+    {
+        "content": "<p>I don't think so. Cause you don't necessarily have to have both parts loaded at the same time. And that can enable better register use.</p>",
+        "id": 486687805,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733591734
+    },
+    {
+        "content": "<p>So better to see it as a tuple of 2 u64</p>",
+        "id": 486687825,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733591752
+    },
+    {
+        "content": "<p>do you have an example in mind? I suspect it won't be useful at the Mono-&gt;IR translation level to split across two IR registers, but rather something we do when translating IR-&gt;asm In other words, it's not useful to work on one half at a time in <code>gen_dev/generic64/mod.rs</code> which is where I imagine translating Mono to IR happens, but rather in <code>gen_dev/generic64/x86_64.rs</code> where translating IR to x86 asm happens.</p>",
+        "id": 486692310,
+        "sender_full_name": "shua",
+        "timestamp": 1733595476
+    },
+    {
+        "content": "<p>(I'm assuming also that allocating registers happens in the IR-&gt;asm steps)</p>",
+        "id": 486692427,
+        "sender_full_name": "shua",
+        "timestamp": 1733595575
+    },
+    {
+        "content": "<p>I actually think that it should just be registers are unspecified in size, and however large they need to be is specified at IR-&gt;Asm according to how large it needs to be according to instruction size, with perhaps a ‘extend’ and ‘truncate’ op, as it dosent really seem to be about “how much can we optimize instructions as “how much can we optimize memory usage” but that’s just my opinion</p>",
+        "id": 486692936,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733596015
+    },
+    {
+        "content": "<p>The main goal is to avoid tons of extra instructions that are just spilling and loading from stack.</p>",
+        "id": 486693520,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733596456
+    },
+    {
+        "content": "<p>Not really about memory usage, more about huge time sink and perf hit</p>",
+        "id": 486693583,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733596496
+    },
+    {
+        "content": "<p>Just too heavy to be reasonable in a loop</p>",
+        "id": 486693607,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733596513
+    },
+    {
+        "content": "<p>ASM doesn't work on 128 but values. Only register size or less values. I think keeping that abstraction is useful to make the target as simple as possible</p>",
+        "id": 486693731,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733596575
+    },
+    {
+        "content": "<p>That said, infinite sized registers are common with more complex register allocation algorithms.</p>",
+        "id": 486693823,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733596643
+    },
+    {
+        "content": "<p>So maybe would be valuable, haven't thought this through fully</p>",
+        "id": 486693843,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733596661
+    },
+    {
+        "content": "<p>Given that, due to following c abi, most things will be required on the stack anyway, I had leaned towards keeping it simple and storing the true value of more things on the stack (like is done today). Then only solve register allocation for live subvalues that are actually being acted on.</p>",
+        "id": 486694037,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733596796
+    },
+    {
+        "content": "<p>Definitely possible to do the reverse. Just changes the infrastructure father away from the simpler and more direct design of today (everything large has space on the stack and we only ever load register sized chunks of it)</p>",
+        "id": 486694128,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733596845
+    },
+    {
+        "content": "<p>I could be wrong, but I think with infinite sized registers, you likely need more passes and a more complex algorithm to complete register allocation</p>",
+        "id": 486694251,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733596930
+    },
+    {
+        "content": "<p>fair, and just to be clear, I haven't thought much past my recent attempt to implement add/sub/mul x checked/overflow/wrap for u128/i128 as asm rather than bitcode call. It feels like it would make those cases simpler, but raised the question here because that's a pretty narrow view.</p>",
+        "id": 486699139,
+        "sender_full_name": "shua",
+        "timestamp": 1733601005
+    },
+    {
+        "content": "<p>Hmmm yeah that makes sense, although abstracting that way makes it fundamentally harder to translate it to 32 bit</p>",
+        "id": 486699353,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733601201
+    },
+    {
+        "content": "<p>And also it might save a bit of memory by splitting registers (which would only be possible if we weren’t assuming each register is 64 bits)</p>",
+        "id": 486699443,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733601265
+    },
+    {
+        "content": "<p>But that would undoubtedly make it much more complex</p>",
+        "id": 486699454,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733601282
+    },
+    {
+        "content": "<p>One thing that would be hard to implement w/o memory apart from 64 bit registers are structs</p>",
+        "id": 486699513,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733601345
+    },
+    {
+        "content": "<p>As you’d need to use mutiple registers</p>",
+        "id": 486699520,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733601355
+    },
+    {
+        "content": "<p>Although you could just have “large registers” that will probably just become memory locations</p>",
+        "id": 486699579,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733601381
+    },
+    {
+        "content": "<p>re \"following c abi, most things will be required on the stack\", for the very specific case of those arithmetic functions that only take two u128/i128 arguments, they fit entirely in registers; and the return fits in rax+rdx as well. I haven't found a way to work with u128/i128 args that doesn't first push them to stack, so that's a case where not having 128bit registers (or a way to say \"give me the two 64bit registers that this 128bit argument has been already loaded into\") ends up with more mov's between stack/register.</p>",
+        "id": 486699785,
+        "sender_full_name": "shua",
+        "timestamp": 1733601561
+    },
+    {
+        "content": "<p>This could also be over-optimizing an edge case. I don't know how much roc code will be using <code>Num.mul</code> on u128/i128, but maybe <code>Dec</code>?</p>",
+        "id": 486699932,
+        "sender_full_name": "shua",
+        "timestamp": 1733601658
+    },
+    {
+        "content": "<p>Yeah I do think that having registers of diffrent sizes would be useful, even if it was a little more complex, either with or without splitting them, and yeah ‘Dec’ is a case, and a very large case, of where a 128 bit registers would be useful (though frankly I think if performance is a concern f64 or perhaps Frac should be used instead)</p>",
+        "id": 486700238,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733601900
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"782426\">Wizard ish</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Dev.20Backend.20IR/near/486699579\">said</a>:</p>\n<blockquote>\n<p>Although you could just have “large registers” that will probably just become memory locations</p>\n</blockquote>\n<p>Yeah, I guess this is essentially what we have now</p>",
+        "id": 486700372,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602006
+    },
+    {
+        "content": "<p>Perhaps a way to “unsplit” registers, ie, if one did ‘rax’ and ‘rbx’ become a 128bit ‘rabx’</p>",
+        "id": 486700420,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733602059
+    },
+    {
+        "content": "<p>if an example is any help, here's the change to <a href=\"https://github.com/shua/roc/commit/03dd480de4997509d1cdc56ac23d12eca81c66e3#diff-23699c56834955756a70ebbe1514d93b91f31073cbc15bc78a352ab70292b2c5R1437-R1470\">impl add u128/i128 as asm</a>.</p>",
+        "id": 486700480,
+        "sender_full_name": "shua",
+        "timestamp": 1733602095
+    },
+    {
+        "content": "<p>I don't quite follow that change, why is the argument pushed onto the stack? If it is already in registers, couldn't it be just used directly from those registers?</p>",
+        "id": 486700680,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602276
+    },
+    {
+        "content": "<p>We could have it so the virtual registers can have “hints” for the max size so if they’re moved into memory they can be smaller then the regular guarantee (ie if a register is used in a add 32 and mul 16 instructions and it has to at that point be moved into memory, instead of giving it a full 64 bits, it could just be given a 32 bit slot of memory (this would happen is IR-&gt;Backend</p>",
+        "id": 486700709,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733602317
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Dev.20Backend.20IR/near/486700680\">said</a>:</p>\n<blockquote>\n<p>I don't quite follow that change, why is the argument pushed onto the stack? If it is already in registers, couldn't it be just used directly from those registers?</p>\n</blockquote>\n<p>that's just my not understanding how is the best way to get u128 args. I couldn't find any examples using registers, only other things that pushed to stack, then read what was pushed.</p>",
+        "id": 486700790,
+        "sender_full_name": "shua",
+        "timestamp": 1733602359
+    },
+    {
+        "content": "<p>ok</p>",
+        "id": 486700802,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602380
+    },
+    {
+        "content": "<p>Also, I had assumed this ir would be just for generic64, I guess if it is for all of gen dev and a future theoretical generic32, it would need a more featured solution</p>",
+        "id": 486700958,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602530
+    },
+    {
+        "content": "<p>That said, if it is too generic, it can't do register allocation</p>",
+        "id": 486701032,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602587
+    },
+    {
+        "content": "<p>For example, you can't register allocate until you know if an i64 fits in a register or belongs on the stack</p>",
+        "id": 486701058,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602617
+    },
+    {
+        "content": "<p>If it belongs on the stack you have to generate multiple instructions to handle the addition</p>",
+        "id": 486701076,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602632
+    },
+    {
+        "content": "<p>And that set of instructions needs register alloctions</p>",
+        "id": 486701086,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602646
+    },
+    {
+        "content": "<p>Given we don't want too much complexity, it is nice to have the abstraction that everything larger than a register is always on the stack. An optimization would be to allow things to be partially on the stack and partially loaded. A different optimization would be to use 2 registers as the cut off cause that matches c abi (this is the issue referenced with adding u128 currently and requiring dumping to stack). I'm not sure any of those optimizations need to be in the dev backend</p>",
+        "id": 486701208,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602751
+    },
+    {
+        "content": "<p>My biggest concern is with being too generic is that it will lead to more required transformation and a significant cost in time to generate a binary with the dev backend.</p>",
+        "id": 486701287,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602808
+    },
+    {
+        "content": "<p>Yeah that’s the thing ain’t it, can’t be to complex</p>",
+        "id": 486701300,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733602821
+    },
+    {
+        "content": "<p>That is why I would learn towards just solving a bespoke solution for generic64 and not worring about 32 bit at all</p>",
+        "id": 486701310,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602843
+    },
+    {
+        "content": "<p>32bit really needs a different asm trait. Which means it needs an entirely different ir.</p>",
+        "id": 486701333,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602872
+    },
+    {
+        "content": "<p>yeah, I don't know what the right answer is, but \"complex structs on the stack, primitives in registers\" sounds correct. The question is what to do with u128/i128 and Dec. Are these primitives or complex?</p>",
+        "id": 486701340,
+        "sender_full_name": "shua",
+        "timestamp": 1733602880
+    },
+    {
+        "content": "<p>Although I feel that the stack should be abstracted as “struct registers” just to be the abstraction, although that might cause a performance problem</p>",
+        "id": 486701438,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733602956
+    },
+    {
+        "content": "<p>I think you are probably right</p>",
+        "id": 486701454,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602975
+    },
+    {
+        "content": "<p>About the abstraction</p>",
+        "id": 486701459,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733602982
+    },
+    {
+        "content": "<p>The assembly would have functions to load from and store to \"struct registers\". Then it would have tons more functions to operate on normal registers. It would later calculate stack offsets for all struct registers (maybe even using lifetime analysis to reuse stack space)</p>",
+        "id": 486701603,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733603083
+    },
+    {
+        "content": "<p>Wait so I was right about it being a good idea or a bad idea?</p>",
+        "id": 486701631,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733603117
+    },
+    {
+        "content": "<p>Also it could just have functions to go from struct to normal</p>",
+        "id": 486701650,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733603144
+    },
+    {
+        "content": "<p>That having struct registers as an abstraction for the stack is a good idea</p>",
+        "id": 486701654,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733603151
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"722031\">shua</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Dev.20Backend.20IR/near/486701340\">said</a>:</p>\n<blockquote>\n<p>yeah, I don't know what the right answer is, but \"complex structs on the stack, primitives in registers\" sounds correct. The question is what to do with u128/i128 and Dec. Are these primitives or complex?</p>\n</blockquote>\n<p>I think they have to be seen as complex due to no real assembly operations being available for them. If we want to do a minor optimization, we could make a special optimization to allow storing them in 2 registers.</p>",
+        "id": 486702255,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733603668
+    },
+    {
+        "content": "<p>I think you're right. I only have one counterpoint which is in x86_64, <code>mul rcx</code> will have as dest, <code>rax</code> and <code>rdx</code> which is a 128bit value split over two 64bit registers.</p>",
+        "id": 486703471,
+        "sender_full_name": "shua",
+        "timestamp": 1733604814
+    },
+    {
+        "content": "<p>Yeah, it is definitely imperfect. We need a smart way for assembly operations to claim registers temporarily.</p>",
+        "id": 486709438,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733609784
+    },
+    {
+        "content": "<p>Hmmm well for the meantime tomorrow ill write up something to describe it just so we’re all on the same page</p>",
+        "id": 486717413,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733616868
+    },
+    {
+        "content": "<p><span aria-label=\"folded hands\" class=\"emoji emoji-1f64f\" role=\"img\" title=\"folded hands\">:folded_hands:</span></p>",
+        "id": 486718692,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733618131
+    },
+    {
+        "content": "<p>Oh, and one final thing, how should results be given, should they (all the following all accomplish </p>\n<p><span class=\"katex-display\"><span class=\"katex\"><span class=\"katex-mathml\"><math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><semantics><mrow><mi>C</mi><mo>=</mo><mi>A</mi><mo>+</mo><mi>B</mi></mrow><annotation encoding=\"application/x-tex\">C=A+B</annotation></semantics></math></span><span class=\"katex-html\" aria-hidden=\"true\"><span class=\"base\"><span class=\"strut\" style=\"height:0.6833em;\"></span><span class=\"mord mathnormal\" style=\"margin-right:0.07153em;\">C</span><span class=\"mspace\" style=\"margin-right:0.2778em;\"></span><span class=\"mrel\">=</span><span class=\"mspace\" style=\"margin-right:0.2778em;\"></span></span><span class=\"base\"><span class=\"strut\" style=\"height:0.7667em;vertical-align:-0.0833em;\"></span><span class=\"mord mathnormal\">A</span><span class=\"mspace\" style=\"margin-right:0.2222em;\"></span><span class=\"mbin\">+</span><span class=\"mspace\" style=\"margin-right:0.2222em;\"></span></span><span class=\"base\"><span class=\"strut\" style=\"height:0.6833em;\"></span><span class=\"mord mathnormal\" style=\"margin-right:0.05017em;\">B</span></span></span></span></span></p>\n<ol>\n<li>Be stored in an Accumulator (<code>ACC</code>)</li>\n</ol>\n<div class=\"codehilite\" data-code-language=\"GAS\"><pre><span></span><code><span class=\"nf\">add</span><span class=\"w\"> </span><span class=\"no\">A</span><span class=\"w\"> </span><span class=\"no\">B</span>\n<span class=\"nf\">mov</span><span class=\"w\"> </span><span class=\"no\">C</span><span class=\"w\"> </span><span class=\"no\">ACC</span>\n</code></pre></div>\n<ol start=\"2\">\n<li>Be stored in a operand (to the function itself) </li>\n</ol>\n<div class=\"codehilite\" data-code-language=\"GAS\"><pre><span></span><code><span class=\"nf\">mov</span><span class=\"w\"> </span><span class=\"no\">C</span><span class=\"w\"> </span><span class=\"no\">A</span>\n<span class=\"nf\">add</span><span class=\"w\"> </span><span class=\"no\">C</span><span class=\"w\"> </span><span class=\"no\">B</span>\n</code></pre></div>\n<ol start=\"3\">\n<li>Or stored in a operand given seperatly </li>\n</ol>\n<div class=\"codehilite\" data-code-language=\"GAS\"><pre><span></span><code><span class=\"nf\">add</span><span class=\"w\"> </span><span class=\"no\">C</span><span class=\"w\"> </span><span class=\"no\">A</span><span class=\"w\"> </span><span class=\"no\">B</span>\n</code></pre></div>",
+        "id": 486790650,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733681386
+    },
+    {
+        "content": "<p>also IMO it shoud be called ROAR :) <br>\nROAR = Roc Optimizable Abstract Representation</p>",
+        "id": 486791392,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733681987
+    },
+    {
+        "content": "<p>I would suggest (2)</p>",
+        "id": 486793727,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1733683889
+    },
+    {
+        "content": "<p>yeah that is the most common, but i also like option 1, as it allows for calls to functions and their returns to be modeled quite simply, although of course that increases complexity</p>",
+        "id": 486793858,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733683994
+    },
+    {
+        "content": "<p>Current assembly is all 3 arg like arm</p>",
+        "id": 486796599,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733686260
+    },
+    {
+        "content": "<p>I think that is nicest</p>",
+        "id": 486796610,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733686266
+    },
+    {
+        "content": "<p>Encode result register in the ASM directly</p>",
+        "id": 486796620,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733686275
+    },
+    {
+        "content": "<p>i think all have their merits personally</p>",
+        "id": 486796645,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733686294
+    },
+    {
+        "content": "<p>So it all matches 3 today</p>",
+        "id": 486796653,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733686299
+    },
+    {
+        "content": "<p>although given it's purpose 3 is probably the best (it makes it very apparent what registers are being <em>modified</em>)</p>",
+        "id": 486796708,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733686324
+    },
+    {
+        "content": "<p>Given risc v and arm are both 3 and x86 is the only special on (and it is trivial to decompose to x86), I would push for 3.</p>",
+        "id": 486796734,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733686358
+    },
+    {
+        "content": "<p>ok then itll be 3 :)</p>",
+        "id": 486796761,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733686383
+    },
+    {
+        "content": "<p>so i think thats it, which is to say in about fifteen minutes ill probably have another question :)</p>",
+        "id": 486796785,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733686413
+    },
+    {
+        "content": "<p>Also, you can always do (<code>add a a b</code> for I place if register allocation realizes it is ok)</p>",
+        "id": 486796788,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733686415
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"782426\">Wizard ish</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Dev.20Backend.20IR/near/486791392\">said</a>:</p>\n<blockquote>\n<p>also IMO it shoud be called ROAR :) <br>\nROAR = Roc Optimizable Abstract Representation</p>\n</blockquote>\n<p>Also what yall think, yae or nae for <em>ROAR</em></p>",
+        "id": 486805883,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733694319
+    },
+    {
+        "content": "<p>I'm here for the name. It's fun to pick something like that and have it persist for a decade or so and have people take it seriously</p>",
+        "id": 486805962,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733694377
+    },
+    {
+        "content": "<p>Made a first draft of the <a href=\"https://github.com/wizard7377/roc/blob/29f2cdfb823fef8c7513b43300441ccf9cd19a0f/design/language/Roar.md\">proposal</a></p>",
+        "id": 486816803,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733703977
+    },
+    {
+        "content": "<p>Looking great, thanks for taking the time to do this design work. I think it will really help to clarify things.</p>\n<p>I've copied some random notes from skimming back through the thread. </p>\n<p>I think it would be helpful to provide a little more context/background or a summary to motivate this change. We can talk about how the dev backend is currently very fast but maybe fragile or overly complicated... (my words, no idea if this is accurate). </p>\n<ul>\n<li>\n<p>Goal: reduce complexity of the dev backend related to where data is stored and how it is loaded</p>\n</li>\n<li>\n<p>Goal: maintain fast compilation speed for the development backend, while improving runtime performance.</p>\n</li>\n</ul>\n<blockquote>\n<p>we definitely want ok register allocation in the long term. It will be important to get enough performance that end users actually want to use the dev backend for reasonably sized projects.</p>\n</blockquote>\n<ul>\n<li>Goal: provide register allocation </li>\n</ul>\n<blockquote>\n<p>it will be useful for making the dev backend output assembly easier to read and debug.</p>\n</blockquote>\n<ul>\n<li>Goal: improve maintainability for dev backend</li>\n</ul>\n<p>Does this improve our ability to test things? should we mention that? </p>\n<blockquote>\n<p>change the Dev backend to have an ir that can be stored in a flat array (rather than a tree structure/not existing), that is essentially a portable assembly (one op per function in the current Assembler trait). Main gain of doing this is for future minor optimizations that we want to run on the ir. The big one being register allocation. With the current IR, register allocation, and lifetimes in general, are very much not a clean problem. Mono is a tree. It also is not nearly as fine grain as individual assembly instructions. So it is very hard to have any idea how many registers will be needed for a specific mono ir node.</p>\n</blockquote>\n<p>Should we include this motivation in the ROAR proposal?</p>\n<ul>\n<li>used only for 64-bit development backends</li>\n</ul>\n<p>I may have missed it, but is this mentioned in the ROAR proposal? 32-bit architectures are out of scope.</p>\n<blockquote>\n<p>\"It would also just be for defining within a single procedure and any jmp type instructions would just use a integer as the target that is which other instruction in the array to jump to.\"</p>\n</blockquote>\n<p>Is this covered in the proposal?</p>\n<blockquote>\n<p>Possible future optimisations<br>\n- grouping instructions for final output<br>\n- intentionally reusing source and dest reg to avoid extra data movement instructions<br>\n- freeing up the base pointer by calculating all offsets with the stack pointer<br>\n- storing some aggregate values in registers if available instead of on the stack<br>\n- maybe some minor and quick rewrites.</p>\n</blockquote>\n<p>Would be good to include future work in the context of ROAR</p>\n<blockquote>\n<p>All \"extra\" optimizations can be evaluated one at a time to see if they meet our tradeoffs.</p>\n</blockquote>\n<p>Future optimizations can be evaluated individually. how would we do this? is this something we can benchmark easily?</p>\n<blockquote>\n<p>it should be possible to run this part of the dev backend in parallel. Only merging the final generated assembly into an output object file.</p>\n</blockquote>\n<p>Is this possible or a goal? would be good to mention it.</p>",
+        "id": 486821769,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733708085
+    },
+    {
+        "content": "<p>Ok, yeah Ill get to adding those (thanks for taking time to review it)</p>",
+        "id": 486823158,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733709153
+    },
+    {
+        "content": "<p>Sorry for being slow about commenting on this (energy for roc has been low lately). Will try to write up more comprehensive comments hopefully this afternoon PST.</p>",
+        "id": 487077940,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733771651
+    },
+    {
+        "content": "<p>I have two ideas, both of which involve function calls, that I'm interested to hear your opionions on:</p>\n<ol>\n<li>While local jumps have been covered as being absolute addresses, I think that there should be a more adressing modes. As mentioned before, ROAR will diffenitly be split up into functions, with each one being a discrete chunk of code. However, I think we should also have larger <em>segments</em>, with those being groups of function, each one reperesenting a single program unit (a library or file, perhaps)</li>\n<li>Relatedly, ROAR does not have a way to deal with IO and other specific needs. As the goal of ROAR is to be simple, I would propose a simple \"black box\" instruction, <code>int N</code> (derived from the instruction in x86 for interupts) which would be do a special action N, which can't be modeled in ROAR. IMO this would go right along with Roc's notion of \"platforms\", and they could be correlated (although this isn't substantiated by any logical reason, just a general sort of feeling)<br>\nSo yeah what do yall think about these?</li>\n</ol>",
+        "id": 487104842,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733780463
+    },
+    {
+        "content": "<p>also just making sure about this (because its a pretty big thing) the goal would be to go from <code>Roc-&gt;ROAR-&gt;Bin</code> as opposed to the current <code>Roc-&gt;Mono-&gt;Bin</code>?</p>",
+        "id": 487122370,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733787483
+    },
+    {
+        "content": "<p>Not an expert, but presumably it'd be <code>Roc-&gt;Mono-&gt;ROAR-&gt;Bin</code></p>",
+        "id": 487122674,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787618
+    },
+    {
+        "content": "<p>Monomorphization is the process that takes generic functions and spits out statically typed functions</p>",
+        "id": 487122726,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787652
+    },
+    {
+        "content": "<p>It's probably not worth having to duplicate that effort in ROAR</p>",
+        "id": 487122778,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787686
+    },
+    {
+        "content": "<p>Let me read the proposal first</p>",
+        "id": 487122843,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787721
+    },
+    {
+        "content": "<p>wait a moment, is Roc Mono diffrent from .Net Mono?</p>",
+        "id": 487122942,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733787754
+    },
+    {
+        "content": "<p>it's not like an extension?</p>",
+        "id": 487122979,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733787773
+    },
+    {
+        "content": "<p>I don't know dot net's Mono</p>",
+        "id": 487123010,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787795
+    },
+    {
+        "content": "<p>But Roc mono is a lot like Rust's mono</p>",
+        "id": 487123024,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787804
+    },
+    {
+        "content": "<p>oh that's why a lot of stuff about it didn't make much sense</p>",
+        "id": 487123059,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733787825
+    },
+    {
+        "content": "<p>It's a phase of the compiler after type checking where we take type checked code and spit out IR that is simple yet concrete</p>",
+        "id": 487123087,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787840
+    },
+    {
+        "content": "<p>So if I have a function that typechecked to <code>numToStr : Num * -&gt; Str</code></p>",
+        "id": 487123175,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787873
+    },
+    {
+        "content": "<p>And I use it with the inputs <code>U64</code> and <code>I8</code></p>",
+        "id": 487123202,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787887
+    },
+    {
+        "content": "<p>I'll get two functions out of mono, <code>numToStr : U64 -&gt; Str</code> and <code>numToStr : I8 -&gt; Str</code></p>",
+        "id": 487123250,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787909
+    },
+    {
+        "content": "<p>Yeah that makes more sense...<br>\nI was wondering why Roc used the Microsoft IR, but this makes way more sense</p>",
+        "id": 487123321,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733787953
+    },
+    {
+        "content": "<p>Now, that's based on my incomplete understanding of what:</p>\n<ul>\n<li>The part of the code I've read said</li>\n<li>How I understand Rust's mono works</li>\n<li>How I've have our code explained at a high level</li>\n</ul>",
+        "id": 487123329,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787958
+    },
+    {
+        "content": "<p><a href=\"https://en.wikipedia.org/wiki/Monomorphization\">https://en.wikipedia.org/wiki/Monomorphization</a></p>",
+        "id": 487123395,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733787973
+    },
+    {
+        "content": "<p>Monomorphization is good because it trades a larger binary size for better performance</p>",
+        "id": 487123440,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733788000
+    },
+    {
+        "content": "<p>If you don't do monomorphization, you end up with a single function that needs to check the input's type at runtime</p>",
+        "id": 487123473,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733788020
+    },
+    {
+        "content": "<p>More or less</p>",
+        "id": 487123493,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733788032
+    },
+    {
+        "content": "<p>I thought Mono Ir refered to <a href=\"https://www.mono-project.com/docs/advanced/runtime/docs/linear-ir/\">this</a> <span aria-label=\"speechless\" class=\"emoji emoji-1f636\" role=\"img\" title=\"speechless\">:speechless:</span></p>",
+        "id": 487123935,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733788237
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/tree/main/crates#roc-compiler-stages\">https://github.com/roc-lang/roc/tree/main/crates#roc-compiler-stages</a></p>\n<p>This might be helpful</p>",
+        "id": 487124073,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1733788309
+    },
+    {
+        "content": "<p>Specialize is the term in that diagram</p>",
+        "id": 487124157,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733788340
+    },
+    {
+        "content": "<p>yeah that was my bad for <em>really</em> reading things too quickly</p>",
+        "id": 487124198,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733788361
+    },
+    {
+        "content": "<p>As in \"take each specific use of generic entities and make a specialized version\"</p>",
+        "id": 487124210,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733788367
+    },
+    {
+        "content": "<p>Welcome to the club</p>",
+        "id": 487124229,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733788376
+    },
+    {
+        "content": "<p>Don't worry about it too much. I think the more important part is that you're helping us make a big improvement part to a tricky part of the compiler. That's awesome!</p>",
+        "id": 487124292,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733788413
+    },
+    {
+        "content": "<p>yeah, well fourtanetly it dosen't actually affect my understanding of it that much, as the idea is basically the same, but thank you for the patience :)</p>",
+        "id": 487124437,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733788488
+    },
+    {
+        "content": "<p>Of course</p>",
+        "id": 487124460,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733788500
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"782426\">Wizard ish</span> <a href=\"#narrow/channel/395097-compiler-development/topic/Dev.20Backend.20IR/near/487104842\">said</a>:</p>\n<blockquote>\n<p>I have two ideas, both of which involve function calls, that I'm interested to hear your opionions on:</p>\n<ol>\n<li>While local jumps have been covered as being absolute addresses, I think that there should be a more adressing modes. As mentioned before, ROAR will diffenitly be split up into functions, with each one being a discrete chunk of code. However, I think we should also have larger <em>segments</em>, with those being groups of function, each one reperesenting a single program unit (a library or file, perhaps)</li>\n<li>Relatedly, ROAR does not have a way to deal with IO and other specific needs. As the goal of ROAR is to be simple, I would propose a simple \"black box\" instruction, <code>int N</code> (derived from the instruction in x86 for interupts) which would be do a special action N, which can't be modeled in ROAR. IMO this would go right along with Roc's notion of \"platforms\", and they could be correlated (although this isn't substantiated by any logical reason, just a general sort of feeling)<br>\nSo yeah what do yall think about these?</li>\n</ol>\n</blockquote>\n<p>I don't think we'll have a need for either. The dev backend already has solutions for both.</p>\n<p>The dev backend only ever worries about generating a single procedure at a time. As such, each procedure can be 100% self contained without any worry of what other procedures are doing. So we never need long jumps or other special things like segments. I think it would be 100% fine for ROAR to slot in such that it is only used during single function compilation. I think that it will actually fit best there.</p>\n<p>This is the same for io. There is no need to worry about it. We never do it directly in roc. All of this will always go through a function call. So the call instruction is all you will need.</p>\n<p>Using relocations + call instructions solve all of the above nicely.</p>",
+        "id": 487134726,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733793596
+    },
+    {
+        "content": "<p>So I would imagine the compilation process as:</p>\n<ol>\n<li>roc source</li>\n<li>roc compilation to mono</li>\n<li>For each function in mono, run the dev backend. This consists of:<ol>\n<li>convert to ROAR</li>\n<li>run register allocation (plus any other future passes)</li>\n<li>output assembly + relocations</li>\n</ol>\n</li>\n</ol>",
+        "id": 487134916,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733793701
+    },
+    {
+        "content": "<p>You say each \"function in mono\", which is currently all top-level values, since we convert (at least most) top-level constants to thunks with <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/mono/src/ir.rs#L8186\">force_thunk</a> AFAICT. I presume this strategy would work if/when we decided to move towards non-thunked top level constants, but just wanna call that out in case there would be an issue</p>",
+        "id": 487135467,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733794020
+    },
+    {
+        "content": "<p>Sure, we should either force thunks for the dev backend or we would also have to do constant generation, but for constants, we wouldn't need ROAR at all.</p>",
+        "id": 487135565,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733794072
+    },
+    {
+        "content": "<p>Maybe I missed something in the discussion, but it would still need to translate complex constants, right? We said above that even I128 would get multiple \"registers\", so a struct/discriminated union would need to be loaded like any other variable that was stored in a prior register. This should be very minor compared to the main scope of ROAR, though</p>",
+        "id": 487136173,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1733794351
+    },
+    {
+        "content": "<p>no, they will all just be equivalent to the constant stored on the stack. So they are just a chunk of bytes that we get the address of and load data from.</p>",
+        "id": 487136718,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733794663
+    },
+    {
+        "content": "<p>So they would in the roar proposal just be represented as a structured register (which is really just a pointer to memory)</p>",
+        "id": 487136792,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733794687
+    },
+    {
+        "content": "<p>Oh and relating to your comment on the PR, I've moved the proposal to it's own repo <a href=\"https://github.com/wizard7377/ROAR\">here</a></p>",
+        "id": 487136965,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733794798
+    },
+    {
+        "content": "<p>comments on the proposal:</p>\n<ol>\n<li>main idea around instructions and operands sounds great.</li>\n<li>abstract registers and the lack of types sounds perfect</li>\n<li>I think we should iterate on the abstract stack. I think that by default that ROAR should not care about saving registers for call instructions. I think it is safe to just use the callee saved registers first followed by the caller saved registers. When generating a call assembly, the backend assembly can add in all of the pushes and pops. If we later find this to be a bottleneck, we can add caller and callee saved register info into the register allocation pass to make it a bit smarter. Either way, this info would not be need in the IR and would likely just be part of an optimization pass. I need to think more about jump instructions, but I think due to how roc organizes ir, something similar should hold true. I belive that roc explicitly labels all data that needs to be passed to a jump instruction (such that it looks like a call instruction as well). Need to double check on that, but I think we can get away with something simple here.</li>\n<li>For structured registers, I think that we should use an explicit load and store instruction instead of overloading the move instruction. I think it will help keep things clean and clear. We also will need some way to represent data that starts on the stack due to the c calling convention. So I think we likely need to actually store these outside of the core ir. I would propose that we have a flat dictionary of structured registers/stack values. It would be initialized with the arguments to the function that are on the stack. Instead of having a create instruction, it would be a function that adds a new index to this map. Each value in the map will hold where the data is stored and how large it is. For starters, most data will not have a real location, at some point, we will have to map all of that data to concrete stack locations (likely with a pass very similar to register allocation). Hopefully this rough idea makes sense. It essentially allows the almost everything to think in registers, but when it doesn't think in registers, it thinks in abstract memory that it can just call load and store instructions to. Later the abstract memory is mapped to real memory, but no need to change the ir, just the list of memory locations. Also, just realized, doesn't need to be a map, would just be a list where the index is the structured register number.</li>\n</ol>",
+        "id": 487137183,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733794920
+    },
+    {
+        "content": "<p>Just one thing, if registers aren’t being explicitly saved, how will the program differentiate registers that are set to for the purpose of returning values and those that simply hold intermediate values? Would the plan be for the return and call op take an argument that is what register should be returned / saved to?</p>",
+        "id": 487140809,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733796899
+    },
+    {
+        "content": "<p>Oh, this is actually a really good point I hadn't full though through. In the current design, due to having access to mono, a call or return instruction is given a list of symbols. Those symbols are the loaded and dealt with according to the c abi for that system. If we are abstracting into ROAR, we have to decide how to deal with that mapping and call convention. Hmm.</p>\n<p>So that gives three main options I can think of:</p>\n<ol>\n<li>Define a restricted machine agnostic call convention such that roar deals with the call conv including stack vs register.</li>\n<li>Have roar be partially machine specific. It would query the backend to learn about it's call conv and then inserts structure register stores and data swaps to prep everything for the call.</li>\n<li>For call and return instructions, keep a mapping to the original mono nodes in roar. When generating assembly for a call instruction we pass in the layout info from mono along with a list of abstract and structural registers for the arguments. The backend then deals with loading those to match the calling convention.</li>\n</ol>\n<p>I lean 3, but am open to other opinions and ideas for sure.</p>",
+        "id": 487146385,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733799267
+    },
+    {
+        "content": "<p>Personally I think 1 is better, as it keeps the process pure (ie, machine agnostic and seperate from mono), which would probably help with maintainability</p>",
+        "id": 487240520,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733834845
+    },
+    {
+        "content": "<p>Also if we restricted ROAR functions to returning one argument, we could just have ‘call’ instructions take an output register that would the be set to a corresponding register returned with ‘ret’<br>\nAs for passing arguments, this could be even more simple, just pass them in registers, and only differentiate it from the original once it’s been set</p>",
+        "id": 487286867,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733846456
+    },
+    {
+        "content": "<p>It definitely has to learn to speak c abi no matter what, sadly. It has to be callable from the platform and be able to call the zig builtins and platform effects.</p>",
+        "id": 487288914,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733846974
+    },
+    {
+        "content": "<p>This is why the dev backend currently speaks c abi. I found it easier to be consistent than makes exceptions for the edges.</p>",
+        "id": 487291833,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733847726
+    },
+    {
+        "content": "<p>but shouldn't this be abstracted as part of the <code>ROAR-&gt;Binary</code> interface, given that one of the primary goals is to be platform agnostic? (which ccould be solved by somethig like <a href=\"#narrow/channel/395097-compiler-development/topic/Dev.20Backend.20IR/near/487104842\">this</a>?)</p>",
+        "id": 487333034,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733861493
+    },
+    {
+        "content": "<p>I don't think the goal of roar is really to be platform agnostic. It is trying to abstract away a level of assembly details, but register allocation (which will run on roar) is platform specific. On top of that specific handling of the stack, that will come out of converting from structured registers to stack use is also platform specific.</p>\n<p>So roar should be expected to pull in platform details. That said, I think that 3 is platform agnostic. Roar will simply record the information it needs to pass to the final assembly generation for it to deal with generating the correct call conv.</p>",
+        "id": 487341802,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733865104
+    },
+    {
+        "content": "<p>The reason I don't think we need something like black box. is that nothing is black box. They are just function calls. The same as any other function call.</p>",
+        "id": 487342169,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733865276
+    },
+    {
+        "content": "<p>ok got it</p>",
+        "id": 487342522,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733865456
+    },
+    {
+        "content": "<p>I'm not sure how much you have look at the current traits, but we actually have one for assembly and a second for callconv. If you look at a callconv trait impl this is what making a function call looks like today: <a href=\"https://github.com/roc-lang/roc/blob/f8b0be725c1677dd1c39cc68723fe4ad5ce09ade/crates/compiler/gen_dev/src/generic64/x86_64.rs#L292-L337\">https://github.com/roc-lang/roc/blob/f8b0be725c1677dd1c39cc68723fe4ad5ce09ade/crates/compiler/gen_dev/src/generic64/x86_64.rs#L292-L337</a></p>\n<p>ROAR could call essentially the same primitive.</p>",
+        "id": 487343060,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733865693
+    },
+    {
+        "content": "<p>Just instead of using <code>Symbol</code> from mono, it would use abstract and struct registers.</p>",
+        "id": 487343245,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733865785
+    },
+    {
+        "content": "<p>so if i'm understanding correctly you would just have the call function accept any number of args, including one for where to place the return value?</p>",
+        "id": 487345311,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733866666
+    },
+    {
+        "content": "<p>yep</p>",
+        "id": 487345793,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733866861
+    },
+    {
+        "content": "<p>With the minor caveat that we may want to handle storage in a special way to avoid bloating the roar enum in rust. Don't want to take up too many bytes per assembly instruction</p>",
+        "id": 487345887,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733866901
+    },
+    {
+        "content": "<p>I've been making a little progress with the proposal, just wanted to make sure I'm putting down correctly what yall mean, in particular about the function calls <a href=\"https://github.com/wizard7377/ROAR\">https://github.com/wizard7377/ROAR</a></p>",
+        "id": 488538572,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1733970125
+    },
+    {
+        "content": "<p>I'm really liking how this is looking!</p>",
+        "id": 488552411,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733979426
+    },
+    {
+        "content": "<p>I'm not sure the value of making <code>cmp</code>, <code>jmp</code>, <code>ret</code>, etc functions return a null value, but if in practice it helps build out a consistent interface, that sounds fine. I assume the assembly will map to rust enum. The powerful pattern matching in rust should make it ok for some ops to differ.</p>",
+        "id": 488552547,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733979518
+    },
+    {
+        "content": "<blockquote>\n<p>ROAR is that every function is pure (with respect to registers)</p>\n</blockquote>\n<p>I'm not 100% sure the caveats of the meanings here, but it is important to note that some values passed into function will get mutated. That said, it will never be a register value. It will always be a pointer to data on the heap that gets mutated (like a list with a refcount of one).</p>",
+        "id": 488552711,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733979617
+    },
+    {
+        "content": "<p>I think this likely falls into what you are saying, but wanted to clarify</p>",
+        "id": 488552762,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733979643
+    },
+    {
+        "content": "<p>Also, for structured registers (at least as roc exists today), all loads and stores should be to a compile time known offset. Also, we will need the ability to load at different widths, but that can just be a <code>load8</code> vs <code>load32</code> vs <code>load64</code>.</p>",
+        "id": 488552856,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733979720
+    },
+    {
+        "content": "<p>And roc will make sure that all loads are properly aligned based on the layout of the data. So we should have no concerns there.</p>",
+        "id": 488552978,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733979763
+    },
+    {
+        "content": "<p>Also, for jumps, I know that roc only has structured loops, so we may be able to take advantage of something there. But I'm not sure what exactly. Just noting.</p>",
+        "id": 488553076,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733979830
+    },
+    {
+        "content": "<p>Oh, one other note for jmps. Roc's jumps technically have arguments, but we should be able to map that into editing the same roar registers over and over again.</p>",
+        "id": 488553198,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1733979911
+    },
+    {
+        "content": "<p>Yeah, I might’ve forgotten about the references not being mutated dosent correlate to the referents being mutated</p>",
+        "id": 488651257,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734015193
+    },
+    {
+        "content": "<p>Also can you explain a little bit more about what you mean about them taking arguments, do you mean they should be similar to RISC branch instructions (ie, the instruction contains the condition)</p>",
+        "id": 488652042,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734015411
+    },
+    {
+        "content": "<p>I just mean that in mono ir, jumps look a lot like function calls.</p>",
+        "id": 488673593,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734021140
+    },
+    {
+        "content": "<p>There is a block declared with a joinpout. The join point has a list of args. Within the block you can access any constants from before the jointpoint and the args as well. At some point in the main code flow, it calls a jump instruction to a join point with a list of args.</p>",
+        "id": 488674106,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734021259
+    },
+    {
+        "content": "<p>In roar, this could be modeled as raw assembly style jumps with register updates before the jump to set the args. Or it could be modeled closer to a function call. Not sure either is better, just worth noting and thinking about.</p>",
+        "id": 488674583,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734021426
+    },
+    {
+        "content": "<p>yeah personally im much more familiar with <code>x86</code> and <code>6502</code> assembly, and in those, <code>jmp</code>s basically only change the instruction pointer, so that just seems more natrual to me, but only because that's the only thing ive ever encountered</p>",
+        "id": 488710896,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734034543
+    },
+    {
+        "content": "<p>Yeah, rocs mono isn't trying to be assembly. So makes sense it has a high level concept</p>",
+        "id": 488714609,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734036099
+    },
+    {
+        "content": "<p>should ROAR have seperate floating point registers?</p>",
+        "id": 488923772,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734125231
+    },
+    {
+        "content": "<p>Would be nice for a tiny bit of extra safety, but would be fine to start with unified registers and then only convert to float vs general registers during allocation.</p>\n<p>So I think either is fine before register allocation. I lean slightly towards just having them</p>",
+        "id": 488924497,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734125563
+    },
+    {
+        "content": "<p>yeah i also lean on having them, theyre isnt really a reason not to and basically all systems do so it probably will be more efficient</p>",
+        "id": 488925884,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734126248
+    },
+    {
+        "content": "<p>Did some work on the proposal (still not done)... and i may have just realized gh md has a diagramming feature... <a href=\"https://github.com/wizard7377/ROAR#optimizations\">https://github.com/wizard7377/ROAR#optimizations</a></p>",
+        "id": 489133383,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734313527
+    },
+    {
+        "content": "<p>Ok I <em>think</em> <a href=\"https://github.com/wizard7377/ROAR\">this</a> is the first draft, is there anything any of you think needs to be added to this (obviously needs to be cleaned up a lot)</p>",
+        "id": 489391619,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734403463
+    },
+    {
+        "content": "<p>I'll read through it when I get the chance, but packing tonight and traveling tomorrow.</p>",
+        "id": 489392084,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734403660
+    },
+    {
+        "content": "<p>nice safe travels :)</p>",
+        "id": 489392169,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734403687
+    },
+    {
+        "content": "<p>Also, on the llvm side, I think I am going to greatly simplify abi (including the c abi we generate). Dev backend may want to do the same (might not really affect the proposal). The core change is that all aggregate types will be passed by const ref. Then only enums and numeric types are passed in registers.</p>",
+        "id": 489392349,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734403785
+    },
+    {
+        "content": "<p>if anything that actually works with the proposal quite nicely</p>",
+        "id": 489392508,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734403850
+    },
+    {
+        "content": "<p>I don't know very much about c abi, but I can say that this was a well-written doc that even a mid-wit (as regards assembly) like myself could understand</p>",
+        "id": 489396076,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1734405530
+    },
+    {
+        "content": "<p>Thank you :)</p>",
+        "id": 489396519,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734405781
+    },
+    {
+        "content": "<p>So could I say (as a midwit as noted above) that this is a SSA representation that's meant to be a level higher than say LLVMIR because it can assume a lot of Roc's language semantics?</p>",
+        "id": 489396684,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1734405871
+    },
+    {
+        "content": "<p>But still low-level enough that we can use those semantics to drive efficient optimization passes before codegen?</p>",
+        "id": 489396812,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1734405941
+    },
+    {
+        "content": "<p>Yes, that is the primary purpose</p>",
+        "id": 489396904,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734405978
+    },
+    {
+        "content": "<p>Ok, I passed my comprehension test.  I'm going to bed now :-)</p>",
+        "id": 489396941,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1734406001
+    },
+    {
+        "content": "<p>I'll be following the (assumed) implementation of this, as I am very interested in learning a lot in this area</p>",
+        "id": 489396991,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1734406033
+    },
+    {
+        "content": "<p>A few thoughts on the ROAR document:</p>\n<ul>\n<li>+1 on abstract registers. Unless the stack+register allocation model should be consistent between all targets (which is maybe reasonable), I think it is wise to try to avoid modeling finite registers or the stack.</li>\n<li>I would suggest removing the null register. My impression is that this will not make it easier to operate over the IR, unless nodes that write to the null register are strictly typed - in which case, it's equivalent to not typing the null register at all. This is based on experience of writing IRs for languages to translation to C/Asm (C-&gt;asm translation is fairly trivial besides regalloc). One way model this without null registers is have <code>type Stmt { Load (Register, Expr), Store (Register, Expr), Ret, ...}</code> and <code>type Expr { Add (Register, Register), Sub (Register, Register), ... }</code></li>\n<li>Whenever possible I would suggest favoring convenience to translation of machine code over convenience for optimizations. I don't think the dev backend should be for producing good machine code - it should be for producing machine code quickly in dev builds. High-level optimizations should happen earlier in the compilation pipeline, and low-level optimizations (e.g. elision) are best served by LLVM or another general-purpose toolkit that has already solved this problem. For example, in the proposal, I would remove all variants of <code>jmp</code> other than <code>jmp</code> itself, and model conditional jumps via branches to basic blocks. Reducing the number of nodes in the IR makes it easier to implement a backend, which I think is the best cost function for the IR.</li>\n<li>I would suggest taking a look at the Mono IR and figuring out where the delta between that today and what the dev backends need to lower is, and what subset is best served by covering in ROAR. In my head, the biggest common threads are (1) lowering low-levels and (2) lowering ref-counting and equality operations - I would optimize the ROAR instruction set for those.</li>\n</ul>",
+        "id": 489624433,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1734501033
+    },
+    {
+        "content": "<p>I personally think the null register is quite important. It allows statements to be consistent internally as one structure, rather than having expressions which can be statements, which would significantly complicate the process of obtaining modified registers. In addition, sometimes one wants to have expressions which don’t write to anything, for example on x64 ‘cmp’ vs ‘sub’, where the only difference is whether they write to something or just set flags. In addition, the null register wouldn’t be that hard to implement, and in case this wasent clear the null register can’t be read, it just serves as a “trash” register</p>",
+        "id": 489748348,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734525477
+    },
+    {
+        "content": "<p>Also the purpose of this is to be stored in a flat array, which wouldn’t allow for nested expressions</p>",
+        "id": 489750408,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734526145
+    },
+    {
+        "content": "<p>(Note, refer back to the first message in this channel)</p>",
+        "id": 489750951,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734526314
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Dev.20Backend.20IR/near/419345319\">said</a>:</p>\n<blockquote>\n<p>This is a pretty open thought, but I am questioning if we should change the Dev backend to have an ir that can be stored in a flat array (rather than a tree structure/not existing), that is essentially a portable assembly (one op per function in the <a href=\"https://github.com/roc-lang/roc/blob/fc6b519b5948023981ac5751d2f6ee48bcef2316/crates/compiler/gen_dev/src/generic64/mod.rs#L153-L742\">current Assembler trait</a>).</p>\n<p>So it would kinda be akin to llvm ir, but just what we need to support the dev backend. It would also just be for defining within a single procedure and any jmp type instructions would just use a integer as the target that is which other instruction in the array to jump to.</p>\n<hr>\n<p>The main gain of doing this is for future minor optimizations that we want to run on the ir. The big one being register allocation. With the current IR, register allocation, and lifetimes in general, are very much not a clean problem. Mono is a tree. It also is not nearly as fine grain as individual assembly instructions. So it is very hard to have any idea how many registers will be needed for a specific mono ir node.</p>\n<p>I think that we should have a very fast pass that runs over mono and blits out a flat array of assembly like instructions. (essentially will be equivalent to the current dev backend but less complex due to having infinite registers for example).</p>\n<p>Then we would run register allocation on the flat array (lots of good algorithms with linear time exist for this). Given the assembly ir won't perfectly match to assembly instructions, we will have a backend dependent function that will label exactly how many temporary registers an instruction will need. That is all the information we should need to deal with register allocations.</p>\n<p>Once that works, we can consider other minor but fast optimizations:</p>\n<ul>\n<li>grouping instructions for final output</li>\n<li>intentionally reusing source and dest reg to avoid extra data movement instructions</li>\n<li>freeing up the base pointer by calculating all offsets with the stack pointer</li>\n<li>storing some aggregate values in registers if available instead of on the stack</li>\n<li>maybe some minor and quick rewrites.</li>\n</ul>\n<p>Especially given we generate at the procedure level, it should be possible to run this part of the dev backend in parallel. Only merging the final generated assembly into an output object file.</p>\n<p>I think this will help clean up some of the complexities of the dev backend related to where data is stored and how it is loaded. It should help separate that  work cleanly from the rest of the ir selection at a minimum. It also gives us some opportunities for minor but important optimization passes over dev backend ir.</p>\n<hr>\n<p>What are people's thoughts on this? I would guess <span class=\"user-mention silent\" data-user-id=\"281543\">Folkert de Vries</span> and <span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> would have the most input.</p>\n</blockquote>",
+        "id": 489751100,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734526348
+    },
+    {
+        "content": "<p>Also, just making sure of something: ROAR would require reimplementating the Backend trait, but not the Assembler and CallConv trait (as the backend trait takes in mono as input)</p>",
+        "id": 490220738,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734723813
+    },
+    {
+        "content": "<p>Yeah, might even end up replacing the backend trait with just a raw method to go from mono to roar and a separate method that directly calls out to the assembler and call conv traits</p>",
+        "id": 490224544,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734725711
+    },
+    {
+        "content": "<p>also was just thinking, it might be useful to have a concept of \"true global variables\" in ROAR. While struct register persist, they require refrences being passed around, and what I'm thinking of would just be accessed with it's symbol. This wouldn't be prefered (ie, local vars would still be in abstract registers) but i think might make it a lot more clean</p>",
+        "id": 490225755,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734726333
+    },
+    {
+        "content": "<p>oh also if no one has anymore comments on this, ill probably start working on it tommorow</p>",
+        "id": 490232515,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734729907
+    },
+    {
+        "content": "<blockquote>\n<p>While struct register persist, they require refrences being passed around, and what I'm thinking of would just be accessed with it's symbol.</p>\n</blockquote>\n<p>I'm not sure I fully follow what you are suggesting here</p>",
+        "id": 490233875,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734730599
+    },
+    {
+        "content": "<p>basically having things like struct registers, but instead of symbols being dynamically generated their symbols persist from mono</p>",
+        "id": 490234075,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734730719
+    },
+    {
+        "content": "<p>I think most of the symbols in mono are locals. There are true globals. For those, we will need some solution. The final output is a chunk of data and a relocation to load that data locally in a function.</p>",
+        "id": 490234480,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734730966
+    },
+    {
+        "content": "<p>Also, my only main comment on the proposal is that I would try to stay very close to the assembler trait to start with (in terms of which operations to support). For example, it looks like we currently only need a <code>jmp</code> and <code>jne</code> instruction. Clearly more optimizations are possible and in some cases other jump instructions might map better, but I think it will make the transition smoothest if we start as close as possible. Then incrementally make things more powerful.</p>",
+        "id": 490234964,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734731253
+    },
+    {
+        "content": "<p>Oh and instead of using things like u32 directly, wrap them in nominal types to avoid using an index as a register or a float register as an int register etc</p>",
+        "id": 490236946,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734732277
+    },
+    {
+        "content": "<p>I think that was already the plan, just explicitly clarifying</p>",
+        "id": 490236984,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734732303
+    },
+    {
+        "content": "<p>also just so yall can comment if you like, i made a draft pr at <a href=\"https://github.com/roc-lang/roc/issues/7397\">#7397</a></p>",
+        "id": 490302341,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734790802
+    },
+    {
+        "content": "<p>first piece of ROAR (handcoded into rust), only the printing is done</p>\n<div class=\"codehilite\"><pre><span></span><code>[%32] {\n    %78 &lt;- addu %73 %32\n    _ &lt;- subs %73 %32\n}\n</code></pre></div>\n<p>also i do plan to make the code not break every single style guideline possible</p>",
+        "id": 490305385,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734793375
+    },
+    {
+        "content": "<p>Left a handful of comments</p>",
+        "id": 490314680,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734801407
+    },
+    {
+        "content": "<p>ok, yeah i wasn't thinking that much about the 128 bit types, those might be a small problem</p>",
+        "id": 490317661,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734804173
+    },
+    {
+        "content": "<p>actually having the abstract registers be sized might not be that bad of an idea</p>",
+        "id": 490317683,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734804199
+    },
+    {
+        "content": "<p>also maybe seperating structure refrences from regular registers</p>",
+        "id": 490317810,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734804326
+    },
+    {
+        "content": "<p>I think it should be fine to see 128 bit values as a structured registers containing two 64bit registers</p>",
+        "id": 490318532,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734805075
+    },
+    {
+        "content": "<p>That is how operations function on them anyways</p>",
+        "id": 490318574,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734805084
+    },
+    {
+        "content": "<p>okay</p>",
+        "id": 490318589,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734805109
+    },
+    {
+        "content": "<p>Mostly called them out to make sure they are being thought of</p>",
+        "id": 490318594,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734805119
+    },
+    {
+        "content": "<p>Relating to your comment <a href=\"https://github.com/roc-lang/roc/pull/7397#discussion_r1894657437\">here</a>, what do you think should be the max size per instruction?</p>",
+        "id": 490404845,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734888127
+    },
+    {
+        "content": "<p>I would hope it can fit into 4 u64s, but that may not be realistic.</p>\n<p>1 for op code and any sort of metadata<br>\n1 for output register<br>\n2 for input registers</p>\n<p>If an op might need more than 2 input registers. The input u64s would be instead a pointer and length to a sideband array of extra inputs.</p>",
+        "id": 490407955,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734890913
+    },
+    {
+        "content": "<p>i dont it will be naccasary to have them actually modeled as inputs, as they should be consant, and therefore are not a part of the internal logic</p>",
+        "id": 490416089,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734899005
+    },
+    {
+        "content": "<p>also just realized it was never discussed if function pointers should be included or not</p>",
+        "id": 490417809,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734900649
+    },
+    {
+        "content": "<p>I think a function pointer can be treated the same as an int constant with a special op to create it.</p>",
+        "id": 490419187,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734902009
+    },
+    {
+        "content": "<p>ok!</p>",
+        "id": 490419214,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734902043
+    },
+    {
+        "content": "<p>why does roc use bump allocation? It does seem to speed it up, but it makes the code much less clean (same thing with layout interning)</p>",
+        "id": 490432862,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734915416
+    },
+    {
+        "content": "<p>Cause we want a really fast compiler. That is also why it is written in rust</p>",
+        "id": 490433123,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734915617
+    },
+    {
+        "content": "<p>Obviously there is still large room for improvement, but we care a lot about compile time.</p>",
+        "id": 490433154,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1734915641
+    },
+    {
+        "content": "<p>fair enough</p>",
+        "id": 490433163,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1734915650
+    },
+    {
+        "content": "<p>Also, I won’t be able to work on this for a couple days</p>",
+        "id": 490800882,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1735152847
+    },
+    {
+        "content": "<p>On a related note, anyone know of any cheap, small, low-middle end pc’s?</p>",
+        "id": 490800895,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1735152879
+    },
+    {
+        "content": "<p>(I somehow managed to break my laptops keyboard by cleaning it… so now the whole thing is crippled)</p>",
+        "id": 490800992,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1735152972
+    },
+    {
+        "content": "<p>update on this, the classic strategy of doing nothing about it has worked, and now my keyboard is working again <span aria-label=\"partying face\" class=\"emoji emoji-1f973\" role=\"img\" title=\"partying face\">:partying_face:</span></p>",
+        "id": 490892719,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1735229314
+    },
+    {
+        "content": "<p>Hey everyone, sorry about the slow progress, it’s just that school takes up a lot of my time, and in particular recently I’ve just been doing way too much stuff, hopefully however I’ll be able to do more work on ROAR this week (and after that) :)</p>",
+        "id": 494579874,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737242115
+    },
+    {
+        "content": "<p>It's alg, we're all volunteers here juggling life things. <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 494579949,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1737242163
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>error[E0515]: cannot return value referencing local variable `env`\n   --&gt; crates/compiler/build/src/program.rs:589:5\n    |\n577 |           roc_gen_dev::build_module(&amp;env, &amp;mut interns, &amp;mut layout_interner, target, procedures);\n    |                                     ---- `env` is borrowed here\n...\n589 | /     (\n590 | |         CodeObject::Vector(module_out),\n591 | |         CodeGenTiming {\n592 | |             generate_final_ir,\n...   |\n600 | |         },\n601 | |     )\n    | |_____^ returns a value referencing data owned by the current function\n\nerror[E0515]: cannot return value referencing local variable `layout_interner`\n   --&gt; crates/compiler/build/src/program.rs:589:5\n    |\n577 |           roc_gen_dev::build_module(&amp;env, &amp;mut interns, &amp;mut layout_interner, target, procedures);\n    |                                                         -------------------- `layout_interner` is borrowed here\n...\n589 | /     (\n590 | |         CodeObject::Vector(module_out),\n591 | |         CodeGenTiming {\n592 | |             generate_final_ir,\n...   |\n600 | |         },\n601 | |     )\n    | |_____^ returns a value referencing data owned by the current function\n\nerror[E0515]: cannot return value referencing local variable `interns`\n   --&gt; crates/compiler/build/src/program.rs:589:5\n    |\n577 |           roc_gen_dev::build_module(&amp;env, &amp;mut interns, &amp;mut layout_interner, target, procedures);\n    |                                           ------------ `interns` is borrowed here\n...\n589 | /     (\n590 | |         CodeObject::Vector(module_out),\n591 | |         CodeGenTiming {\n592 | |             generate_final_ir,\n...   |\n600 | |         },\n601 | |     )\n    | |_____^ returns a value referencing data owned by the current function\n\nerror[E0505]: cannot move out of `interns` because it is borrowed\n   --&gt; crates/compiler/build/src/program.rs:597:13\n    |\n549 |   fn gen_from_mono_module_dev_assembly&lt;&#39;a&gt;(\n    |                                        -- lifetime `&#39;a` defined here\n...\n562 |           mut interns,\n    |           ----------- binding `interns` declared here\n...\n577 |           roc_gen_dev::build_module(&amp;env, &amp;mut interns, &amp;mut layout_interner, target, procedures);\n    |                                           ------------ borrow of `interns` occurs here\n...\n589 | /     (\n590 | |         CodeObject::Vector(module_out),\n591 | |         CodeGenTiming {\n592 | |             generate_final_ir,\n...   |\n597 | |             interns,\n    | |             ^^^^^^^ move out of `interns` occurs here\n...   |\n600 | |         },\n601 | |     )\n    | |_____- returning this value requires that `interns` is borrowed for `&#39;a`\n\nerror[E0505]: cannot move out of `layout_interner` because it is borrowed\n   --&gt; crates/compiler/build/src/program.rs:598:13\n    |\n549 |   fn gen_from_mono_module_dev_assembly&lt;&#39;a&gt;(\n    |                                        -- lifetime `&#39;a` defined here\n...\n564 |           mut layout_interner,\n    |           ------------------- binding `layout_interner` declared here\n...\n577 |           roc_gen_dev::build_module(&amp;env, &amp;mut interns, &amp;mut layout_interner, target, procedures);\n    |                                                         -------------------- borrow of `layout_interner` occurs here\n...\n589 | /     (\n590 | |         CodeObject::Vector(module_out),\n591 | |         CodeGenTiming {\n592 | |             generate_final_ir,\n...   |\n598 | |             layout_interner,\n    | |             ^^^^^^^^^^^^^^^ move out of `layout_interner` occurs here\n599 | |             expectations: loaded.expectations,\n600 | |         },\n601 | |     )\n    | |_____- returning this value requires that `layout_interner` is borrowed for `&#39;a`\n\nSome errors have detailed explanations: E0505, E0515.\nFor more information about an error, try `rustc --explain E0505`.\n</code></pre></div>\n<p>anyone know how to fix this? (full state is here <a href=\"https://github.com/wizard7377/roc/tree/roar\">https://github.com/wizard7377/roc/tree/roar</a>)</p>",
+        "id": 494667262,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737312849
+    },
+    {
+        "content": "<p>(note the change in this signature <a href=\"https://github.com/wizard7377/roc/blob/d4de3b1545fcfd3bbb4c6ccc0ee7b918c663208d/crates/compiler/gen_dev/src/object_builder.rs#L49\">https://github.com/wizard7377/roc/blob/d4de3b1545fcfd3bbb4c6ccc0ee7b918c663208d/crates/compiler/gen_dev/src/object_builder.rs#L49</a>)</p>",
+        "id": 494667397,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737312909
+    },
+    {
+        "content": "<p>anyone can help (rust should definitly have something to bypass the borrow check in development...)</p>",
+        "id": 494816213,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737381175
+    },
+    {
+        "content": "<p>I can look when I'm done with <a href=\"https://github.com/roc-lang/roc/issues/7530\">#7530</a></p>",
+        "id": 494827203,
+        "sender_full_name": "Anton",
+        "timestamp": 1737383980
+    },
+    {
+        "content": "<p>thank you! <br>\n(this has been driving me insane)</p>",
+        "id": 494827403,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737384024
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"782426\">@Wizard ish</span> using the latest roar branch commit I currently only get a mismatched types error at crates/compiler/build/src/program.rs:456:17. That's with <code>cargo build --release</code>. How can I produce your borrow checker errors?</p>",
+        "id": 494851071,
+        "sender_full_name": "Anton",
+        "timestamp": 1737390148
+    },
+    {
+        "content": "<p>run with <code>-F use_roar</code></p>",
+        "id": 494851423,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737390265
+    },
+    {
+        "content": "<p>(the flag is temporary and will be replaced with a sensible build system later)</p>",
+        "id": 494851512,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737390300
+    },
+    {
+        "content": "<p>also if it's helpful this is the mess that i use to compile it <code>clear &amp;&amp; RUSTFLAGS=\"-Awarnings\" cargo run -F use_roar -- --dev ../tests/fizzbuzz.roc </code></p>",
+        "id": 494852278,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737390563
+    },
+    {
+        "content": "<p>sorry it's really a mess</p>",
+        "id": 494875013,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737394879
+    },
+    {
+        "content": "<p>No problem, we all have to learn by doing :)</p>",
+        "id": 494888533,
+        "sender_full_name": "Anton",
+        "timestamp": 1737397229
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">build_module_help</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">'</span><span class=\"na\">r</span><span class=\"w\"> </span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"o\">'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"p\">(</span>\n<span class=\"w\">    </span><span class=\"n\">env</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">r</span><span class=\"w\"> </span><span class=\"nc\">Env</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">interns</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">r</span><span class=\"w\"> </span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">Interns</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">layout_interner</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"kp\">&amp;</span><span class=\"o\">'</span><span class=\"na\">r</span><span class=\"w\"> </span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">STLayoutInterner</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">target</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Target</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">procedures</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">MutMap</span><span class=\"o\">&lt;</span><span class=\"p\">(</span><span class=\"n\">symbol</span><span class=\"p\">::</span><span class=\"n\">Symbol</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">ProcLayout</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"n\">Proc</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nc\">Object</span><span class=\"o\">&lt;'</span><span class=\"na\">a</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n</code></pre></div>\n<p>Why are <code>'a</code> and <code>'r</code> linked? I don't think that is correct. <code>'r : 'a</code>. Not that I 100% know what that syntax means.</p>\n<p>Anyway, I think you should be able to fully remove <code>'r</code>?</p>",
+        "id": 494889649,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737397637
+    },
+    {
+        "content": "<p>yeah it was that i changed it bc in the Converter it (the borrow checker) required <code>'b</code> to outlive <code>'a</code> (the Converter's <code>'a</code>), which then required <code>'r</code> to outlive <code>'a</code> (of the above funciton)</p>",
+        "id": 494890071,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737397807
+    },
+    {
+        "content": "<p>Something is definitely wrong is <code>'r</code> needs to outlive <code>'a</code>. <code>'a</code> is essentially a global lifetime. <code>'r</code> is temporary for the current function. So the code creating that requirement must be wrong</p>",
+        "id": 494890302,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737397922
+    },
+    {
+        "content": "<p>Oh wait <span aria-label=\"skull\" class=\"emoji emoji-1f480\" role=\"img\" title=\"skull\">:skull:</span> i somehow forgot the most crucial point, without that requirement, i get this error</p>\n<div class=\"codehilite\"><pre><span></span><code>error: lifetime may not live long enough\n   --&gt; crates/compiler/gen_dev/src/roar/convert.rs:240:22\n    |\n162 | ...c, &#39;a: &#39;c, &#39;b: &#39;c&gt; Converter&lt;&#39;a, &#39;b&gt;\n    |       --      -- lifetime `&#39;b` defined here\n    |       |\n    |       lifetime `&#39;a` defined here\n...\n240 | ...          &amp;mut sym_map.insert(*sym, (Output::Register(new_reg.clone()), repr, form...\n    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ argument requires that `&#39;b` must outlive `&#39;a`\n    |\n    = help: consider adding the following bound: `&#39;b: &#39;a`\n\nerror: could not compile `roc_gen_dev` (lib) due to 1 previous error\n</code></pre></div>",
+        "id": 494890628,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737398055
+    },
+    {
+        "content": "<p>(all the random lifetimes are me just trying to fix this)</p>",
+        "id": 494890692,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737398090
+    },
+    {
+        "content": "<p>I think you have a loop that is angering rust. env -&gt; arena -&gt; converter -&gt; back to env.</p>",
+        "id": 494891303,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737398327
+    },
+    {
+        "content": "<p>That in general won't work</p>",
+        "id": 494891374,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737398362
+    },
+    {
+        "content": "<p>likely converter shouldn't be allocated in the env at all</p>",
+        "id": 494891408,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737398379
+    },
+    {
+        "content": "<p>Should just be passed around on the stack</p>",
+        "id": 494891420,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737398385
+    },
+    {
+        "content": "<p>Then just <code>converter -&gt; env, interner, etc</code></p>",
+        "id": 494891464,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737398403
+    },
+    {
+        "content": "<p>no loop</p>",
+        "id": 494891504,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737398407
+    },
+    {
+        "content": "<p>ok</p>",
+        "id": 494891654,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737398477
+    },
+    {
+        "content": "<p>Wait so onlyy the converter object or also everything created by it</p>",
+        "id": 494892209,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737398704
+    },
+    {
+        "content": "<p>I assume most things can be created in the env. The problem with converter is specifically the loop.</p>",
+        "id": 494892378,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737398765
+    },
+    {
+        "content": "<p>so just converter</p>",
+        "id": 494892407,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737398777
+    },
+    {
+        "content": "<p>And I think you will be a able to remove a bunch of type variable like <code>&amp;'c mut self</code> will just be <code>&amp;mut self</code></p>",
+        "id": 494892672,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737398880
+    },
+    {
+        "content": "<p>And I think <code>proc_queue: RefCell&lt;Vec&lt;'b, (symbol::Symbol, &amp;'b ir::ProcLayout&lt;'b&gt;, &amp;'b ir::Proc&lt;'b&gt;)&gt;&gt;,</code> Likely should be all <code>'a</code>? Cause those are all allocated in the env. So they have a lifetime same as the bump in the env.</p>",
+        "id": 494892916,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737398967
+    },
+    {
+        "content": "<p>yeah this is a little bit of a mess...</p>",
+        "id": 494893177,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737399073
+    },
+    {
+        "content": "<p>Part of learning rust in a codebase that uses arenas (thus tons of extra lifetimes to manage)</p>",
+        "id": 494893274,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1737399112
+    },
+    {
+        "content": "<p>the good news is it's fixed :)<br>\nthe bad news is that it was fixed by using incredibly bad practice to get around the borrow checker...</p>",
+        "id": 496018929,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1737940337
+    },
+    {
+        "content": "<p>Hey, given the plans to completly rewrite the compiler, does it make sense to continue this project in Rust (as opposed to switching it to Zig)?</p>",
+        "id": 497276792,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1738518915
+    },
+    {
+        "content": "<p>I'd say switch to zig!</p>",
+        "id": 497277352,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738519325
+    },
+    {
+        "content": "<p>okay :)</p>",
+        "id": 497277398,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1738519368
+    },
+    {
+        "content": "<p>As a note, some of the rewrite plans may make this project obsolete. As part of the switch, we want to try using an interpreter instead of the dev backend.</p>",
+        "id": 497277564,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738519511
+    },
+    {
+        "content": "<p>We need an interpreter anyway for constant folding and some other work and we think that an interpreter should be capable of running fast enough that it makes the dev backend a lot less useful as a proposition</p>",
+        "id": 497277659,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738519568
+    },
+    {
+        "content": "<p>So we want to start by trying to only have the interpreter and skipping the dev backend.</p>",
+        "id": 497277683,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738519593
+    },
+    {
+        "content": "<p>hmmm okay, although still might be useful as a sort of in between for the interpreter and the new mono ir</p>",
+        "id": 497277749,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1738519650
+    },
+    {
+        "content": "<p>Interpreter is planned to run higher up the stack (it may still want a specific IR, but haven't thought through the details yet).</p>",
+        "id": 497278243,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738520072
+    },
+    {
+        "content": "<p>Totally will be lots of things to help with and IR design work, just might not map straight to roar.</p>",
+        "id": 497278293,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738520124
+    },
+    {
+        "content": "<p>I'm really sorry about this and any time that was wasted. The big zig rewrite seems like the best time to try something like only using an interpreter? Assuming only using an interpreter dosen't work out or if we end up wanting a dev backend again, this work would revive, but at least for now, the hope is to avoid any dev backends if possible.</p>",
+        "id": 497278978,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738520655
+    },
+    {
+        "content": "<p>Nah it’s all cool, plus I’ve been putting off learning zig so this’ll be fun</p>",
+        "id": 497280897,
+        "sender_full_name": "Wizard ish",
+        "timestamp": 1738522215
+    },
+    {
+        "content": "<p>I appreciate your having an awesome attitude about it! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 497280930,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738522249
+    }
+]
