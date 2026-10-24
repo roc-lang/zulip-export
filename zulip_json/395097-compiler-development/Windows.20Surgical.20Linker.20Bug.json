@@ -1,0 +1,32 @@
+[
+    {
+        "content": "<p>Some debugging Windows; I'm trying to track down why roc is segfaulting on the most basic examples.</p>\n<p>If I build and/or run using roc cli then it segfaults at the point where the host calls into Roc. </p>\n<p>However if I emit the LLVM IR for the application and then use zig to build an executable against the platform it runs as expected. </p>\n<p>So I'm wondering if there may be something specific in the Roc cli build toolchain that might be causing this? I suspect there is a build configuration or something in the roc cli causing this?? </p>\n<p>The below shows this workflow, note that I had to vendor the zig builtins into the platform so that it can build the host without roc, and I also included a couple of print debugs in the platform to see where things fail</p>\n<div class=\"codehilite\"><pre><span></span><code>PS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\target\\debug\\roc.exe build .\\examples\\platform-switching\\rocLovesZig.roc\n🔨 Rebuilding platform...\n0 errors and 0 warnings found in 3786 ms while successfully building:\n\n    .\\examples\\platform-switching\\rocLovesZig.exe\nPS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\examples\\platform-switching\\rocLovesZig.exe\nSTARTING\n&lt;-- SEGFAULTS HERE when zig calls roc__mainForHost_1_exposed_generic(&amp;callresult);--&gt;\nPS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\target\\debug\\roc.exe build --emit-llvm-ir .\\examples\\platform-switching\\rocLovesZig.roc\n🔨 Rebuilding platform...\nEmitting LLVM IR to .\\examples\\platform-switching\\rocLovesZig.ll\n0 errors and 0 warnings found in 3762 ms while successfully building:\n\n    .\\examples\\platform-switching\\rocLovesZig.exe\nPS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; zig build-exe .\\examples\\platform-switching\\rocLovesZig.ll .\\examples\\platform-switching\\zig-platform\\host.zig -lc\nPS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\host.exe\nSTARTING\nHERE\nRoc &lt;3 Zig!\nruntime: 0.020ms\n</code></pre></div>\n<p>I'll continue digging...</p>",
+        "id": 411658274,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1704681283
+    },
+    {
+        "content": "<p>Ok the issue here is in the Windows <strong>surgical linker</strong>; using <code>--linker=legacy</code> is working ok ... but only if you build the app and then run the executable, something fishy is going on when you use <code>roc run</code></p>\n<div class=\"codehilite\"><pre><span></span><code>PS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\target\\release\\roc.exe build --linker=legacy .\\examples\\platform-switching\\rocLovesZig.roc\n🔨 Rebuilding platform...\n0 errors and 0 warnings found in 4630 ms while successfully building:\n\n    .\\examples\\platform-switching\\rocLovesZig.exe\nPS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\examples\\platform-switching\\rocLovesZig.exe\nSTARTINGHERERoc &lt;3 Zig!\nruntime: 0.022ms\nPS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\target\\release\\roc.exe build .\\examples\\platform-switching\\rocLovesZig.roc\n🔨 Rebuilding platform...\n0 errors and 0 warnings found in 4706 ms while successfully building:\n\n    .\\examples\\platform-switching\\rocLovesZig.exe\nPS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\examples\\platform-switching\\rocLovesZig.exe\nSTARTING\n</code></pre></div>",
+        "id": 411662251,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1704683940
+    },
+    {
+        "content": "<p>Totally irrelevant for debugging... but just noticed this and thought it was interesing</p>\n<div class=\"codehilite\"><pre><span></span><code>                Surgical Linker Legacy Linker\nDEV backend     96 ms           3219 ms\nLLVM backend    184 ms          3244 ms\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>PS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\target\\release\\roc.exe build --dev --prebuilt-platform .\\examples\\platform-switching\\rocLovesZig.roc\n0 errors and 0 warnings found in 96 ms while successfully building:\n\n    .\\examples\\platform-switching\\rocLovesZig.exe\nPS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\target\\release\\roc.exe build --dev --linker=legacy --prebuilt-platform .\\examples\\platform-switching\\rocLovesZig.roc\n0 errors and 0 warnings found in 3219 ms while successfully building:\n\n    .\\examples\\platform-switching\\rocLovesZig.exe\nPS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\target\\release\\roc.exe build --prebuilt-platform .\\examples\\platform-switching\\rocLovesZig.roc\n0 errors and 0 warnings found in 184 ms while successfully building:\n\n    .\\examples\\platform-switching\\rocLovesZig.exe\nPS C:\\Users\\bosyl\\Documents\\GitHub\\ROC&gt; .\\target\\release\\roc.exe build --linker=legacy --prebuilt-platform .\\examples\\platform-switching\\rocLovesZig.roc\n0 errors and 0 warnings found in 3244 ms while successfully building:\n\n    .\\examples\\platform-switching\\rocLovesZig.exe\n</code></pre></div>",
+        "id": 411662828,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1704684400
+    },
+    {
+        "content": "<p>Using the <strong>legacy linker</strong> both DEV and LLVM backends work correctly <span aria-label=\"check\" class=\"emoji emoji-2705\" role=\"img\" title=\"check\">:check:</span><br>\nUsing the <strong>surgical linker</strong> both crash with a segfault <span aria-label=\"lady beetle\" class=\"emoji emoji-1f41e\" role=\"img\" title=\"lady beetle\">:lady_beetle:</span></p>",
+        "id": 411663058,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1704684605
+    },
+    {
+        "content": "<p>3300% speed improvement for surgical linker <span aria-label=\"joy\" class=\"emoji emoji-1f602\" role=\"img\" title=\"joy\">:joy:</span> </p>\n<p><a href=\"/user_uploads/22008/AeGR6c1qyN_hMIB65kiYWdPI/Screenshot-2024-01-07-at-10.58.28-PM.png\">Screenshot-2024-01-07-at-10.58.28-PM.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/AeGR6c1qyN_hMIB65kiYWdPI/Screenshot-2024-01-07-at-10.58.28-PM.png\" title=\"Screenshot-2024-01-07-at-10.58.28-PM.png\"><img src=\"/user_uploads/22008/AeGR6c1qyN_hMIB65kiYWdPI/Screenshot-2024-01-07-at-10.58.28-PM.png\"></a></div>",
+        "id": 411666831,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1704686332
+    }
+]

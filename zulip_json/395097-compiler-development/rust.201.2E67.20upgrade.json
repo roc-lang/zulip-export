@@ -1,0 +1,248 @@
+[
+    {
+        "content": "<p>The upgrade to rust 1.67 somehow breaks the wasm repl. We get an invalid instruction byte (the <code>OpCode</code> type). I don't see why incorrect wasm would be produced now. </p>\n<p>I ran <code>wasm-objdump</code> on the compiler wasm blob (so the webassembly that the rust compiler generates from our code base) and it does not report any problems. I'd assume it would error out when it hits some invalid instruction.</p>\n<p>the <code>basic_1_field_f64_record</code> test fails with the following backtrace / invalid instruction byte</p>\n<div class=\"codehilite\"><pre><span></span><code>706d29 GETLOCAL 0        [I32(2ac7f0)]\n706d2b I32CONST 0        [I32(2ac7f0), I32(0)]\n706d2d GETLOCAL 2        [I32(2ac7f0), I32(0), I32(c)]\n\n706d2f CALL 5420          args=[I32(2ac7f0), I32(0), I32(c)] return_type=Some(I32)\n\n708df0 BLOCK 64          []\n708df2 GETLOCAL 2        [I32(c)]\n708df4 I32CONST 33       [I32(c), I32(21)]\n708df6 I32LTU            [I32(1)]\nthread &#39;tests::basic_1_field_f64_record&#39; panicked at &#39;invalid instruction byte 0xfc&#39;, crates/wasm_module/src/opcodes.rs:373:21\n</code></pre></div>\n\n<p>This is confusing because when I dump the wasm that is executed to a file, the program at those memory locations is very different</p>\n<div class=\"codehilite\"><pre><span></span><code> 706d2f: 10 ac aa 80 80 00          |   call 5420 &lt;memset&gt;\n\n 708df0: 41 01                      |   i32.const 1\n 708df2: 6a                         |   i32.add\n 708df3: 10 a7 aa 80 80 00          |   call 5415\n 708df9: 1a                         |   drop\n 708dfa: 41 00                      |   i32.const 0\n 708dfc: 21 03                      |   local.set 3\n\n708deb func[5420] &lt;memset&gt;:\n 708dec: 03 7f                      | local[0..2] type=i32\n 708dee: 01 7e                      | local[3] type=i64\n 708df0: 02 40                      | block\n 708df2: 20 02                      |   local.get 2\n 708df4: 41 21                      |   i32.const 33\n 708df6: 49                         |   i32.lt_u\n</code></pre></div>\n\n<p>so something gets messed up in our wasm codegen somewhere? and for some reason a rust compiler upgrade surfaces the problem. Is there some unsoundness? or maybe the wasm blob that rust generates has a subtly different structure now?</p>\n<p>I'll continue investigating (I hope a diff between what main generates and what the 1.67 branch generates proves helpful)</p>\n<p>(cc <span class=\"user-mention\" data-user-id=\"431893\">@Brian Carroll</span> )</p>",
+        "id": 373305773,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688756455
+    },
+    {
+        "content": "<p>Sounds to me like a problem in the interpreter</p>",
+        "id": 373397487,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688800038
+    },
+    {
+        "content": "<p>I assume this is using our own interpreter, right? The dump looks like the one I wrote.</p>",
+        "id": 373397811,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688800111
+    },
+    {
+        "content": "<p>So internally the program counter is an index into the code section of the binary, not an index into the full Wasm binary. When we print out an error dump we adjust it to display it relative to the full binary, in an attempt to match <code>wasm-objdump</code>. There have been bugs there before and there might be some remaining.</p>",
+        "id": 373398365,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688800273
+    },
+    {
+        "content": "<p>So let's assume we can't rely on the code addresses in the error dump. I would search the dump for the instruction <code>CALL 5420</code> and find a place where the surrounding code matches the dump.</p>",
+        "id": 373398848,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688800417
+    },
+    {
+        "content": "<p>Also might be worth running it in some 3rd party Wasm interpreter if you have one installed.</p>",
+        "id": 373398946,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688800446
+    },
+    {
+        "content": "<blockquote>\n<p>I'd assume it would error out when it hits some invalid instruction.</p>\n</blockquote>\n<p>Yes that's right</p>",
+        "id": 373399014,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688800471
+    },
+    {
+        "content": "<p>It's possible that the interpreter is miscalculating the number of bytes in some instruction and therefore losing its place in the instruction stream.</p>",
+        "id": 373399523,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688800655
+    },
+    {
+        "content": "<p>And maybe the previous Rust version didn't use that instruction for some reason.</p>",
+        "id": 373399649,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688800687
+    },
+    {
+        "content": "<p>is there some easy way to export the program so it is runnable with an external interpreter? I'm using the <code>WasmModule</code> serialize right now but that is not quite a complete program it looks like</p>\n<div class=\"codehilite\"><pre><span></span><code>&gt; wasmtime run --invoke entrypoint_from_test full-new.wasm\nError: failed to run main module `full-new.wasm`\n\nCaused by:\n    0: failed to instantiate &quot;full-new.wasm&quot;\n    1: unknown import: `env::test_run_app` has not been defined\n</code></pre></div>\n<p>based on the code normally javascript provides this function</p>",
+        "id": 373451183,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688814281
+    },
+    {
+        "content": "<p>things seem correct up to the call</p>\n<div class=\"codehilite\"><pre><span></span><code>706d29 GETLOCAL 0        [I32(2ac7f0)]\n706d2b I32CONST 0        [I32(2ac7f0), I32(0)]\n706d2d GETLOCAL 2        [I32(2ac7f0), I32(0), I32(c)]\n\n706d2f CALL 5420          args=[I32(2ac7f0), I32(0), I32(c)] return_type=Some(I32)\n</code></pre></div>\n\n<p>seems to match (also the offset)</p>\n<div class=\"codehilite\"><pre><span></span><code> 706d42: 20 00                      |   local.get 0\n 706d44: 41 00                      |   i32.const 0\n 706d46: 20 02                      |   local.get 2\n 706d48: 10 ac aa 80 80 00          |   call 5420\n</code></pre></div>\n\n<p>so our interpreter seems to think that function[5420] is in a different place than it actually is, right? because in practice it is here</p>\n<div class=\"codehilite\"><pre><span></span><code>708e04 func[5420]:\n 708e05: 03 7f                      | local[0..2] type=i32\n 708e07: 01 7e                      | local[3] type=i64\n 708e09: 02 40                      | block\n</code></pre></div>\n\n<p>but our interpreter thinks it is here</p>\n<div class=\"codehilite\"><pre><span></span><code>708df0 BLOCK 64          []\n708df2 GETLOCAL 2        [I32(c)]\n708df4 I32CONST 33       [I32(c), I32(21)]\n708df6 I32LTU            [I32(1)]\n</code></pre></div>\n\n<p>it is off by 20 bytes. Could it be relevant that that is how many bytes of locals we have here (3 * 4 + 8)?</p>",
+        "id": 373460310,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688816470
+    },
+    {
+        "content": "<p>I'm pretty sure it is this is where the program counter is set to an incorrect value</p>\n<div class=\"codehilite\"><pre><span></span><code>            self.program_counter = module.code.function_offsets[internal_fn_index] as usize;\n</code></pre></div>\n<p>the offset this gives (corrected by the section offset) is somewhere in the middle of a function</p>",
+        "id": 373464439,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688817399
+    },
+    {
+        "content": "<p>allright, found the problem. There are some (new?) wasm instructions that our interpreter does not have yet</p>",
+        "id": 373517391,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688831720
+    },
+    {
+        "content": "<p>specifically <code>memory.fill</code> <a href=\"https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions\">https://webassembly.github.io/spec/core/binary/instructions.html#memory-instructions</a></p>",
+        "id": 373517509,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688831756
+    },
+    {
+        "content": "<blockquote>\n<p>it is off by 20 bytes. Could it be relevant that that is how many bytes of locals we have here (3 * 4 + 8)?</p>\n</blockquote>\n<p>Yes that could be relevant for sure. It depends specifically what you mean by \"our interpreter thinks it is here\"! Expected behaviour is that it reads the local variable declarations, allocates space for them, then resumes executing instructions at the next byte. So if you are just dumping the program counter it sounds like normal behaviour.</p>",
+        "id": 373530786,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688836186
+    },
+    {
+        "content": "<p>Yeah I just implemented the Wasm MVP, didn't add any later features.</p>",
+        "id": 373531003,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688836238
+    },
+    {
+        "content": "<p>It might be possible to tell <code>rustc</code> what version of Wasm you're targeting</p>",
+        "id": 373531032,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688836259
+    },
+    {
+        "content": "<p>I've never tried that or looked it up or anything, just saying it might be possible <span aria-label=\"shrug\" class=\"emoji emoji-1f937\" role=\"img\" title=\"shrug\">:shrug:</span></p>",
+        "id": 373531124,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688836287
+    },
+    {
+        "content": "<p><code>memory.fill</code> sounds like it might be easy to implement though!</p>",
+        "id": 373531415,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688836383
+    },
+    {
+        "content": "<p>Though of course we could then immediately run into another unsupported instruction!</p>",
+        "id": 373531511,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688836421
+    },
+    {
+        "content": "<p>I got things working now</p>",
+        "id": 373533571,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688837163
+    },
+    {
+        "content": "<p>needed some new wasi stubs too for env variables</p>",
+        "id": 373533615,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688837170
+    },
+    {
+        "content": "<p>PR <a href=\"https://github.com/roc-lang/roc/pull/5651\">https://github.com/roc-lang/roc/pull/5651</a>. quite the debugging journey. turns out that the original error was correct; it was just an instruction that we did not implement. Also, there should be a panic in such cases, but we just get UB. That is unfortunate, because the safe alternative is _much_ slower. So, just good to know I guess for next time, I don't want to make things slower really</p>",
+        "id": 373545397,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688841709
+    },
+    {
+        "content": "<p>Hmm the main <code>match</code> produces a <code>Result</code> with an error enum and eventually panics. We could try that. Or is that already what you did?</p>",
+        "id": 373556206,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688846291
+    },
+    {
+        "content": "<p>well, we do this </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">impl</span><span class=\"w\"> </span><span class=\"nb\">From</span><span class=\"o\">&lt;</span><span class=\"kt\">u8</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">OpCode</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span> <span class=\"nf\">from</span><span class=\"p\">(</span><span class=\"n\">x</span>: <span class=\"kt\">u8</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">Self</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">std</span>::<span class=\"n\">mem</span>::<span class=\"n\">transmute</span><span class=\"p\">(</span><span class=\"n\">x</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>and putting in an invalid value here (for which there is no <code>OpCode</code> variant) is just immediately UB</p>",
+        "id": 373556576,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688846452
+    },
+    {
+        "content": "<p>when you wrote it, you did some testing and it did not cause issues immediately and this branch here would catch some errors</p>\n<div class=\"codehilite\"><pre><span></span><code>        // Catch-all in case of an invalid cast from u8 to OpCode while parsing binary\n        // (rustc keeps this code, I verified in Compiler Explorer)\n        #[allow(unreachable_patterns)]\n        _ =&gt; return Err(format!(&quot;Unknown Wasm instruction 0x{:02x}&quot;, op as u8)),\n</code></pre></div>\n<p>but that function is not in all paths. I think the rust compiler is now stricter in the conversion than when the code was first written, which means that an invalid conversion by that unsafe code causes some compilation that (on my system) will just crash (it hits an illegal instruction, but it's UB so it could just do whatever)</p>",
+        "id": 373556974,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688846628
+    },
+    {
+        "content": "<p>but, any other conversion mechanism (certainly a match, i tried that today, I believe we also tried a lookup table at the time?) are much, much slower than this unsafe cast</p>",
+        "id": 373557116,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688846680
+    },
+    {
+        "content": "<p>and because we control the input for our interpreter, I think it is OK to cut this corner. but for the future: when new instructions are added, our wasm interpreter will break</p>",
+        "id": 373557213,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688846730
+    },
+    {
+        "content": "<p>Oh yes I remember more clearly now, thanks <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 373694930,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688906878
+    },
+    {
+        "content": "<p>Hmm I don't _think_ we tried defining a static array of <code>Option&lt;OpCode&gt;</code> and looking it up.</p>",
+        "id": 373695513,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688907015
+    },
+    {
+        "content": "<p>we can test that separately, it doesn't really matter for the current fix, which is the final blocker for the 1.67 upgrade.</p>",
+        "id": 373700270,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688908355
+    },
+    {
+        "content": "<p>so a review on that PR would be nice</p>\n<p>I tried out this code, which looks pretty good <a href=\"https://godbolt.org/z/Mra3d56YY\">https://godbolt.org/z/Mra3d56YY</a></p>\n<p>I took a wasm binary (the roc compiler blob) and filtered out all invalid instruction bytes. Then I have two loops summing the instruction byte values. Here are the runtimes</p>\n<div class=\"codehilite\"><pre><span></span><code>[benches/conversion.rs:14] input.len() = 8084815\nunsafe cast             time:   [10.461 ms 10.479 ms 10.499 ms]\n                        change: [-0.0001% +0.2507% +0.4915%] (p = 0.05 &gt; 0.05)\n                        No change in performance detected.\nFound 7 outliers among 100 measurements (7.00%)\n  3 (3.00%) high mild\n  4 (4.00%) high severe\n\nlookup table            time:   [12.507 ms 12.524 ms 12.543 ms]\n                        change: [-0.1140% +0.0861% +0.2867%] (p = 0.42 &gt; 0.05)\n                        No change in performance detected.\nFound 3 outliers among 100 measurements (3.00%)\n  1 (1.00%) high mild\n  2 (2.00%) high severe\n\n[benches/conversion.rs:43] x = Some(\n    386028267,\n)\n[benches/conversion.rs:43] y = Some(\n    386028267,\n)\n</code></pre></div>\n<p>so, it's slower, but not that much. Not sure what to do with that, but now we have some actual numbers</p>",
+        "id": 373754737,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688925561
+    },
+    {
+        "content": "<p>I guess really that the conversion of byte opcode is not the bottleneck, given that we can do it 8 million times in  ~10ms. that becoming 12ms is not really a big slowdown, and other parts of the interpreter loop are much slower than that</p>",
+        "id": 373755510,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1688925864
+    },
+    {
+        "content": "<p>OK so the change gives us better errors for unsupported instructions and doesn't have much of a performance penalty. Sounds great.</p>",
+        "id": 373947621,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1688992899
+    },
+    {
+        "content": "<p>hmm, do we accept this? this is in debug mode, so I guess it's fine? 30 seconds delta</p>\n<div class=\"codehilite\"><pre><span></span><code>Executed in  415.85 secs   fish           external\n   usr time   48.30 mins  797.39 millis   48.29 mins\n   sys time    0.13 mins  154.94 millis    0.13 mins\n________________________________________________________\nExecuted in  384.09 secs   fish           external\n   usr time   46.50 mins  819.00 micros   46.50 mins\n   sys time    0.08 mins    0.00 micros    0.08 mins\n</code></pre></div>",
+        "id": 374030290,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1689008705
+    },
+    {
+        "content": "<p>So this is still the test that sums up instruction bytes, right? Hard to make a call based on that alone. I was assuming that we'd see little difference in some of our real use cases like the tests for the Wasm REPL.</p>",
+        "id": 374033122,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1689009371
+    },
+    {
+        "content": "<p>ah, no, this the wasm repl test run on my machine</p>",
+        "id": 374033577,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1689009486
+    },
+    {
+        "content": "<p>but in debug mode</p>",
+        "id": 374033606,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1689009494
+    },
+    {
+        "content": "<p>OK when we did analysis on this kind of thing before we used release so that it would be representative of CI</p>",
+        "id": 374033713,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1689009529
+    },
+    {
+        "content": "<p>oh, wait it is release actually</p>",
+        "id": 374033863,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1689009578
+    },
+    {
+        "content": "<p>those tests are really slow then</p>",
+        "id": 374033910,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1689009592
+    }
+]

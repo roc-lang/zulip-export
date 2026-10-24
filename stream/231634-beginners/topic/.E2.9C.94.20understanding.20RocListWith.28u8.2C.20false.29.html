@@ -1,0 +1,57 @@
+<html>
+<head><meta charset="utf-8"><title>✔ understanding RocListWith(u8, false) · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20understanding.20RocListWith.28u8.2C.20false.29.html">✔ understanding RocListWith(u8, false)</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="633094305"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20understanding%20RocListWith%28u8%2C%20false%29/near/633094305" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> removewingman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20understanding.20RocListWith.28u8.2C.20false.29.html#633094305">(Oct 19 2026 at 18:23)</a>:</h4>
+<p><span class="user-mention" data-user-id="361169">@Anton</span> Yes.</p>
+
+
+
+<a name="633273461"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20understanding%20RocListWith%28u8%2C%20false%29/near/633273461" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20understanding.20RocListWith.28u8.2C.20false.29.html#633273461">(Oct 20 2026 at 10:27)</a>:</h4>
+<p>I ran some quick analysis with Claude but did not run the code, please let me know if the suggestions here work for you.</p>
+<blockquote>
+<p>The list from <code>file_content_bytes_absolute!</code> is fine. The leak is in <code>hostedStdoutWriteBytes</code> in <code>src/stdstreams.zig</code>. Roc passes <code>byte_content</code> to <code>Stdout.write_bytes!</code>, and that hosted function never releases it. The stack trace points at <code>fromSlice</code> only because that's where the leaked block was allocated.</p>
+<p>Hosted functions own their refcounted arguments and must release them before returning. The generated <code>roc_platform_abi.zig</code> says this at the top, and also in the doc comment for <code>roc_stdout_write_bytes</code>:</p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="c1">/// Owned arguments. Release each exactly once before returning, ...</span>
+<span class="c1">///     arg0.decref(roc_host);</span>
+</code></pre></div>
+<p>Your other stdout/stderr functions already do <code>defer str.decref(roc_host)</code>, so this one just needs the same line:</p>
+<div class="codehilite" data-code-language="Zig"><pre><span></span><code><span class="kr">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="n">hostedStdoutWriteBytes</span><span class="p">(</span><span class="n">bytes</span><span class="o">:</span><span class="w"> </span><span class="n">RocListWith</span><span class="p">(</span><span class="kt">u8</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">))</span><span class="w"> </span><span class="n">callconv</span><span class="p">(.</span><span class="n">c</span><span class="p">)</span><span class="w"> </span><span class="n">StdoutResult</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kr">const</span><span class="w"> </span><span class="n">roc_host</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">g_roc_host</span><span class="p">.</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="n">bytes</span><span class="p">.</span><span class="n">decref</span><span class="p">(</span><span class="n">roc_host</span><span class="p">);</span>
+<span class="w">    </span><span class="p">...</span>
+</code></pre></div>
+<p>You don't need to configure anything on the platform side, and no <code>decref</code> is needed after <code>roc_main</code>. If a hosted function returns or stores an argument instead, it passes ownership on rather than releasing it.</p>
+<p>A few other things Claude noticed while reading:</p>
+<ul>
+<li>The stub functions in <code>dir.zig</code> and both <code>file_create_*</code> functions discard their arguments with <code>_ = str;</code>. They'll leak the same way once a Roc program calls them.</li>
+<li><code>hostedCreateAbsoluteBytes</code> takes <code>RocList(RocU8)</code>, but <code>RocU8</code> there is <code>abi.RocU8x16</code>, a 16-byte vector. The generated signature is <code>RocListWith(u8, false)</code>.</li>
+<li><code>hostedContentAbsolute</code> and <code>hostedContentBytesAbsolute</code> never close the file they open.</li>
+</ul>
+</blockquote>
+
+
+
+<a name="633281671"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20understanding%20RocListWith%28u8%2C%20false%29/near/633281671" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> removewingman <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20understanding.20RocListWith.28u8.2C.20false.29.html#633281671">(Oct 20 2026 at 11:08)</a>:</h4>
+<p>This helped, thank you, much appreciated . It was actually the bug, it did not show up earlier because before I only passed static Roc.Str into the function, makes sense. <span aria-label="heart hands" class="emoji emoji-1faf6" role="img" title="heart hands">:heart_hands:</span></p>
+
+
+
+<a name="633281725"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/%E2%9C%94%20understanding%20RocListWith%28u8%2C%20false%29/near/633281725" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/.E2.9C.94.20understanding.20RocListWith.28u8.2C.20false.29.html#633281725">(Oct 20 2026 at 11:08)</a>:</h4>
+<p><span class="user-mention silent" data-user-id="1180112">removewingman</span> has marked this topic as resolved.</p>
+
+
+
+<hr><p>Last updated: Oct 24 2026 at 14:55 UTC</p>
+</html>

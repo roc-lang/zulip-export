@@ -1,0 +1,74 @@
+[
+    {
+        "content": "<p>... Or at the very least, is there a good guide on how to mentally model the performance characteristics?</p>\n<p>I'm currently writing a recursive descent parser in Roc, and I want it to be fast and efficient (hence why Roc seemed like a great choice). But I have a few concerns about my code, because I kinda just assume certain kinds of compiler optimizations are performed, but I don't know how to verify those things. More specifically:</p>\n<ol>\n<li>Implicit data copying.</li>\n</ol>\n<p>I understand optimistic mutation and vaguely how reference counting is used to determine when mutation is safe, but I don't know how \"smart\" the compiler is.</p>\n<p>For example, in my current tokenizer implementation, I currently have a recursive \"main loop\" function that hands out work to smaller functions, and I pass around a <em>read-only</em> list of UTF-8 bytes along with a <em>write-only</em> list of tokens (which accumulates the final output). I assume that no list copies are performed as long as I don't attempt to read a list (the <code>Token</code> list in this case) that I'm repeatedly writing to. Is that a safe assumption? Does this optimization break down if the data is passed to other functions that likewise never read from the list? It seems reasonable to me, but I'm just not sure.</p>\n<ol start=\"2\">\n<li>Mutually recursive functions.</li>\n</ol>\n<p>In some languages, mutually recursive functions can be optimized into imperative loops as long as the overall control flow is tail-recursive. I believe this is true of OCaml, for example. Is this true in Roc? If so, are there any edge cases to watch out for?</p>\n<p>I have other minor considerations as well, but those are the main things. One nice thing about TCO for mutually recursive functions is that I can eliminate some struct/tuple allocations for return values in favor of just having the sub-loop functions call the main loop function with multiple arguments. Just curious about what I can safely assume here.</p>\n<p>Thanks in advance to anyone with some insight on this!</p>",
+        "id": 529166891,
+        "sender_full_name": "Austin Davis",
+        "timestamp": 1752699833
+    },
+    {
+        "content": "<p>Yeah, tools are limited for this sadly.</p>",
+        "id": 529187798,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752714750
+    },
+    {
+        "content": "<p>For copying, sounds like you have the right model</p>",
+        "id": 529187817,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752714778
+    },
+    {
+        "content": "<p>Though you can read a list you are writing to. The important part is not having two locations holding onto it.</p>",
+        "id": 529187970,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752714968
+    },
+    {
+        "content": "<p>Like if you mutate the list and then read an old copy of the list</p>",
+        "id": 529188042,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752715063
+    },
+    {
+        "content": "<p>As for mutual recursion....I don't think roc guarantees it.</p>",
+        "id": 529188091,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752715113
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> Thanks for the info! Quick follow-up question:</p>\n<p>When you say \"two locations holding onto it\", what do you mean exactly? I am vaguely familiar with Rust's ownership model, which (I think) typically considers the \"location\" of references to be bounded by block scopes, which means passing a reference to a function introduces a second location. If this is also true in Roc's implementation, then that might mean that it performs a copy, right? Or is it dependent on both locations actually reading the variable?</p>\n<p>Sorry for belaboring the point. I just want to understand what to expect.</p>",
+        "id": 529195704,
+        "sender_full_name": "Austin Davis",
+        "timestamp": 1752721953
+    },
+    {
+        "content": "<p>Yeah.</p>\n<p>So the model really is the same as rust. You can have infinite immutable things (reads) and no copies will every happen. You can have exactly 1 mutable things (writes) and no copies will happen. If you have any other situtation, it will lead to a copy.</p>\n<p>Fundamentally, I think the most common issue is passing a copy to a function that will write while also holding onto a soon to be stale copy:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">x1</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"w\"> </span><span class=\"p\">...</span><span class=\"w\"> </span><span class=\"p\">]</span>\n<span class=\"nv\">x2</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">myFn</span><span class=\"p\">(</span><span class=\"nx\">x1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">..)</span><span class=\"w\"> </span><span class=\"c1\"># this function writes to x1 and returns the modified x2.</span>\n\n<span class=\"c1\"># If x1 is ever used down here, myFn will incur a copy.</span>\n</code></pre></div>",
+        "id": 529196314,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752722507
+    },
+    {
+        "content": "<p>Interesting, so maybe to get around this, I could have the function return a value to append to the <code>Token</code> list, and have the outer function actually call <code>List.append</code>, and because <code>append</code> is only called within that outer scope, it should avoid a copy, right?</p>\n<p>Assuming that works, then the other question is whether the recursive call to the outer \"main loop\" function counts as another location. So would this work?</p>\n<div class=\"codehilite\"><pre><span></span><code># Reads U8 list and returns the remaining U8 list and the Token to append\nprocess_numeric : List U8 -&gt; (List U8, Token)\nprocess_numeric = |u8_list|\n    (u8_list, []) # TODO: Implement process_numeric\n\ntokenize : List U8, List Token -&gt; List Token\ntokenize = |u8_list, token_list|\n    when u8_list is\n        [char, .. as rest] if is_digit(char) -&gt;\n            (remaining_u8s, new_token) = process_numeric(u8_list)\n            # Does this call to `tokenize` cause `token_list` to be copied?\n            tokenize(remaining_u8s, List.append(token_list, new_token))\n\n        [] -&gt; token_list\n</code></pre></div>",
+        "id": 529198386,
+        "sender_full_name": "Austin Davis",
+        "timestamp": 1752724683
+    },
+    {
+        "content": "<p>Note, specifically the issue is with reuse. This is just fine:</p>\n<div class=\"codehilite\"><pre><span></span><code>process_numeric : List U8, List Token -&gt; (List U8, List Token)\nprocess_numeric = |u8_list, token_list|\n    # more calculations base on reading u8_list\n    remaining_u8s = List.dropFirst ...\n    new_token_list = List.append token_list new_token\n    (remaining_u8s, new_token_list)\n\n\ntokenize : List U8, List Token -&gt; List Token\ntokenize = |u8_list, token_list|\n    when u8_list is\n        [char, .. as rest] if is_digit(char) -&gt;\n            (remaining_u8s, new_token_list) = process_numeric(u8_list, token_list)\n            # the important part is that now we only use new_token_list and never again token_list\n            tokenize(remaining_u8s, new_token_list)\n\n        [] -&gt; token_list\n</code></pre></div>",
+        "id": 529198847,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1752725030
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> I see, that makes sense. Thanks again, this was a big help!</p>",
+        "id": 529199809,
+        "sender_full_name": "Austin Davis",
+        "timestamp": 1752726036
+    },
+    {
+        "content": "<p>A critical performance tip in case you didn't already know <span class=\"user-mention\" data-user-id=\"816530\">@Austin Davis</span>, build with <code>--optimize</code>:</p>\n<div class=\"codehilite\"><pre><span></span><code>roc build my_main.roc --optimize\n</code></pre></div>",
+        "id": 529429424,
+        "sender_full_name": "Anton",
+        "timestamp": 1752832556
+    }
+]
