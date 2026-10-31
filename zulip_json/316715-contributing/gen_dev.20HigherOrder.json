@@ -1,0 +1,194 @@
+[
+    {
+        "content": "<p>Hey, I've been trying to grok how I should go about implementing <code>List.map</code> and friends in the <code>gen_dev</code> backend. As far as I can tell it should be handled through<code>CallType::HigherOrder</code>, but it seems that the calls are consumed by the <code>CallType::ByName</code> call type in the expression building step <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/gen_dev/src/lib.rs#L301\"><code>build_expr</code></a>. I'm not quite sure how I should proceed. I've looked in the WASM and LLVM backends but I am not quote confident enough when I look at the code paths there . Any pointers would be appreciated :)</p>",
+        "id": 325242045,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675277555
+    },
+    {
+        "content": "<p>I can help more in a bit but generally I think the wasm backend will be more helpful here I think</p>",
+        "id": 325244112,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675278088
+    },
+    {
+        "content": "<p>Thank you! I'll have another look at the wasm backend in the meanwhile</p>",
+        "id": 325244975,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675278338
+    },
+    {
+        "content": "<p>I wrote most of the Wasm backend, including this part, and I'm happy to help. Busy now but free this time tomorrow.</p>",
+        "id": 325258025,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1675282100
+    },
+    {
+        "content": "<p>Awesome, thanks! Will ping if I'm still stuck tomorrow this time :)</p>",
+        "id": 325258548,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675282315
+    },
+    {
+        "content": "<p>I think I found a solution by always building the function call regardless of the function symbol being <code>defined_in_app_module</code>. It now correctly crashes at the <code>HigherOrder</code> call type which I was aiming for</p>",
+        "id": 325269943,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675286490
+    },
+    {
+        "content": "<p>nice!</p>",
+        "id": 325270086,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675286533
+    },
+    {
+        "content": "<p>yeah a tricky thing here is that the HigherOrder functions need an extra function to be defined. A pointer to this function is given to zig, so it can call it</p>",
+        "id": 325270162,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675286568
+    },
+    {
+        "content": "<p>Yes, okay. Will give it a shot :)</p>",
+        "id": 325270268,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675286608
+    },
+    {
+        "content": "<p>because zig does not (cannot, really) know about the specific roc types, this happens with void pointers</p>",
+        "id": 325270297,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675286617
+    },
+    {
+        "content": "<p>so say we have something like</p>\n<div class=\"codehilite\"><pre><span></span><code>inc : I64 -&gt; I64\ninc = \\x -&gt; x + 1\n\nList.map [1i64] inc\n</code></pre></div>\n\n<p>Then we need something like (in rust types)</p>\n<div class=\"codehilite\"><pre><span></span><code>fn inc(_: i64) -&gt; i64 { \n    // generated as normal\n}\n\nfn caller(captured: *const c_void, arg1: *const c_void, result: *const c_void) { \n    let x = unsafe { std::ptr::read(arg1.cast::&lt;i64&gt;()) };\n    // if there were a capture, we&#39;d read that here too\n\n    let answer = inc(x);\n\n    std::ptr::write(result.cast::&lt;i64&gt;(), answer);\n}\n</code></pre></div>\n\n<p>Then we call the zig <code>list_map</code> function with the caller</p>",
+        "id": 325271208,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675286920
+    },
+    {
+        "content": "<p>Oh, very interesting. This is insightful to know</p>",
+        "id": 325272060,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675287186
+    },
+    {
+        "content": "<p>So the zig <code>list_map</code> function relies on <code>result</code> to function sort of like an out-parameter in this case?</p>",
+        "id": 325272444,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675287319
+    },
+    {
+        "content": "<p>yes, <code>result</code> will be a pointer to the correct element in the output list</p>",
+        "id": 325272615,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675287368
+    },
+    {
+        "content": "<p>Some places in the Wasm backend you might want to look at:</p>\n<p>When the Wasm backend encounters a higher-order call to one of the builtins, it just \"registers\" the fact that a wrapper function needs to be generated later. This is the <code>caller</code> in Folkert's Rust pseudo-code above. Registering it records a a name, a layout, and an enum saying which kind of wrapper it is (for a mapping function or a sorting function).<br>\n<a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/gen_wasm/src/low_level.rs#L2307-L2308\">https://github.com/roc-lang/roc/blob/main/crates/compiler/gen_wasm/src/low_level.rs#L2307-L2308</a></p>\n<p>Later on, when the backend has finished <a href=\"https://github.com/roc-lang/roc/blob/cb5cff37dcc676a223d6dd38236da77de6202a6d/crates/compiler/gen_wasm/src/lib.rs#L149-L152\">generating all of the procedures defined in the IR</a>, it starts <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/gen_wasm/src/lib.rs#L167-L191\">generating some \"helper functions\"</a> that are not in the IR. These include higher-order wrappers, as well as <code>==</code> functions for data structures, and refcounting functions.</p>\n<p>When we generate the body of the higher-order wrapper, we use the info we \"registered\" earlier. That happens here:<br>\n<a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/gen_wasm/src/backend.rs#L491-L609\">https://github.com/roc-lang/roc/blob/main/crates/compiler/gen_wasm/src/backend.rs#L491-L609</a></p>\n<p>By the way, when you see stuff about \"function index\" in Wasm you should think \"function address\" for machine code.</p>",
+        "id": 325337950,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1675326163
+    },
+    {
+        "content": "<p>I don't know whether this architecture will work well or not with the native code backends.</p>",
+        "id": 325338028,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1675326192
+    },
+    {
+        "content": "<p>the dev backend already uses the refcounting and <code>==</code> generation right, so that seems like a logical place to do this <code>caller</code> generation as well</p>",
+        "id": 325338246,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675326285
+    },
+    {
+        "content": "<p>I'm not sure if that'll work. You're referring to the mono code_gen_help module that generates IR for == and refcount. Those functions are relatively high level from the backends point of view. They have loops and conditions and stuff. So it makes sense.<br>\nBut the <code>caller</code> is a much more low level thing. I'm not sure if we can express it as IR in a way that makes sense for all dev backends. But maybe we can.</p>",
+        "id": 325346992,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1675329574
+    },
+    {
+        "content": "<p>Hmm you could probably express it as calls to <code>unbox</code>. But those are pretty easy to just generate directly. So going through IR might not be worth it.</p>",
+        "id": 325373673,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1675337518
+    },
+    {
+        "content": "<p>That explains why I saw <code>ProcSource</code> being defined only in the WASM module. That's quite an interesting way to handle this</p>",
+        "id": 325417175,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675349316
+    },
+    {
+        "content": "<p>Yeah I wanted to avoid having the code generator recurse into itself. I think that would make it much harder to think about and to debug, when it's already quite hard!</p>",
+        "id": 325461736,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1675360707
+    },
+    {
+        "content": "<p>I've looked a little more on the wrapping logic, and I think I'm not familiar enough with the codebase yet to take on implementing higherorder just yet, unfortunately!</p>",
+        "id": 325709184,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675452584
+    },
+    {
+        "content": "<p>you'll get there! they are not too important I think we can actually write <code>List.map</code> in standard roc (<code>List.mapWithIndex</code> is pure roc, no fancy lowlevels required) so we could always make examples work that way</p>",
+        "id": 325710845,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675453202
+    },
+    {
+        "content": "<p>Very neat, i just <a href=\"https://github.com/roc-lang/roc/blob/a863c838240bd2e23a76ab864121b4aea766326f/crates/compiler/builtins/roc/List.roc#L630\">looked it up</a>! I think the little exploration wasn't totally for nothing, though. I'll see if I can open a PR soon fixing some subtle literal loading issues I was running into</p>",
+        "id": 325716595,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675455324
+    },
+    {
+        "content": "<p>If we implemented all of the <code>List.mapN</code> functions like this, we could delete a lot of complex backend code! The only higher-order lowlevel would be sortWith.</p>",
+        "id": 325791553,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1675503080
+    },
+    {
+        "content": "<p>yeah, I'll go over the benchmarks again. A problem here is how to limit the number of RC operations. By default, <code>List.get</code> will increment, and then at the end of the mapping the whole list is decremented</p>",
+        "id": 325827591,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675517316
+    },
+    {
+        "content": "<p>and for performance we'd need to short-circuit that somehow</p>",
+        "id": 325827613,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675517330
+    },
+    {
+        "content": "<p>hmm, criterion consistently hits some sort of memory error on my machine</p>",
+        "id": 325833453,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675519856
+    },
+    {
+        "content": "<p>even for trivial programs</p>",
+        "id": 325833464,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675519861
+    },
+    {
+        "content": "<p>Does this happen when you benchmark <code>List.mapN</code> implemented in roc?</p>",
+        "id": 325859569,
+        "sender_full_name": "Ahmad Sattar",
+        "timestamp": 1675530652
+    },
+    {
+        "content": "<p>yeah there is a benchmark setup in the <code>test_gen</code> crate, but running it gives weird segfaults for me</p>",
+        "id": 325874053,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675538861
+    },
+    {
+        "content": "<p>I wrote that setup originally too, but I don't think we really changed anything about compilation since I first wrote it</p>",
+        "id": 325874125,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1675538898
+    }
+]

@@ -1,0 +1,1256 @@
+[
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"586417\">Elias Mulhall</span> <a href=\"#narrow/stream/358903-Advent-of-Code/topic/2023.20Day.203/near/405676155\">said</a>:</p>\n<blockquote>\n<p><a href=\"https://gist.github.com/mulias/b07e012ced92406f59cc2548d0f01323\">Day 3, this one has a performance bug that I'll talk about below</a><br>\n<a href=\"https://gist.github.com/mulias/f217e7461a2b847b1110d27e6c6191a1\">Day 3, with a workaround</a></p>\n<div class=\"spoiler-block\"><div class=\"spoiler-header\">\n<p>Performance Issue Details</p>\n</div><div class=\"spoiler-content\" aria-hidden=\"true\">\n<p>I used a set of <code>{x: Nat, y: Nat}</code> indices to solve for adjacency. Something about this is hella slow. There's a benchmark in the gist, but the implementation using sets takes ~6 seconds to run. If I try  running a build compiled with <code>--optimize</code> then  it hangs forever while using 100% of a CPU core.</p>\n<p>To troubleshoot I did a super naive swap, changing out the sets for lists, used concat instead of union, and searching through the two lists to find the intersection. That runs in ~2 seconds unoptimized and ~150ms optimized.</p>\n<p>There's some inefficiency in my code but the set implementation being so much slower seems like a bug to me.</p>\n<p></div></div><br>\n</p>\n</blockquote>\n<p>I haven't root caused this or anything, but it honestly might just be a case of a bad usecase for set that got unlucky with perf (though obviously must be some sort of bug due to the issue with <code>--optimize</code>.</p>\n<p>Anyway, stats I have so far.</p>\n<p>1) generates 1863 neighbor sets of size 8. 8 is an unlucky number it means that every one of those sets will be allocated, insert 7 values which requires hashing them, reallocated and rehashed, then insert the final value. So every fromList call here will cast 2 allocations, 15 hashes, and some other data twiddling.</p>\n<p>Fixing fromList perf and at a minimum getting withCapacity properly working should help a lot here. I forget why fromCapacity is no implemented currently, but this probably is pretty terrible for perf.</p>\n<p>2) This generates 32222 sets of size 0 to 3 for the various indices. 29788 of which are just empty. Given these never rehash, this is just a ridiculous number of allocations (that wouldn't happen with an empty list) due to dictionaries having a default capacity of 8. And currently a dictionary is 2 allocations. So compared to using lists, this is 59576 extra allocations....probably this is the main issue?</p>\n<p>3) Set.insection are currently not written in the optimal way. It probably should be walking one set and removing items. Instead it generates a totally new set from empty.</p>",
+        "id": 405705083,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701643454
+    },
+    {
+        "content": "<p>love this investigation! <span aria-label=\"star struck\" class=\"emoji emoji-1f929\" role=\"img\" title=\"star struck\">:star_struck:</span></p>",
+        "id": 405705785,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701644035
+    },
+    {
+        "content": "<p>Ahhh, the size 8 thing makes sense. It would be pretty straightforward to add a <code>Set.withCapacity</code>, right? Actually in that case I'm doing <code>Set.fromList</code>... would it be bad for that function to eager-allocate the set to have the same capacity as the list? Depending on use case that might mean allocing way more space than needed, but not to a ridiculous degree.</p>",
+        "id": 405707263,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701645116
+    },
+    {
+        "content": "<p>Oops, I skipped the paragraph where you already said that</p>",
+        "id": 405707338,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701645158
+    },
+    {
+        "content": "<p>Is the <code>--optimize</code> issue reproducable, or just me?</p>",
+        "id": 405707537,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701645323
+    },
+    {
+        "content": "<p>Reproducible on my end</p>",
+        "id": 405707558,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701645350
+    },
+    {
+        "content": "<p>I'll try to implement a few improvements and see how it goes.</p>",
+        "id": 405707619,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701645395
+    },
+    {
+        "content": "<p>As an extra note, if we were really careful, the set could theoretically take ownership of the list and reuse the allocation. Though would be a more complex algorithm. Would need to inplace deal with duplicate elements.</p>",
+        "id": 405707739,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701645526
+    },
+    {
+        "content": "<blockquote>\n<p>So compared to using lists, this is 59576 extra allocations</p>\n</blockquote>\n<p>...</p>\n<p>So allocating is faster than not allocating. Cause if we don't allocate, we have to add an extra conditional to all insert/get/remove/etc calls.</p>",
+        "id": 405713329,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701649679
+    },
+    {
+        "content": "<p>about 10% faster to just always allocate with this example</p>",
+        "id": 405713463,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701649745
+    },
+    {
+        "content": "<p>what's the extra conditional?</p>",
+        "id": 405713469,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701649747
+    },
+    {
+        "content": "<p>like what does it do</p>",
+        "id": 405713478,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701649755
+    },
+    {
+        "content": "<p>before it would just unsafe load an index from the metadata</p>",
+        "id": 405713513,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701649776
+    },
+    {
+        "content": "<p>Now it has to check length is not 0</p>",
+        "id": 405713535,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701649794
+    },
+    {
+        "content": "<p>and for insert of course, if not allocated, it has to allocate at the beginning of the function.</p>",
+        "id": 405713626,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701649826
+    },
+    {
+        "content": "<p>Also, due to the sets being super small (max size 8 elements), I don't think that sets will ever be faster than lists for this exampl. Lots of extra overhead with hashing, allocations, and extra conditionals with very very small data.</p>",
+        "id": 405713939,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701650035
+    },
+    {
+        "content": "<p>I wonder if there's some cmov trick that could work here</p>",
+        "id": 405714071,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701650103
+    },
+    {
+        "content": "<p>like this part:</p>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/405713513\">said</a>:</p>\n<blockquote>\n<p>before it would just unsafe load an index from the metadata</p>\n</blockquote>\n<p>could use a cmov for \"if length is 0, set the pointer to be a pointer to the address of the length itself\" or something</p>",
+        "id": 405714146,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701650146
+    },
+    {
+        "content": "<p>(I don't know what the metadata would need to be for \"this is missing\" though)</p>",
+        "id": 405714173,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701650163
+    },
+    {
+        "content": "<p>probably not.</p>\n<p>It is essentialy:</p>\n<div class=\"codehilite\"><pre><span></span><code>if initialized:\n    # do some gigantic compute\nelse:\n    just return\n</code></pre></div>\n<p>Generally <code>cmov</code> is only good for evenish small compute. branch prediction is much better for cases like this.</p>",
+        "id": 405714297,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701650220
+    },
+    {
+        "content": "<p>well that's true for <code>insert</code>, right? But <code>get</code> presumably never initializes anything</p>",
+        "id": 405714797,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701650469
+    },
+    {
+        "content": "<p>but I guess it's the others that are significantly slowed down here</p>",
+        "id": 405714831,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701650488
+    },
+    {
+        "content": "<p>So <code>insert</code> is actually</p>\n<div class=\"codehilite\"><pre><span></span><code>if !initialized:\n    initialize\n\n# do rest of compute with initialized dict\n</code></pre></div>\n<p>for <code>get</code>, it is the case mentioned above. Cause hashing and calculating index related stuff is the large compute I was mentioning above.</p>",
+        "id": 405715036,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701650578
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> doesn't <code>insert</code> need a branch anyway to see if it's over capacity?</p>",
+        "id": 405715275,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701650673
+    },
+    {
+        "content": "<p>Only if the key isn't found</p>",
+        "id": 405715820,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701650940
+    },
+    {
+        "content": "<p>ok so then it branches on whether the key is found, right?</p>",
+        "id": 405716006,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701651028
+    },
+    {
+        "content": "<p>yep</p>",
+        "id": 405716044,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701651044
+    },
+    {
+        "content": "<p>but checking indices assumes the dict is initialized</p>",
+        "id": 405716076,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701651065
+    },
+    {
+        "content": "<p>So it never does any bounds checks</p>",
+        "id": 405716139,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701651102
+    },
+    {
+        "content": "<p>gotcha, so what if that branch's conditional branchlessly checked length?</p>",
+        "id": 405716167,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701651117
+    },
+    {
+        "content": "<p>e.g. do both the cmov thing I mentioned earlier and also an <code>AND</code> with it being nonempty</p>",
+        "id": 405716283,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701651148
+    },
+    {
+        "content": "<p>That branch is after it has already unconditionally loaded from the metadata. Which would deref a null pointer on an uninitialized dict.</p>",
+        "id": 405716362,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701651194
+    },
+    {
+        "content": "<p>that's what I mean about doing a cmov to have the null pointer point to <code>&amp;length</code> or whatever so it can be successfully dereferenced to something we'll ignore anyway</p>",
+        "id": 405716431,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701651235
+    },
+    {
+        "content": "<p>e.g. (pretending <code>&amp;&amp;</code> is not going to desugar to a condition here):</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">isEmpty</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">len</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">;</span>\n<span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">metadataPtr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">isEmpty</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">&amp;</span><span class=\"n\">len</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">else</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">normalMetadataPtr</span><span class=\"w\"> </span><span class=\"p\">};</span>\n\n<span class=\"k\">if</span><span class=\"w\"> </span><span class=\"o\">!</span><span class=\"n\">isEmpty</span><span class=\"w\"> </span><span class=\"o\">&amp;&amp;</span><span class=\"w\"> </span><span class=\"n\">doNormalCheckOn</span><span class=\"p\">(</span><span class=\"n\">metadataPtr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"p\">.</span><span class=\"w\"> </span><span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 405716605,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701651311
+    },
+    {
+        "content": "<p>it's definitely possible that would still be more costly than the branch misprediction though haha</p>",
+        "id": 405716646,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701651343
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/405713939\">said</a>:</p>\n<blockquote>\n<p>Also, due to the sets being super small (max size 8 elements), I don't think that sets will ever be faster than lists for this exampl. Lots of extra overhead with hashing, allocations, and extra conditionals with very very small data.</p>\n</blockquote>\n<p>something I've wondered about is whether we should consider having a \"small hashmap optimization\" where we don't use a hashmap if the collection is small enough</p>",
+        "id": 405718629,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701652216
+    },
+    {
+        "content": "<p>and instead <code>Dict</code> (and therefore <code>Set</code> too) is backed by a flat <code>List</code> of tuples</p>",
+        "id": 405718671,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701652243
+    },
+    {
+        "content": "<p>So I figured out how to remove the branch. Just use constant lists. Then it is always initialized</p>",
+        "id": 405719434,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701652630
+    },
+    {
+        "content": "<p>Instead of before where it was using list.repeat.</p>",
+        "id": 405719455,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701652644
+    },
+    {
+        "content": "<p>Also initialization changes seem to have fixed the <code>--optimize</code> bug.</p>",
+        "id": 405719477,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701652663
+    },
+    {
+        "content": "<p>In optimized, this is about 6x slower than the list version</p>",
+        "id": 405719492,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701652672
+    },
+    {
+        "content": "<p>which honestly may be expected perf. Probably should write something similar in c++ with absl::flat_hash_map and vector to compare</p>",
+        "id": 405719577,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701652700
+    },
+    {
+        "content": "<p>constant lists as in they're allocated in the readonly section of the binary?</p>",
+        "id": 405719943,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701652915
+    },
+    {
+        "content": "<p>Yeah, they should be. Though looking at the llvm, I think llvm is smart enough to make them magically disappear cause they are so small. Not fully sure</p>",
+        "id": 405720093,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701653003
+    },
+    {
+        "content": "<p>very cool!</p>",
+        "id": 405720182,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701653044
+    },
+    {
+        "content": "<p>what do you think of the \"small hashmap optimization\" idea?</p>",
+        "id": 405720196,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701653051
+    },
+    {
+        "content": "<p>Mostly questioning if it is a good idea for automatic application or a better idea for human optimization.</p>",
+        "id": 405720694,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701653357
+    },
+    {
+        "content": "<p>As in, we could expose both types with the same api (or make the list verson in a package). Explicitly choosing either one avoids perf costs related to extra conditionals. So if you know you need large or know you need small it makes sense to pick explicitly. That said merged may avoid some worst cases like this.</p>",
+        "id": 405720843,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701653450
+    },
+    {
+        "content": "<p>I think the pitch for it is that it's common to use <code>Set</code> or <code>Dict</code> not so much for performance but rather because they enforce a guarantee and clearly communicate intent</p>",
+        "id": 405720848,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701653456
+    },
+    {
+        "content": "<p>and we could have separate types for that, but I do wonder whether the extra conditional matters in the \"actually use a hash map\" case when you have so many entries that you're probably getting cache misses</p>",
+        "id": 405720965,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701653524
+    },
+    {
+        "content": "<blockquote>\n<p>not so much for performance</p>\n</blockquote>\n<p>To that I would say, use <code>--optimize</code> and accept that it may not be the same perf as picking a <code>ListSet</code> or <code>ListDict</code>, but perf isn't the main concern.</p>",
+        "id": 405721048,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701653571
+    },
+    {
+        "content": "<p>Also, I need to do some measurements, but likely we should just rewrite dict as a zig builtin.</p>",
+        "id": 405721080,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701653591
+    },
+    {
+        "content": "<p>That probably will close a solid chunk of the gap.</p>",
+        "id": 405721091,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701653604
+    },
+    {
+        "content": "<p>But I can't really guarantee that currently, it is mostly speculation. That said, I was unable to implement part of the absl::flat_hash_map optimization in roc due to it being worse performance</p>",
+        "id": 405721185,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701653668
+    },
+    {
+        "content": "<p>Though I think we have a builtin to address part of that now, so maybe I should try again.</p>",
+        "id": 405721221,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701653702
+    },
+    {
+        "content": "<p>I also wonder if a <code>List.appendUnique</code> or something might be useful</p>",
+        "id": 405721744,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701654046
+    },
+    {
+        "content": "<p>like some quick way to use a list like a <code>Set</code> except with different performance characteristics</p>",
+        "id": 405721804,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701654100
+    },
+    {
+        "content": "<p>eh might be clearer to get a <code>ListSet</code> off the shelf or something</p>",
+        "id": 405721875,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701654126
+    },
+    {
+        "content": "<p>oh, so essentially:</p>\n<div class=\"codehilite\"><pre><span></span><code>if !List.contains list x then\n    List.append list x\n</code></pre></div>",
+        "id": 405721882,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701654136
+    },
+    {
+        "content": "<p>Just found a huge speed boost in the app...<br>\nfrom</p>\n<div class=\"codehilite\"><pre><span></span><code>|&gt; Set.union state\n</code></pre></div>\n<p>to</p>\n<div class=\"codehilite\"><pre><span></span><code>|&gt; \\x -&gt; Set.union state x\n</code></pre></div>\n<p>Made the optimized build about 2x faster</p>",
+        "id": 405722506,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701654585
+    },
+    {
+        "content": "<p>Anyway, on a branch, I am down to 3x slower on an optimized build with set vs with list.</p>",
+        "id": 405723637,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701655304
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/405722506\">said</a>:</p>\n<blockquote>\n<p>Just found a huge speed boost in the app...<br>\nfrom</p>\n<div class=\"codehilite\"><pre><span></span><code>|&gt; Set.union state\n</code></pre></div>\n<p>to</p>\n<div class=\"codehilite\"><pre><span></span><code>|&gt; \\x -&gt; Set.union state x\n</code></pre></div>\n<p>Made the optimized build about 2x faster</p>\n</blockquote>\n<p>whoa! Why does that improve speed?</p>",
+        "id": 405724615,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701655770
+    },
+    {
+        "content": "<p>It is equivalent of going from</p>\n<div class=\"codehilite\"><pre><span></span><code>List.concat smallList largeList\n</code></pre></div>\n<p>To</p>\n<div class=\"codehilite\"><pre><span></span><code>List.concat largeList smallList\n</code></pre></div>",
+        "id": 405724804,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701655865
+    },
+    {
+        "content": "<p>So copy a few elements to the end of something large instead of copy a ton of elements to the end of something small.</p>",
+        "id": 405724827,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701655889
+    },
+    {
+        "content": "<p>In a very hot loop</p>",
+        "id": 405724843,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701655901
+    },
+    {
+        "content": "<p>ohhh</p>",
+        "id": 405725182,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701656071
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> does that suggest we should swap the argument order there?</p>",
+        "id": 405725202,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701656085
+    },
+    {
+        "content": "<p>oh nm, I guess this is application-specific</p>",
+        "id": 405725290,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701656116
+    },
+    {
+        "content": "<p>might be too fancy, but I wonder if it's worth picking which one we insert into based on which is bigger, assuming they're both unique</p>",
+        "id": 405725424,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701656170
+    },
+    {
+        "content": "<p>I added a conditional in the function. I think that will be worth it in general</p>",
+        "id": 405725429,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701656175
+    },
+    {
+        "content": "<p>in <code>Set.union</code> you mean?</p>",
+        "id": 405725588,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701656257
+    },
+    {
+        "content": "<p>yeah</p>",
+        "id": 405725612,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701656268
+    },
+    {
+        "content": "<p>cool, makes sense to me!</p>",
+        "id": 405725745,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701656324
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"586417\">@Elias Mulhall</span> can you test on the <code>set-perf</code> branch? See if <code>--optimize</code> still hangs for you.</p>",
+        "id": 405725955,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701656426
+    },
+    {
+        "content": "<p>Anyway, patched up a handful of improvements in <a href=\"https://github.com/roc-lang/roc/issues/6176\">#6176</a></p>",
+        "id": 405726080,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701656498
+    },
+    {
+        "content": "<p>Also, I wonder if the full performant impl of <code>absl::flat_hash_set</code> might actually be faster than regular lists. The main feature we are missing currently is groups. Groups enable it such that a chunk of the hash can be compared for 8 indices at once. So it might do 1 hash and 1 comparison to avoid up to 8 calls to <code>==</code>. That said it still has the rest of the extra conditionals and overhead.</p>",
+        "id": 405726484,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701656657
+    },
+    {
+        "content": "<p>Now that we have <code>popCount</code> as a builtin, I should revisit implementing that in roc and perf gains.</p>",
+        "id": 405726608,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701656726
+    },
+    {
+        "content": "<p>Should definitly convert this or a similar example to <code>c++</code> with <code>absl::flat_hash_map</code> to see what our real perf diff is.</p>",
+        "id": 405726673,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701656762
+    },
+    {
+        "content": "<p>that sounds fascinating! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 405728902,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701657772
+    },
+    {
+        "content": "<p>As an aside, about small dict impl.</p>\n<p>The larger the key is the worse small dict is. Cause large key means an expensive Eq. So it would be a lot faster to do more hash comparisons rather than key comparisons.</p>",
+        "id": 405731318,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701658829
+    },
+    {
+        "content": "<p>So probably <code>ListDict</code> is only better with both small size and small key.</p>",
+        "id": 405731401,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701658856
+    },
+    {
+        "content": "<p>yeah true, although we do know the size of that statically, so could have a heuristic involving both</p>",
+        "id": 405733758,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701659888
+    },
+    {
+        "content": "<p>Sure, if roc exposed that at compile time or you add an extra runtime check</p>",
+        "id": 405734044,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701660041
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/405725955\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"586417\">Elias Mulhall</span> can you test on the <code>set-perf</code> branch? See if <code>--optimize</code> still hangs for you.</p>\n</blockquote>\n<p>Unfortunately it still does! Anything I can do to debug further?</p>",
+        "id": 405744876,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701665586
+    },
+    {
+        "content": "<p>Oh wait, I lightly modified the code, with the original I can still repro...let me take a look at that specifically.</p>",
+        "id": 405745431,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701665957
+    },
+    {
+        "content": "<p>Ah ha, good luck!</p>",
+        "id": 405745597,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701666032
+    },
+    {
+        "content": "<p>So I'm not sure how easy this will be to make a minimized test case, but this is not a <code>Set</code> bug at all.</p>\n<p>It is some sort refcounting/uniqueness failure. The bug is specifically with the <code>newPartNumber</code> variable: <a href=\"https://gist.github.com/mulias/b07e012ced92406f59cc2548d0f01323#file-2023day03-roc-L66\">https://gist.github.com/mulias/b07e012ced92406f59cc2548d0f01323#file-2023day03-roc-L66</a></p>",
+        "id": 405748274,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701667642
+    },
+    {
+        "content": "<p>It should always have multiple references which means on this line here it should incur a deep copy:<br>\n<a href=\"https://gist.github.com/mulias/b07e012ced92406f59cc2548d0f01323#file-2023day03-roc-L88\">https://gist.github.com/mulias/b07e012ced92406f59cc2548d0f01323#file-2023day03-roc-L88</a></p>",
+        "id": 405748363,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701667701
+    },
+    {
+        "content": "<p>That is not happening. As such, we are getting these weird sets that have old data from the last iteration of the loop. Unsurprisingly, missing old data with a new set breaks things.</p>",
+        "id": 405748413,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701667753
+    },
+    {
+        "content": "<p>A simple workaround is just to inline the variable uses:<br>\n<code>current: { digits: [], indices: Set.empty {} },</code></p>",
+        "id": 405748451,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701667798
+    },
+    {
+        "content": "<p>Doing a quick scan of the mono ir, it seems that every iteration of <code>Array2d.walk</code> the value is decremented, but it doesn't look to every be incremented. I assume it would get incremented through the closure capture somewhere or something like that, but I don't see it. (definitely might just be missing it)</p>",
+        "id": 405748865,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701668092
+    },
+    {
+        "content": "<p>actually, it looks like <code>Array2D.walk</code> calls <code>List.walkWithIndex</code> calls<code> List.walkWithIndexHelp</code> which increments the functions refcount. That should mean this all works correctly. Maybe a bug in the actully generated increment or decrement function?</p>",
+        "id": 405749251,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701668372
+    },
+    {
+        "content": "<p>So I was able to work around the refcount craziness (was affecting both the list and set version of the code). Fixing that made both versions about 4x faster. So on my machine the list version is now 40ms and the set version 150ms. Both quite respectable times and the flamegraphs now look like they are spending there time mostly doing real work and not too much in refcounts.</p>\n<p>All of the time is now essentially set in calculating set overlaps. (again these are small sets neighbors is 8 elements and the digit sets are 1 to 3 elements).</p>\n<p>So if we optimize the set overlap calculation to early exist like the list overlap calculation, we get to the point where the set version is slightly more than 2x slower than the list version at about 90ms</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">isOverlapping</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Set</span><span class=\"w\"> </span><span class=\"nx\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Set</span><span class=\"w\"> </span><span class=\"nx\">a</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Bool</span>\n<span class=\"nv\">isOverlapping</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">a</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">b</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"nx\">Set</span><span class=\"p\">.</span><span class=\"nx\">len</span><span class=\"w\"> </span><span class=\"nx\">b</span><span class=\"w\"> </span><span class=\"o\">&lt;</span><span class=\"w\"> </span><span class=\"nx\">Set</span><span class=\"p\">.</span><span class=\"nx\">len</span><span class=\"w\"> </span><span class=\"nx\">a</span><span class=\"w\"> </span><span class=\"k\">then</span>\n<span class=\"w\">        </span><span class=\"nx\">isOverlapping</span><span class=\"w\"> </span><span class=\"nx\">b</span><span class=\"w\"> </span><span class=\"nx\">a</span>\n<span class=\"w\">    </span><span class=\"k\">else</span>\n<span class=\"w\">        </span><span class=\"nx\">Set</span><span class=\"p\">.</span><span class=\"nx\">walkUntil</span><span class=\"w\"> </span><span class=\"nx\">a</span><span class=\"w\"> </span><span class=\"nx\">Bool</span><span class=\"p\">.</span><span class=\"nx\">false</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">k</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">            </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"nx\">Set</span><span class=\"p\">.</span><span class=\"nx\">contains</span><span class=\"w\"> </span><span class=\"nx\">b</span><span class=\"w\"> </span><span class=\"nx\">k</span><span class=\"w\"> </span><span class=\"k\">then</span>\n<span class=\"w\">                </span><span class=\"nx\">Break</span><span class=\"w\"> </span><span class=\"nx\">Bool</span><span class=\"p\">.</span><span class=\"nx\">true</span>\n<span class=\"w\">            </span><span class=\"k\">else</span>\n<span class=\"w\">                </span><span class=\"nx\">Continue</span><span class=\"w\"> </span><span class=\"nx\">Bool</span><span class=\"p\">.</span><span class=\"nx\">false</span>\n</code></pre></div>",
+        "id": 405757738,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701672824
+    },
+    {
+        "content": "<p>Anyway, that is probably enough digging into the perf of all of this.</p>",
+        "id": 405758163,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701672975
+    },
+    {
+        "content": "<p>I should probably file some issue to track some of this, but I will leave that as an exercise for tomorrow Brendan cause I am currently quite tired.</p>",
+        "id": 405758226,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701673012
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/405720196\">said</a>:</p>\n<blockquote>\n<p>what do you think of the \"small hashmap optimization\" idea?</p>\n</blockquote>\n<p>FWIW maps on the Beam are just arrays under the hood if size &lt; 32</p>",
+        "id": 405766361,
+        "sender_full_name": "Hannes Nevalainen",
+        "timestamp": 1701676569
+    },
+    {
+        "content": "<blockquote>\n<p>Anyway, that is probably enough digging into the perf of all of this.</p>\n</blockquote>\n<p>I would say so, you went much deeper into this than I anticipated! Thanks for all the details, very interesting.</p>",
+        "id": 405826006,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701697129
+    },
+    {
+        "content": "<p>Haha. I enjoy digging into performance and such</p>",
+        "id": 405851094,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701704278
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"630509\">Hannes Nevalainen</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/405766361\">said</a>:</p>\n<blockquote>\n<p>FWIW maps on the Beam are just arrays under the hood if size &lt; 32</p>\n</blockquote>\n<p>Do you have a link to info on this? Or source I guess.</p>",
+        "id": 405852651,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701704635
+    },
+    {
+        "content": "<blockquote>\n<p>So I was able to work around the refcount craziness (was affecting both the list and set version of the code). Fixing that made both versions about 4x faster.</p>\n</blockquote>\n<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> I'm not sure I'm following how you did this. Was this a code change or a compiler change?</p>",
+        "id": 405885705,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701713494
+    },
+    {
+        "content": "<p>Ah sorry, didn't share:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">gearPartNumbers</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Schematic</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">PartNumber</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">PartNumber</span><span class=\"p\">)</span>\n<span class=\"nv\">gearPartNumbers</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">schematic</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">partNumbers</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">allPartNumbers</span><span class=\"w\"> </span><span class=\"nx\">schematic</span>\n\n<span class=\"w\">    </span><span class=\"nx\">Array2D</span><span class=\"p\">.</span><span class=\"nx\">walk</span><span class=\"w\"> </span><span class=\"nx\">schematic</span><span class=\"w\"> </span><span class=\"p\">([],</span><span class=\"w\"> </span><span class=\"nx\">partNumbers</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">direction</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Forwards</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"p\">(</span><span class=\"nx\">state</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">pns</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"nx\">elem</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">index</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">        </span><span class=\"k\">when</span><span class=\"w\"> </span><span class=\"nx\">elem</span><span class=\"w\"> </span><span class=\"o\">is</span>\n<span class=\"w\">            </span><span class=\"nb\">Symbol</span><span class=\"w\"> </span><span class=\"s\">'*'</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">                </span><span class=\"nv\">elemNeighbors</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">neighbors</span><span class=\"w\"> </span><span class=\"nx\">index</span>\n<span class=\"w\">                </span><span class=\"nv\">neighboringPartNumbers</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">                    </span><span class=\"nx\">List</span><span class=\"p\">.</span><span class=\"nx\">keepIf</span><span class=\"w\"> </span><span class=\"nx\">pns</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">partNumber</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">                        </span><span class=\"nx\">isOverlapping</span><span class=\"w\"> </span><span class=\"nx\">partNumber</span><span class=\"p\">.</span><span class=\"nx\">indices</span><span class=\"w\"> </span><span class=\"nx\">elemNeighbors</span>\n\n<span class=\"w\">                </span><span class=\"k\">when</span><span class=\"w\"> </span><span class=\"nx\">neighboringPartNumbers</span><span class=\"w\"> </span><span class=\"o\">is</span>\n<span class=\"w\">                    </span><span class=\"p\">[</span><span class=\"nx\">pn1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">pn2</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">List</span><span class=\"p\">.</span><span class=\"nx\">append</span><span class=\"w\"> </span><span class=\"nx\">state</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">pn1</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">pn2</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"nx\">pns</span><span class=\"p\">)</span>\n<span class=\"w\">                    </span><span class=\"nx\">_</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">state</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">pns</span><span class=\"p\">)</span>\n\n<span class=\"w\">            </span><span class=\"nx\">_</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">state</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">pns</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"p\">.</span><span class=\"mi\">0</span>\n</code></pre></div>\n<p>Same can be done to the list version</p>",
+        "id": 405886546,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701713791
+    },
+    {
+        "content": "<p>I think if <code>partNumbers</code> is a capture of the closure we aren't smart about refcounts and recursively increment the refcounts of everything contained in <code>partNumbers</code>.</p>\n<p>If we pass it in instead, we realize that we don't need to recursively increment hte refcount based on how it is being used and instead just increment the outer list refcount. That is at least my guess.</p>",
+        "id": 405887140,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701714007
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> or <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> does that sound plausible? If so, is there an actionable bug I can file?</p>",
+        "id": 405887285,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701714072
+    },
+    {
+        "content": "<blockquote>\n<p>If we pass it in instead, we realize that we don't need to recursively increment hte refcount based on how it is being used and instead just increment the outer list refcount. That is at least my guess.</p>\n</blockquote>\n<p>Can you elaborate what you mean by this? I don't follow</p>",
+        "id": 405937690,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701735382
+    },
+    {
+        "content": "<p>This is the original code</p>\n<div class=\"codehilite\"><pre><span></span><code>gearPartNumbers : Schematic, List PartNumber -&gt; List (PartNumber, PartNumber)\ngearPartNumbers = \\schematic, partNumbers -&gt;\n    Array2D.walk schematic [] { direction: Forwards } \\state, elem, index -&gt;\n        when elem is\n            Symbol &#39;*&#39; -&gt;\n                adjacentPartNumbers =\n                    List.keepIf partNumbers \\partNumber -&gt;\n                        anyAdjacent partNumber.indices [index]\n\n                when adjacentPartNumbers is\n                    [pn1, pn2] -&gt; List.append state (pn1, pn2)\n                    _ -&gt; state\n\n            _ -&gt; state\n</code></pre></div>\n<p>This code is faster because it seems to eliminate ref counts on <code>partNumbers</code></p>\n<div class=\"codehilite\"><pre><span></span><code>gearPartNumbers : Schematic, List PartNumber -&gt; List (PartNumber, PartNumber)\ngearPartNumbers = \\schematic, partNumbers -&gt;\n    Array2D.walk schematic ([], partNumbers) { direction: Forwards } \\(state, pns), elem, index -&gt;\n        when elem is\n            Symbol &#39;*&#39; -&gt;\n                adjacentPartNumbers =\n                    List.keepIf pns \\partNumber -&gt;\n                        anyAdjacent partNumber.indices [index]\n\n                when adjacentPartNumbers is\n                    [pn1, pn2] -&gt; (List.append state (pn1, pn2), pns)\n                    _ -&gt; (state, pns)\n\n            _ -&gt; (state, pns)\n    |&gt; .0\n</code></pre></div>",
+        "id": 405938773,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701735867
+    },
+    {
+        "content": "<p><del>we realize that we don't need to recursively increment hte refcount based on how it is being used and instead just increment the outer list refcount.</del></p>\n<p>So that comment turned out to be wrong. I thought we had an optimization that enable sometimes just incrementing a list outer refcount instead of incrementing it recursively, but even if we do, it doesn't apply here.</p>\n<hr>\n<h3>A more correct analysis</h3>\n<p>In the original version <code>partNumbers</code> is a closure capture. On every iteration of <code>Array2D.walk</code>, we would recursively increment the closure captures and spend a lot of time incrementing refcounts in <code>partNumbers</code>. On top of that, at the end of the function, we would recursively decrement the refcount. Overall just eating tons of times with refcounting.</p>\n<p>If we explicitly make <code>partNumbers</code> part of the state, this goes away. Most of the time, <code>pn</code> is just passed through without getting used. This means its refcount is never incremented or decremented. The only time we have to deal with refcounts of <code>pn</code> in the new version of the code is when the symbol is <code>*</code>. In that case, the refcount of <code>pn</code> is recursively incremented. So this is just way way less refcount fiddling overall. Turned out to not be a fancy optimization, just hugely cutting how often we have to deal with this.</p>\n<p>Summary: recursive refcount increments/decrements can be super brutal. I wonder if there is a better way to deal with a case like this.</p>",
+        "id": 405938940,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701735945
+    },
+    {
+        "content": "<p>Looking at the IR to confirm...</p>",
+        "id": 405939207,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701736062
+    },
+    {
+        "content": "<p>Here's an updated gist if that helps <a href=\"https://gist.github.com/mulias/3e7fb28d934736155028d5e85c9bb3ca\">https://gist.github.com/mulias/3e7fb28d934736155028d5e85c9bb3ca</a><br>\nOne of the versions of the function is commented out</p>",
+        "id": 405939715,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701736283
+    },
+    {
+        "content": "<p>Hmm yeah your analysis sounds right to me Brendan</p>",
+        "id": 405942201,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701737257
+    },
+    {
+        "content": "<p>It's not totally clear to me why in the first case the capture is seen as borrowed, and in the second case it isn't though</p>",
+        "id": 405942344,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701737296
+    },
+    {
+        "content": "<p>The thing is that on the surface, the capture is seen as owned, until <code>array2d.Array2D.iterate</code> is hit</p>",
+        "id": 405942410,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701737326
+    },
+    {
+        "content": "<p>And then we have</p>\n<div class=\"codehilite\"><pre><span></span><code># SLOW\nprocedure : `array2d.Array2D.iterate` List {{List U8, List {U64, U64}}, {List U8, List {U64, U64}}}\nprocedure = `array2d.Array2D.iterate` (`#Derived_gen.IdentId(86)`: {List [C , C U8, C U8], {U64, U64}}, `#Derived_gen.IdentId(87)`: {U64, U64}, `#Derived_gen.IdentId(88)`:\nList {{List U8, List {U64, U64}}, {List U8, List {U64, U64}}}, `#Derived_gen.IdentId(89)`: {}, `#Derived_gen.IdentId(90)`: List {List U8, List {U64, U64}}):\n    joinpoint `array2d.Array2D.770` `array2d.Array2D.array` `array2d.Array2D.index` `array2d.Array2D.state` `array2d.Array2D.nextIndexFn` `array2d.Array2D.nextStateFn`:\n        inc `array2d.Array2D.array`;\n        let `array2d.Array2D.771` : [C {}, C [C , C U8, C U8]] = CallByName `array2d.Array2D.get` `array2d.Array2D.array` `array2d.Array2D.index`;\n        let `array2d.Array2D.791` : U8 = 1i64;\n        let `array2d.Array2D.792` : U8 = GetTagId `array2d.Array2D.771`;\n        let `array2d.Array2D.793` : Int1 = lowlevel Eq `array2d.Array2D.791` `array2d.Array2D.792`;\n        if `array2d.Array2D.793` then\n            inc `array2d.Array2D.array`;\n            let `array2d.Array2D.elem` : [C , C U8, C U8] = UnionAtIndex (Id 1) (Index 0) `array2d.Array2D.771`;\n            let `array2d.Array2D.788` : [C {}, C {U64, U64}] = CallByName `array2d.Array2D.decY` `array2d.Array2D.array` `array2d.Array2D.index`;\n            inc `array2d.Array2D.nextStateFn`; &lt;&lt;&lt;&lt;&lt; THIS is the INC\n            let `array2d.Array2D.789` : [C List {{List U8, List {U64, U64}}, {List U8, List {U64, U64}}}, C List {{List U8, List {U64, U64}}, {List U8, List {U64, U64}}}] = CallByName `array2d.Array2D.200` `array2d.Array2D.state` `array2d.Array2D.elem` `array2d.Array2D.index` `array2d.Array2D.nextStateFn`;\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code># FAST\nprocedure : `array2d.Array2D.iterate` {List {List U8, List {U64, U64}}, {List U8, List {U64, U64}}}\nprocedure = `array2d.Array2D.iterate` (`#Derived_gen.IdentId(48)`: {List [C , C U8, C U8], {U64, U64}}, `#Derived_gen.IdentId(49)`: {U64, U64}, `#Derived_gen.IdentId(50)`:\n{List {List U8, List {U64, U64}}, {List U8, List {U64, U64}}}, `#Derived_gen.IdentId(51)`: {}, `#Derived_gen.IdentId(52)`: {}):\n    joinpoint `array2d.Array2D.1039` `array2d.Array2D.array` `array2d.Array2D.index` `array2d.Array2D.state` `array2d.Array2D.nextIndexFn` `array2d.Array2D.nextStateFn`:\n        inc `array2d.Array2D.array`;\n        let `array2d.Array2D.1040` : [C {}, C [C , C U8, C U8]] = CallByName `array2d.Array2D.get` `array2d.Array2D.array` `array2d.Array2D.index`;\n        let `array2d.Array2D.1060` : U8 = 1i64;\n        let `array2d.Array2D.1061` : U8 = GetTagId `array2d.Array2D.1040`;\n        let `array2d.Array2D.1062` : Int1 = lowlevel Eq `array2d.Array2D.1060` `array2d.Array2D.1061`;\n        if `array2d.Array2D.1062` then\n            inc `array2d.Array2D.array`;\n            let `array2d.Array2D.elem` : [C , C U8, C U8] = UnionAtIndex (Id 1) (Index 0) `array2d.Array2D.1040`;\n            let `array2d.Array2D.1057` : [C {}, C {U64, U64}] = CallByName `array2d.Array2D.incX` `array2d.Array2D.array` `array2d.Array2D.index`;\n            let `array2d.Array2D.1058` : [C {List {List U8, List {U64, U64}}, {List U8, List {U64, U64}}}, C {List {List U8, List {U64, U64}}, {List U8, List {U64, U64}}}] = CallByName `array2d.Array2D.200` `array2d.Array2D.state` `array2d.Array2D.elem` `array2d.Array2D.index` `array2d.Array2D.nextStateFn`;\n</code></pre></div>",
+        "id": 405942754,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701737445
+    },
+    {
+        "content": "<p>In the fast example, the closure has no captures, so the <code>inc</code> is elided? It would just be a call to a no-op?</p>",
+        "id": 405943004,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701737525
+    },
+    {
+        "content": "<p>So I'm not really sure why we're seeing it as borrowed in one case and not the other. Maybe the fact that the capture parameter passes out specializes it? But I would expect that it's seen as irrelevant in the first (capturing) case for sure, especially because it unwraps transparently to an extra List parameter</p>",
+        "id": 405943009,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701737525
+    },
+    {
+        "content": "<p>Maybe <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> has an idea</p>",
+        "id": 405943069,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701737553
+    },
+    {
+        "content": "<p>Well, but it would <code>inc</code> on something right? Like presumably the outer capture is passed in some way to <code>iterate</code></p>",
+        "id": 405943117,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701737575
+    },
+    {
+        "content": "<p>But that seems to be missing</p>",
+        "id": 405943136,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701737582
+    },
+    {
+        "content": "<p>Although I haven't looked at the iterate implementation so I could be off</p>",
+        "id": 405943167,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701737593
+    },
+    {
+        "content": "<p>It is pretty direct and just recursive: <a href=\"https://github.com/mulias/roc-array2d/blob/951b2a7ae561de88bf185bb61e26244dc9f5d508/package/Array2D.roc#L894-L906\">https://github.com/mulias/roc-array2d/blob/951b2a7ae561de88bf185bb61e26244dc9f5d508/package/Array2D.roc#L894-L906</a></p>",
+        "id": 405943234,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701737618
+    },
+    {
+        "content": "<p>The IR looks weird to me for a different (and probably unrelated) reason -- <code>Array2D.walk</code> with default params should just be a wrapper for <code>List.walkWithIndex</code>, the <code>iterate</code> function shouldn't get involved unless you're walking in a different order <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span>.</p>",
+        "id": 405945303,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1701738304
+    },
+    {
+        "content": "<p>Oh wait, that may be exactly why it change to borrowing instead of owning</p>",
+        "id": 405945806,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701738496
+    },
+    {
+        "content": "<p>Maybe in this dispatch function where there are two paths, we mess something up and switch from owning to borrowing?</p>\n<p><a href=\"https://github.com/mulias/roc-array2d/blob/951b2a7ae561de88bf185bb61e26244dc9f5d508/package/Array2D.roc#L415C1-L426C43\">https://github.com/mulias/roc-array2d/blob/951b2a7ae561de88bf185bb61e26244dc9f5d508/package/Array2D.roc#L415C1-L426C43</a></p>",
+        "id": 405945856,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701738519
+    },
+    {
+        "content": "<p>Or maybe it is related to putting the closure in another closure?</p>\n<div class=\"codehilite\"><pre><span></span><code>\\state, elem, listIndex -&gt;\n            fn state elem (arrayIndexOf listIndex arrayShape)\n</code></pre></div>",
+        "id": 405945946,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701738562
+    },
+    {
+        "content": "<p>Just guesses</p>",
+        "id": 405945953,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701738565
+    },
+    {
+        "content": "<p>Maybe we should try to trim this down to just a simple list version and see if we can still repro.</p>",
+        "id": 405946496,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701738779
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/405852651\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"630509\">Hannes Nevalainen</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/405766361\">said</a>:</p>\n<blockquote>\n<p>FWIW maps on the Beam are just arrays under the hood if size &lt; 32</p>\n</blockquote>\n<p>Do you have a link to info on this? Or source I guess.</p>\n</blockquote>\n<p>It is apparently a \"hash array mapped trie\" for 32 entries or less. I don't really know more than that :) here are some links</p>\n<p><a href=\"https://twitter.com/akoutmos/status/1266034402422853633\">https://twitter.com/akoutmos/status/1266034402422853633</a><br>\n<a href=\"https://github.com/erlang/otp/blob/master/erts/emulator/beam/erl_map.h#L72-L76\">https://github.com/erlang/otp/blob/master/erts/emulator/beam/erl_map.h#L72-L76</a><br>\n<a href=\"https://github.com/erlang/otp/blob/master/erts/emulator/beam/erl_map.c#L264-L268\">https://github.com/erlang/otp/blob/master/erts/emulator/beam/erl_map.c#L264-L268</a><br>\n<a href=\"https://elixirforum.com/t/big-maps-versus-small-maps-performance/31909\">https://elixirforum.com/t/big-maps-versus-small-maps-performance/31909</a></p>",
+        "id": 406010497,
+        "sender_full_name": "Hannes Nevalainen",
+        "timestamp": 1701767981
+    },
+    {
+        "content": "<p>Thanks!</p>",
+        "id": 406104666,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701795397
+    },
+    {
+        "content": "<blockquote>\n<p>Maybe we should try to trim this down to just a simple list version and see if we can still repro.</p>\n</blockquote>\n<p>I don't have a small repro currently, but I am pretty sure I hit this again when working on the implementation details of Dict. I have a hot loop with a <code>.walk</code> function in it that happens to capture a list. 45% of the hot loop execution time is spent on refcounting that really shouldn't be needed (I'll probably have to manually inline this for perf reasons).  To my understanding, the core issue is that we really need to do inlIning before inserting refcounts. LLVM is inlining the lambda, but it still has a capture with a refcount inc before the lambda and a refcount dec in the lambda.</p>",
+        "id": 406105425,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701795604
+    },
+    {
+        "content": "<p>I would guess a minimal repro will just be something simple like:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">x</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"c1\"># Some large list of refcounted things, assume list of sets</span>\n<span class=\"nv\">y</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"c1\"># Some other list to walk, lets assume it has indices into x</span>\n<span class=\"nx\">List</span><span class=\"p\">.</span><span class=\"nx\">walk</span><span class=\"w\"> </span><span class=\"nx\">y</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">count</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">index</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"k\">when</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"p\">.</span><span class=\"nx\">get</span><span class=\"w\"> </span><span class=\"nx\">x</span><span class=\"w\"> </span><span class=\"nx\">index</span><span class=\"w\"> </span><span class=\"o\">is</span>\n<span class=\"w\">        </span><span class=\"nx\">Ok</span><span class=\"w\"> </span><span class=\"nx\">set</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">            </span><span class=\"nx\">count</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">Set</span><span class=\"p\">.</span><span class=\"nx\">len</span><span class=\"w\"> </span><span class=\"nx\">set</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"nx\">Err</span><span class=\"w\"> </span><span class=\"nx\">OutOfBounds</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">            </span><span class=\"nx\">count</span>\n</code></pre></div>",
+        "id": 406106262,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701795808
+    },
+    {
+        "content": "<p>Assuming I have this right, this will just thrash the refcounts of all elements in x.</p>",
+        "id": 406106545,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701795880
+    },
+    {
+        "content": "<p>I am still diving down the trail of dictionary perf improvements and I found something interesting. <code>listGetUnsafe</code> is supposed to borrow it's input. This means that no refcount changes are required to call the function.</p>\n<p>This does not look to be working correctly in my dictionary code. I see lots of cases like this:</p>\n<div class=\"codehilite\"><pre><span></span><code>inc `Dict.metadata`;\nlet `Dict.group` : U64 = CallByName `Dict.listGetUnsafe` `Dict.metadata` `Dict.slotIndex`;\n</code></pre></div>\n<p>If I follow that link through, I find:</p>\n<div class=\"codehilite\"><pre><span></span><code>procedure : `Dict.listGetUnsafe` {U32, {}}\nprocedure = `Dict.listGetUnsafe` (`#Attr.#arg1`: List {U32, {}}, `#Attr.#arg2`: U64):\n    let `Dict.960` : {U32, {}} = lowlevel ListGetUnsafe `#Attr.#arg1` `#Attr.#arg2`;\n    dec `#Attr.#arg1`;\n    ret `Dict.960`;\n</code></pre></div>\n<p>Even thouhg the lowlevel does not require changing the refcount, we are wrapping it in a function call and that function apparently requires changing the refcount. So this is defeating the whole point of the lowlevel not needing to change the refcount</p>",
+        "id": 406179346,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701820390
+    },
+    {
+        "content": "<p>Any ideas how to fix this?</p>",
+        "id": 406179393,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701820421
+    },
+    {
+        "content": "<p>The same thing does not happen to <code>List.getUnsafe</code>:</p>\n<div class=\"codehilite\"><pre><span></span><code>procedure : `List.getUnsafe` U64\nprocedure = `List.getUnsafe` (`#Attr.#arg1`: List U64, `#Attr.#arg2`: U64):\n    let `List.612` : U64 = lowlevel ListGetUnsafe `#Attr.#arg1` `#Attr.#arg2`;\n    ret `List.612`;\n</code></pre></div>",
+        "id": 406179538,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701820498
+    },
+    {
+        "content": "<p>Oh, I figured out the missing piece. Refcounts gone!!!</p>",
+        "id": 406181999,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701821651
+    },
+    {
+        "content": "<p>Also, I am so thankful for drop specialization...it is removing refcounts for me as well</p>",
+        "id": 406186087,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701823526
+    },
+    {
+        "content": "<p>Now I just want closures to be able to borrow instead of own captures such that they can avoid refcounting.</p>",
+        "id": 406186331,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701823616
+    },
+    {
+        "content": "<p>So ummm.....Dictionaries with refcounted keys are problematic:</p>\n<p><a href=\"/user_uploads/22008/O4E6mKlUPalHIiNmVZ6YLPt_/Screenshot-2023-12-05-at-9.22.17PM.png\">Screenshot-2023-12-05-at-9.22.17PM.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/O4E6mKlUPalHIiNmVZ6YLPt_/Screenshot-2023-12-05-at-9.22.17PM.png\" title=\"Screenshot-2023-12-05-at-9.22.17PM.png\"><img src=\"/user_uploads/22008/O4E6mKlUPalHIiNmVZ6YLPt_/Screenshot-2023-12-05-at-9.22.17PM.png\"></a></div>",
+        "id": 406227968,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701840228
+    },
+    {
+        "content": "<p>The purple is refcounting. It is 80% of the execution time. The other 20% of the execution time is splitting a gigantic string.</p>\n<p>So ~100% of the execution time spent in dictionary related functions is spent on recursive refcount increments and decrements.</p>",
+        "id": 406228112,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701840304
+    },
+    {
+        "content": "<p>I thought morphic was supposed to enable a function like <code>Dict.get</code> to simply \"borrow\" it's input since we can statically guarantee it is never modified, only read. As such, we would elide all of this refcounting madness. Is that not the case? Is this an optimization we can add?</p>",
+        "id": 406228341,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701840453
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/406186331\">said</a>:</p>\n<blockquote>\n<p>Now I just want closures to be able to borrow instead of own captures such that they can avoid refcounting.</p>\n</blockquote>\n<p><span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> any thoughts or info on this? I don't really know what's possible here <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 406289068,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701863523
+    },
+    {
+        "content": "<p>this is not a morphic thing at all</p>",
+        "id": 406289215,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701863587
+    },
+    {
+        "content": "<p>the refcounting approach is now to always own values, and push RC updates into the called function. That is optimal for in-place mutation, because borrowed values can never be mutated</p>",
+        "id": 406289319,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701863639
+    },
+    {
+        "content": "<p>inferring borrowing is hard, and it's harder to bound the amount of code duplication for owned/borrowed arguments</p>",
+        "id": 406289501,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701863699
+    },
+    {
+        "content": "<p>e.g. what if you have multiple arguments, they can all be owned or borrowed, this cascades</p>",
+        "id": 406289552,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701863720
+    },
+    {
+        "content": "<p>I wonder about that last part in practice <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 406294129,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701865569
+    },
+    {
+        "content": "<p>like certainly it's possible to imagine that blowing up, but that doesn't necessarily mean it would in practice (after all, the same is true of monomorphization in general!)</p>",
+        "id": 406294259,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701865615
+    },
+    {
+        "content": "<p>you would now do it twice though</p>",
+        "id": 406298193,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701867094
+    },
+    {
+        "content": "<p>but to be clear, this is not some technical limitation, it's a tradeoff</p>",
+        "id": 406298239,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701867115
+    },
+    {
+        "content": "<p>the core problem is that you don't know at any particular point whether to own or borrow: borrowing saves RC manipulation, but disallows mutation. In the middle of a call chain you don't know which is best. Even in most functions it's tricky to know whether being able to mutate is useful.</p>\n<p>there is another problem here which is that with borrowing, in recursive functions, you may run into big spikes in memory use, because all the memory is borrowed and only released when all of those recursive functions return</p>",
+        "id": 406298605,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701867245
+    },
+    {
+        "content": "<p>all of that is to say: you have to be careful with borrowing. If you can figure out a good heuristic then there should be no problem technically, but finding that heuristic is not trivial</p>",
+        "id": 406298683,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701867276
+    },
+    {
+        "content": "<p>I wonder how we might go about trying to figure out what a good heuristic might be <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 406308419,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701870443
+    },
+    {
+        "content": "<p>now that we've run into concrete performance problems of the form \"almost all this program does is increment and decrement refcounts, and then it does a bit of work which isn't that\" it's probably worth starting to discuss things we might want to try <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 406308975,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701870564
+    },
+    {
+        "content": "<p>So we have builtins that borrow things because they are read only, like <code>List.getUnsafe</code>. my wrong understanding was that if a function only called borrowing builtins, it would also just borrow the value. So it would kinda propagate out from those builtins.</p>",
+        "id": 406328763,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701876233
+    },
+    {
+        "content": "<p>That would fix this specific problem</p>",
+        "id": 406328912,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701876258
+    },
+    {
+        "content": "<p>it seems like for that scenario, there would be no risk of a blowup, right?</p>",
+        "id": 406329272,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701876348
+    },
+    {
+        "content": "<p>But would add the delayed freeing of memory in recursive functions like mentioned by folkert. (Though not sure how realistic of a problem this is in practice)</p>",
+        "id": 406329286,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701876352
+    },
+    {
+        "content": "<p>\"if this function argument is only ever passed to things that borrow, then it too can be borrowed\"</p>",
+        "id": 406329438,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701876386
+    },
+    {
+        "content": "<p>I'm more worried about the overhead of reference counting than the delaying of freed memory</p>",
+        "id": 406329535,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701876414
+    },
+    {
+        "content": "<p>I agree.</p>",
+        "id": 406329782,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701876483
+    },
+    {
+        "content": "<p>Also, I swear that at some point we talked about the idea of enabling just refcounting the outer list instead of recursively refcounting all elements in some cases. If we could do that here, it also would alleviate the issue. Though, I don't recall the context in which we thought a change like this might work.</p>",
+        "id": 406330194,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701876598
+    },
+    {
+        "content": "<p>oh yeah we should totally change how lists do RC</p>",
+        "id": 406332973,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701877371
+    },
+    {
+        "content": "<p>Do we have concrete ideas for that or is this a case where we need more research projects like Morphic?</p>",
+        "id": 406337369,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701878620
+    },
+    {
+        "content": "<p>Looping back to the idea of borrowing an input to a function if all uses in the function also borrow the input, is that something we could just append onto the type checker? Like for each value we want to know both the type and a bit flag of whether or not the value is potentially dirty. Any call in a sub branch would make an entire body dirty. Of course there would need to be some custom propagation logic at function boundaries.</p>\n<p>Would that make sense and be something realitively small cost to add onto the type checker? Should it go somewhere else? Is it just a bad idea overall? Any other suggestions on solution?</p>",
+        "id": 406569289,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701963680
+    },
+    {
+        "content": "<p>I was talking to <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> about this the other day and he mentioned that doing the analysis on mono instead of during type checking would have various benefits</p>",
+        "id": 406593079,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701971542
+    },
+    {
+        "content": "<p>well the main benefit is that you can reason about higher-order functions</p>",
+        "id": 406632430,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701988687
+    },
+    {
+        "content": "<p>(with lambda sets, at least)</p>",
+        "id": 406632447,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1701988701
+    },
+    {
+        "content": "<p>Ah, then you could analyze closure captures and do something smarter?</p>",
+        "id": 406633137,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701989068
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> is this something you'd be interested in getting into in terms of compiler development? (With guidance of course!)</p>",
+        "id": 406643767,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701994758
+    },
+    {
+        "content": "<p>Well, I do want dict to run fast and this will be fundamental to getting it closer to c++ speeds. So for sure.</p>\n<p>Also, I think it will be helpful for me to understand more deeply. I have some vague performance ideas, but many I am not sure could work in roc without really expensive analysis.</p>",
+        "id": 406644370,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701995076
+    },
+    {
+        "content": "<p>that would be amazing! <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> are you currently the only person with domain expertise in this? Or does anyone else know how it works/how to implement things to try?</p>",
+        "id": 406645763,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701995717
+    },
+    {
+        "content": "<blockquote>\n<p>onto the type checker? Should it go somewhere else?</p>\n</blockquote>\n<p>Doing it in the typechecker has other problems too, namely that you lose all specialization and are bound to the virality of unification. Really you want this over the SSA form.</p>",
+        "id": 406650708,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701997834
+    },
+    {
+        "content": "<p>also it slows down <code>roc check</code> unnecessarily</p>",
+        "id": 406651260,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701998090
+    },
+    {
+        "content": "<p>(and therefore editor integrations)</p>",
+        "id": 406651271,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701998097
+    },
+    {
+        "content": "<p>also, I guess if we want to do this for closure captures as well, we need to check that the closure capture is essentially never saved and is just directly called or something of that nature. Think of <code>List.map</code> and <code>List.walk</code> closures that may capture values. Would suck if List.walk capturing a refcounted value and then just using it in a borrowed manner had bad perf compared passing in the value as part of the state.</p>",
+        "id": 406652934,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701998876
+    },
+    {
+        "content": "<p>Cause if the closure capture is saved, it actually does need to make sure the value isn't freed.</p>",
+        "id": 406653024,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701998904
+    },
+    {
+        "content": "<p>At the level of the type-specialized IR closure captures are identical to normal parameters</p>",
+        "id": 406653160,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701998987
+    },
+    {
+        "content": "<p>So I guess I'm not sure why they have to be treated specially</p>",
+        "id": 406653240,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701999007
+    },
+    {
+        "content": "<p>Wait, really. But captures can live for a long long time while regular params only live for the body of the function.</p>",
+        "id": 406653300,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701999036
+    },
+    {
+        "content": "<p>How can the captures outlive the body of the function? Only if they're returned right? But that's the same as for the case of regular parameters</p>",
+        "id": 406653414,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701999110
+    },
+    {
+        "content": "<p>After type specialization of lambda sets, all closures are unboxed and their captures are passed as an extra (unboxed) parameter</p>",
+        "id": 406653526,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701999156
+    },
+    {
+        "content": "<p>yeah, I just realized that as I was trying to write out an example. So it can be borrowed if it is only used in a borrowing way and never possibly returned from the function. With those rules, I think it is the same for captures and params</p>",
+        "id": 406653552,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1701999168
+    },
+    {
+        "content": "<p>Right</p>",
+        "id": 406653562,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1701999177
+    },
+    {
+        "content": "<p>A note on the cost of this refcounting. I ported some hashmap benchmarks form C++ to roc. The test we are closest to C++ in perf (about 2x slower) is the insert remove bench. Important part about insert and remove, due to mutating the dictionary, they just take ownership of it and never need to touch the refcount.</p>",
+        "id": 406661819,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702003524
+    },
+    {
+        "content": "<p>Still slower than I would hope, but it is a lot better than the 4x of some other cases.</p>",
+        "id": 406661918,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702003565
+    },
+    {
+        "content": "<p>I have only ported 1 benchmark so far, but I am a bit surprised. Decided to test out go just for the fun of it. In the test of insert 100million keys, clear the dict, insert 100 million keys again, finally delete 100 million keys 1 by 1: golang is 4.5x slower than the current version of roc.</p>\n<p>Go spends a heck of a lot of system time. I wonder if it is doing something weird with memory that is just eating tons of kernel time.</p>\n<p>Definitely will have to port a few more benchmarks and compare at some point.</p>",
+        "id": 406702991,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702020912
+    },
+    {
+        "content": "<p>We also use about 2x less memory, which makes sense cause Roc cleans up memory immediately instead of lazily</p>",
+        "id": 406703436,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702021054
+    },
+    {
+        "content": "<p>I think lobster lang infers borrowing/owning arguments or something, cant really remember. I remember the creator being asked about code blowup. Maybe relevant?</p>",
+        "id": 406733279,
+        "sender_full_name": "Jacob",
+        "timestamp": 1702032484
+    },
+    {
+        "content": "<p>wait so what does that means in terms of comparing Go to C++ on these particular benchmarks? Go is 10x slower?</p>",
+        "id": 406743522,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702036486
+    },
+    {
+        "content": "<p>I love that all this started with me thinking that creating thousands of small sets would be a performant way to solve a problem, then complaining when that wasn't the case. Really enjoying fallowing this thread.</p>",
+        "id": 406768397,
+        "sender_full_name": "Elias Mulhall",
+        "timestamp": 1702045086
+    },
+    {
+        "content": "<p>I may have an addiction</p>",
+        "id": 406781109,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702049094
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/406743522\">said</a>:</p>\n<blockquote>\n<p>wait so what does that means in terms of comparing Go to C++ on these particular benchmarks? Go is 10x slower?</p>\n</blockquote>\n<p>Yep.</p>",
+        "id": 406781295,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702049154
+    },
+    {
+        "content": "<p>That said, something still feels wrong to me about that giant perf difference, need to dig in more.</p>",
+        "id": 406781562,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702049241
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/406781109\">said</a>:</p>\n<blockquote>\n<p>I may have an addiction</p>\n</blockquote>\n<p><a href=\"/user_uploads/22008/CEwIWtZqJO8x8U9JlynXnBrF/gottagofast.webp\">gottagofast.webp</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/CEwIWtZqJO8x8U9JlynXnBrF/gottagofast.webp\" title=\"gottagofast.webp\"><img src=\"/user_uploads/22008/CEwIWtZqJO8x8U9JlynXnBrF/gottagofast.webp\"></a></div>",
+        "id": 406783699,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702049957
+    },
+    {
+        "content": "<p>Looking into the go hash impl, I was reminded that go does not have custom equality or custom hash (maybe has changed with the new generics?) And instead always used an autoderive impl with maps. On top of that, maps don't implement hash or equality (and they have no set type)</p>",
+        "id": 406804412,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702055757
+    },
+    {
+        "content": "<p>My guess as to why go maps are slow in one picture. The key is the bottom right corner.</p>\n<p><a href=\"/user_uploads/22008/Gjor7gvLt8UQj-Umcl6PN058/164cba0e-0cf4-4d49-850d-029e37a0acf0.jpg\">164cba0e-0cf4-4d49-850d-029e37a0acf0.jpg</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/Gjor7gvLt8UQj-Umcl6PN058/164cba0e-0cf4-4d49-850d-029e37a0acf0.jpg\" title=\"164cba0e-0cf4-4d49-850d-029e37a0acf0.jpg\"><img src=\"/user_uploads/22008/Gjor7gvLt8UQj-Umcl6PN058/164cba0e-0cf4-4d49-850d-029e37a0acf0.jpg\"></a></div><p>Honestly, there design is fine, but it is not totally flat. As such, in the case a bucket overflows instead of place elements in a calculated different bucked in the same array, they just allocate a new bucket on the heap. So it is kinda like in between flat and traditional cause a bucket contains 8 elements and overflow <em>should</em> be rare.</p>",
+        "id": 406805004,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702055931
+    },
+    {
+        "content": "<p>I'm guessing the benchmark led to lots of random heap jumps.</p>",
+        "id": 406805334,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702056027
+    },
+    {
+        "content": "<p>Also, never realized that all the generics in the go runtime are implemented c style. To call map.get, the runtime passes in a map that essentially has void* pointers cause it knows nothing about the data type, and a struct of function pointers that know about the data and how it works.</p>",
+        "id": 406805896,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702056205
+    },
+    {
+        "content": "<p>oh I assumed that was how they did it</p>",
+        "id": 406806308,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702056329
+    },
+    {
+        "content": "<p>monomorphization is very rare among languages with automatic memory management!</p>",
+        "id": 406806356,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702056348
+    },
+    {
+        "content": "<p>Yeah, but most languages just use runtime type info, right?</p>",
+        "id": 406806542,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702056393
+    },
+    {
+        "content": "<p>But yeah, summary of go lang hash map is kinda like absl::flat_hash_map, but less flat and with more pointer generic shuffling.</p>\n<p>Oh and with metadata in buckets instead of stored densely.</p>",
+        "id": 406806993,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702056532
+    },
+    {
+        "content": "<p>I think that varies. I don't know for sure but I believe Haskell does it the way Go does</p>",
+        "id": 406807011,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702056542
+    },
+    {
+        "content": "<p>Interesting go maps after growing migrate to the new map in chunks over multiple calls to insert instead of doing it all at once.</p>",
+        "id": 406808753,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702057144
+    },
+    {
+        "content": "<p>So for a bit, it will be two partial maps.</p>",
+        "id": 406808804,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702057166
+    },
+    {
+        "content": "<p>Trying to make perf of insert more consistent at the cost of probably more perf over time.</p>",
+        "id": 406808914,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702057205
+    },
+    {
+        "content": "<p><del>Hmm, sounds like go may have a weird hash function choice too to make it more secure against hash flooding attacks without needing a fallback. Will have to look into that.</del> they used to, now they also just use wyhash.</p>",
+        "id": 406809667,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702057515
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/316715-contributing/topic/Set.20perf/near/406808753\">said</a>:</p>\n<blockquote>\n<p>Interesting go maps after growing migrate to the new map in chunks over multiple calls to insert instead of doing it all at once.</p>\n</blockquote>\n<p>This sounds like <a href=\"https://github.com/jonhoo/griddle\">https://github.com/jonhoo/griddle</a></p>",
+        "id": 406814611,
+        "sender_full_name": "timotree",
+        "timestamp": 1702059386
+    },
+    {
+        "content": "<p>Yep</p>",
+        "id": 406814878,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702059506
+    },
+    {
+        "content": "<p>Ok. so turns out that go just has horrible perf on arm. On x86, it is actually quite fast. In between roc and c++ for this benchmark</p>",
+        "id": 406871653,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702087728
+    }
+]

@@ -1,0 +1,64 @@
+<html>
+<head><meta charset="utf-8"><title>List.keep_if allocates once per kept item instead of working · contributing · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/index.html">contributing</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/List.2Ekeep_if.20allocates.20once.20per.20kept.20item.20instead.20of.20working.html">List.keep_if allocates once per kept item instead of working</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="635132046"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/List.keep_if%20allocates%20once%20per%20kept%20item%20instead%20of%20working/near/635132046" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> pixelsprout <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/List.2Ekeep_if.20allocates.20once.20per.20kept.20item.20instead.20of.20working.html#635132046">(Oct 26 2026 at 19:16)</a>:</h4>
+<p>On current main (and nightly-2026-10-21), keep_if, drop_if, keep_oks and keep_errs are a fold over concat:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>keep_if = |list, predicate|
+        List.fold(list, [], |acc, item| if predicate(item) { List.concat(acc, [item]) } else { acc })
+</code></pre></div>
+<p>Each kept item allocates a one-item list, and acc grows by reallocating. Keeping all 12 items of a 12-item list costs 13 allocations and 4 reallocs, even when the input list is unique. The doc comment says a unique list is filtered in place with no allocation, and that a fully kept list comes back unchanged. The code doesn't do either. As far as I can tell, keep_if dates from <a href="https://github.com/roc-lang/roc/issues/8501">#8501</a> and never got the reuse work that <a href="http://List.map">List.map</a> got in <a href="https://github.com/roc-lang/roc/issues/9610">#9610</a> and <a href="https://github.com/roc-lang/roc/issues/10594">#10594</a>.</p>
+<p>I hit this when building examples in the Rocco game engine, where view filters entities every frame. In that frame it accounted for 12 allocations and all 4 reallocs.</p>
+<p>Proposed fix (I have a local branch with tests):</p>
+<ul>
+<li>Unique list: after list_map_prepare_reuse and list_owned_unique, the same order sort_impl uses, swap each kept item down with list_swap_unsafe, then List.drop_last the rest. Order is kept, dropped items are freed once, capacity is unchanged, and an all-kept list comes back as it was. No allocation.</li>
+<li>Shared list: if every item is kept, return the list as it is. Otherwise copy the kept items into one List.with_capacity(len) buffer, allocated only when the first kept item needs a place.</li>
+<li>drop_if becomes keep_if with the predicate negated.</li>
+<li>keep_oks and keep_errs use the single-buffer copy. They don't work in place, because Try(a, e) and a rarely share a layout.</li>
+</ul>
+<p>Results: 12 of 12 kept goes from 13/4 to 1/0 (allocs/reallocs), and a unique list filtered in step goes from 13/4 to 1/0. The full eval suite and rc_conformance pass. The new tests cover a shared list reused afterwards and a predicate that captures the list being filtered, the <a href="https://github.com/roc-lang/roc/issues/10368">#10368</a> shape.</p>
+<p>Unlike map's extract/write loop, the in-place path only uses list_swap_unsafe and drop_last, which copy a shared list unless the call is marked in-place. So a wrong uniqueness answer should cost a copy, not a wrong result.</p>
+<p><strong>Questions:</strong></p>
+<ol>
+<li>Is this the direction you'd want, or is there a plan to filters, for example via <a href="https://github.com/roc-lang/roc/issues/9775">#9775</a>?</li>
+<li>Should the in-place path be gated off in dev builds and the interpreter, as map's reuse is?</li>
+<li>Should the "return a shared list unchanged when all  of the same PR, or a separate one?</li>
+</ol>
+<p>Happy to open an issue and PR with this optimisation.</p>
+
+
+
+<a name="635141134"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/List.keep_if%20allocates%20once%20per%20kept%20item%20instead%20of%20working/near/635141134" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/List.2Ekeep_if.20allocates.20once.20per.20kept.20item.20instead.20of.20working.html#635141134">(Oct 26 2026 at 19:46)</a>:</h4>
+<p>yeah this is what we always should have been doing <span aria-label="sweat smile" class="emoji emoji-1f605" role="img" title="sweat smile">:sweat_smile:</span></p>
+
+
+
+<a name="635141239"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/List.keep_if%20allocates%20once%20per%20kept%20item%20instead%20of%20working/near/635141239" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/List.2Ekeep_if.20allocates.20once.20per.20kept.20item.20instead.20of.20working.html#635141239">(Oct 26 2026 at 19:46)</a>:</h4>
+<p>I think that implementation is probably a very old "just get it working to unblock people" impl that we never got around to revising</p>
+
+
+
+<a name="635141250"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/List.keep_if%20allocates%20once%20per%20kept%20item%20instead%20of%20working/near/635141250" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Richard Feldman <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/List.2Ekeep_if.20allocates.20once.20per.20kept.20item.20instead.20of.20working.html#635141250">(Oct 26 2026 at 19:46)</a>:</h4>
+<p>PR welcome!</p>
+
+
+
+<a name="635148981"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/316715-contributing/topic/List.keep_if%20allocates%20once%20per%20kept%20item%20instead%20of%20working/near/635148981" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> pixelsprout <a href="https://roc-lang.github.io/zulip-export/stream/316715-contributing/topic/List.2Ekeep_if.20allocates.20once.20per.20kept.20item.20instead.20of.20working.html#635148981">(Oct 26 2026 at 20:13)</a>:</h4>
+<p>Cool I have put up a PR <a href="https://github.com/roc-lang/roc/pull/12645">#12645</a></p>
+
+
+
+<hr><p>Last updated: Oct 31 2026 at 16:21 UTC</p>
+</html>

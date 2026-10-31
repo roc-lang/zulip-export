@@ -1,0 +1,236 @@
+[
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/304641-ideas/topic/Platform.20extensibility.20using.20bundle.20of.20effects.20pattern/near/621157999\">said</a>:</p>\n<blockquote>\n<p>the SQLite buffer is (obviously) host side and getting it into Roc requires a copy</p>\n</blockquote>\n<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> why would that require a copy?</p>",
+        "id": 621158447,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788383247
+    },
+    {
+        "content": "<p>it's just memory, right? you can make a <code>List</code> in the host with reserved capacity for the buffer and then hand that directly into ordinary Roc code, which should be able to write into it as long as its refcount remains at 1</p>",
+        "id": 621158607,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788383286
+    },
+    {
+        "content": "<blockquote>\n<p>you can make a <code>List</code> in the host with reserved capacity for the buffer</p>\n</blockquote>\n<p>SQLite owns the memory. As far as I know there isn't a way to do a slice on a host owned buffer</p>",
+        "id": 621158946,
+        "sender_full_name": "Karl",
+        "timestamp": 1788383392
+    },
+    {
+        "content": "<p>hm, \"owns the memory\" in what sense? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 621159022,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788383411
+    },
+    {
+        "content": "<p>like it gives you an address, but it reserves the right to write to it or something?</p>",
+        "id": 621159115,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788383439
+    },
+    {
+        "content": "<p>This is SQLite's cursor/results buffer. Owns as in allocates/deallocates.</p>\n<p>The encoders+decoders are arranged so that the bytes go from SQLite's cursor to the output buffer with no intermediate allocation.</p>",
+        "id": 621159143,
+        "sender_full_name": "Karl",
+        "timestamp": 1788383445
+    },
+    {
+        "content": "<p>Let me see if it's compiling/working and push it to github.</p>",
+        "id": 621159809,
+        "sender_full_name": "Karl",
+        "timestamp": 1788383633
+    },
+    {
+        "content": "<p>I see, so it sounds like there are two missing pieces here:</p>\n<ol>\n<li>We don't currently have a way to say \"encode into this buffer\" or \"decode into this buffer\" (I think this would be easy to add, but I haven't thought about it before)</li>\n<li>if it's a <code>List</code>, we can't allow it to be resized because that would reallocate and SQLite wouldn't be okay with that</li>\n</ol>",
+        "id": 621159951,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788383681
+    },
+    {
+        "content": "<p>does that sound right?</p>",
+        "id": 621159962,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788383684
+    },
+    {
+        "content": "<p>Trying for a coherent explanation:</p>\n<p>I have a <a href=\"https://github.com/grayrest/roc-tower-platform\">web platform</a> that's mostly a sandbox for ideas. After last month's discussion about encoders/decoders I decided to see how far I could push the encoder/decoder APIs. The one that's relevant for this discussion is that I'm implementing a decoder for SQLite query row results wired up to the encoder for Json. For a query SQLite copies data from its btree into (my term) the results buffer and provides a cursor for walking through the rows. The data also needs to be formatted/copied into the send buffer since MacOS doesn't have something like io_uring. So my goal is to get down to the minimum so the response is faster. I have it working but it required some massaging.</p>\n<p>Problems:</p>\n<p>All non-small <code>RocStr</code>/<code>RocList</code> are refcounted and the code for decref is:</p>\n<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"n\">alloc_ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">get_allocation_ptr</span><span class=\"p\">()</span><span class=\"w\">        </span><span class=\"c1\">// == bytes, for a big (non-slice) string</span>\n<span class=\"n\">rc</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"p\">(</span><span class=\"n\">alloc_ptr</span><span class=\"w\"> </span><span class=\"o\">-</span><span class=\"w\"> </span><span class=\"mi\">8</span><span class=\"p\">)</span><span class=\"w\">                    </span><span class=\"c1\">// the refcount word</span>\n<span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">rc</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\">                    </span><span class=\"c1\">// REFCOUNT_STATIC_DATA: never free</span>\n<span class=\"k\">if</span><span class=\"w\"> </span><span class=\"n\">fetch_sub</span><span class=\"p\">(</span><span class=\"n\">rc</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">host</span><span class=\"p\">.</span><span class=\"n\">dealloc</span><span class=\"p\">(</span><span class=\"n\">alloc_ptr</span><span class=\"w\"> </span><span class=\"o\">-</span><span class=\"w\"> </span><span class=\"mi\">8</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">}</span>\n</code></pre></div>\n<p>The <code>alloc_ptr</code> on the host is in SQLite's memory space and control so there's no refcount at that position.  There's a <code>rc=0</code> variant that's used for static strings but that also requires the byte at <code>ptr-8</code> to be the right value. There would need to be some variant of List/Str that knows it's host owned and doesn't do the refcounting.</p>\n<p>The other factor for this particular problem is that the memory is only valid until the cursor moves so there needs to be some sort of lifetime feature. I have a hacky non-effectful host function <code>sql_col_str_json_into</code> that copies the bytes from the cursor into the output.</p>",
+        "id": 621164934,
+        "sender_full_name": "Karl",
+        "timestamp": 1788384974
+    },
+    {
+        "content": "<p>can you use a seamless slice? from the hosts sqlite buffer</p>",
+        "id": 621165358,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1788385102
+    },
+    {
+        "content": "<p>seamless slice sets requires a backing Roc allocation and shares its refcount</p>",
+        "id": 621165533,
+        "sender_full_name": "Karl",
+        "timestamp": 1788385157
+    },
+    {
+        "content": "<p>It's hacky but the perf <em>is</em> super fast. Total roc portion of the handler time is 16.4µs instead of 39.2µs.</p>",
+        "id": 621166312,
+        "sender_full_name": "Karl",
+        "timestamp": 1788385351
+    },
+    {
+        "content": "<p>I <em>think</em> we had </p>\n<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/463735-performance/topic/SQLite.20owned.20buffer/near/621165533\">said</a>:</p>\n<blockquote>\n<p>seamless slice sets requires a backing Roc allocation and shares its refcount</p>\n</blockquote>\n<p>this part is actually fine - we designed for this situation (although the lifetime is a separate question) - the three fields in a str or list are:</p>\n<ul>\n<li>bytes_ptr</li>\n<li>capacity_or_alloc_ptr</li>\n<li>length</li>\n</ul>\n<p>so what you can do is set the alloc ptr to be totally unrelated to where the bytes_ptr is, and just have your refcount be right there - e.g. you allocate 16B yourself, and use it to store (refcount, NULL) and just have capacity_or_alloc_ptr point to the NULL, so the refcount is right in front of it</p>",
+        "id": 621215206,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788401267
+    },
+    {
+        "content": "<p>(I think you can maybe even get away with not bothering to allocate the NULL, but there might be some super weird edge case where you're right at the end of the address space or something, and I also think most allocators will allocate a minimum of 16B anyway so it's probably zero-cost anyway)</p>",
+        "id": 621215337,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788401314
+    },
+    {
+        "content": "<p>anyway, that doesn't address the lifetime part of it</p>\n<p><span class=\"user-mention silent\" data-user-id=\"705503\">Karl</span> <a href=\"#narrow/channel/463735-performance/topic/SQLite.20owned.20buffer/near/621164934\">said</a>:</p>\n<blockquote>\n<p>The other factor for this particular problem is that the memory is only valid until the cursor moves so there needs to be some sort of lifetime feature.</p>\n</blockquote>\n<p>when does the cursor actually move? like is the platform fully in charge of when it moves, or do you expose the cursor to the app author to move directly?</p>",
+        "id": 621215683,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788401431
+    },
+    {
+        "content": "<p>I'll give the seamless slice a go. Not an approach I would have come up with.</p>\n<p>The cursor moves by a call to <code>sql_step_row!</code> which returns a token that has to be passed to <code>sql_col_str_json_into</code> which asserts the allocation is valid is the lifetime soundness of the system.</p>",
+        "id": 621216537,
+        "sender_full_name": "Karl",
+        "timestamp": 1788401762
+    },
+    {
+        "content": "<p>I'm not committed to any particulars for this design. I'm just trying to eliminate copies via encoders/decoders.</p>",
+        "id": 621217099,
+        "sender_full_name": "Karl",
+        "timestamp": 1788401891
+    },
+    {
+        "content": "<p>yeah I think <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> thought to design seamless slices for this use case a couple years ago - full credit to him for the payoff here! <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 621217189,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788401925
+    },
+    {
+        "content": "<p>I've been thinking about this some more. The slice trick is working well for me so I'm thinking about lifetimes. If there was a way to force a clone on incref (not literally, my mental model of the mechanism) I believe this could could be done in a <code>Cursor.each!(cursor, |row| ...)</code> pattern, set up a decoder for the rows that produces seamless slices, and have zero copy on field reads and just the encoded copy for sending over the wire.</p>",
+        "id": 621844756,
+        "sender_full_name": "Karl",
+        "timestamp": 1788572334
+    },
+    {
+        "content": "<p>interesting - so basically the original one has a known lifetime, and if you want to keep your own version around, it will be copied</p>",
+        "id": 621848717,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788574833
+    },
+    {
+        "content": "<p>a refcount of \"immortal\" (as in, \"this data lives in the readonly static data section of the binary and so you can't even change the refcount\") is already special-cased, so we could add a second sentinel refcount number for this</p>",
+        "id": 621848784,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788574874
+    },
+    {
+        "content": "<p>It's a slice into ephemeral data and as long as access is scoped then it should be safe but the problem is escape which the refcount guards against.</p>",
+        "id": 621849284,
+        "sender_full_name": "Karl",
+        "timestamp": 1788575301
+    },
+    {
+        "content": "<p>Do you have the ability to let the empheral data be controlled and freed by roc and make new empheral data if the SQL access continues? Or is the empheral data totally controlled by SQL?</p>",
+        "id": 621849712,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1788575638
+    },
+    {
+        "content": "<p>Even if SQL controls the ephemeral storage, you could still have a defensive check if the refcount. If the data has not yet been freed by roc, you could return an error.</p>\n<p>Though really the best pattern I have seen for this kinda of scoped lifetimes is callbacks that get access to the data and must return before you grab the next data.</p>\n<p>Though maybe there is a better pattern now.</p>",
+        "id": 621849876,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1788575759
+    },
+    {
+        "content": "<p>This is the SQLite cursor buffer, where SQLite copies btree data into result rows. It's only valid until the cursor moves.</p>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/463735-performance/topic/SQLite.20owned.20buffer/near/621849876\">said</a>:</p>\n<blockquote>\n<p>Though really the best pattern I have seen for this kinda of scoped lifetimes is callbacks that get access to the data and must return before you grab the next data.</p>\n</blockquote>\n<p>This is basically what I want to do but there needs to be some sort of protection against putting the data in a struct.</p>",
+        "id": 621850671,
+        "sender_full_name": "Karl",
+        "timestamp": 1788576386
+    },
+    {
+        "content": "<p>right, the trouble with that is if you just return the thing with the troublesome lifetime from the lambda <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 621851428,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788577033
+    },
+    {
+        "content": "<p>also hi <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span>! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 621851438,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788577040
+    },
+    {
+        "content": "<p>you might need to do both actually <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 621851607,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788577199
+    },
+    {
+        "content": "<p>as in have a \"slice with clone on incref\" and then provide that to a callback closure - and if you try to return something from the closure it will result in an incref and clone</p>",
+        "id": 621851759,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788577259
+    },
+    {
+        "content": "<p>because otherwise, if it's still unique within the roc application when you go to advance the cursor, then the incref happens in the host - at which point it's too late to have cloned the one in the roc application</p>",
+        "id": 621851951,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788577422
+    },
+    {
+        "content": "<p>but overall, the \"slice with clone on incref\" idea is appealing to me because its characteristics seem to be:</p>\n<ul>\n<li>as long as you use it as intended, there is no clone and approximately no runtime cost compared to what you'd do with the memory in C</li>\n<li>if you don't use it as intended, the penalty is a clone rather than memory unsafety</li>\n</ul>",
+        "id": 621852076,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788577523
+    },
+    {
+        "content": "<p>off the top of my head, I suspect the perf of adding a second sentinel could be fine because:</p>\n<ul>\n<li>we already branch on the first sentinel value</li>\n<li>if you've already paid the misprediction cost on that, a second branch on the same integer right afterwards should be ~free</li>\n</ul>",
+        "id": 621852182,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788577610
+    },
+    {
+        "content": "<p>Can you force clone on incref? I don't think roc supports that. Roc will only trigger the clone path on attempt of mutation.</p>",
+        "id": 621855101,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1788579922
+    },
+    {
+        "content": "<p>No, it's a feature request.</p>",
+        "id": 621855188,
+        "sender_full_name": "Karl",
+        "timestamp": 1788579997
+    },
+    {
+        "content": "<p>This is definitely a case where defense is easy (assert roc freed), but active niceness is hard.</p>",
+        "id": 621855209,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1788580014
+    },
+    {
+        "content": "<p>Another option would be some sort of double indirection where the host the can swap out the reference</p>",
+        "id": 621855238,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1788580035
+    },
+    {
+        "content": "<p>So if roc retains a clone, the platform could duplicate the data and swap out the reference.</p>",
+        "id": 621855256,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1788580049
+    },
+    {
+        "content": "<p>Definitely a pattern that should get a proper support story. Mutable host data that you really just want to reference once for encode is hard with current apis.</p>\n<p>I feel like it should be doable, but might take a trick. Probably could be made more simple.</p>",
+        "id": 621855325,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1788580119
+    }
+]

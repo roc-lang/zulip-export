@@ -1,0 +1,956 @@
+[
+    {
+        "content": "<p>I started looking at zig 0.11 again. I think we have been using the allocator api wrong (at least in tests and probably elsewhere). We have been using <code>alloc</code> and <code>destroy</code>. In reality, <code>alloc</code> is meant to be used with <code>free</code> and <code>destroy</code> is meant to be used with <code>create</code>. The difference between the apis is that <code>alloc/free</code> are for arrays and <code>create/destroy</code> are for single elements.</p>",
+        "id": 390852567,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1694667210
+    },
+    {
+        "content": "<p>The new annoyances is that we need to correctly use <code>alloc</code> and <code>free</code>. Sadly, free requires a slice or array pointer as the input. Both of these contain the size information. So now, for our dealloc function to work, we need to track the size and use it to generate a correct array before freeing.</p>",
+        "id": 390852721,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1694667314
+    },
+    {
+        "content": "<p>So either, we need to change the allocator to allocate extra bytes and store the size of the allocation on the heap, or we need to always pass the size information into <code>roc_dealloc</code>.</p>",
+        "id": 390853046,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1694667513
+    },
+    {
+        "content": "<p>Not necessarily surprising, just inconvenient. To be fair, I think this is the same issue with the rust allocator api. Which is why we tend to just call malloc and free directly in rust platforms.</p>",
+        "id": 390853188,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1694667604
+    },
+    {
+        "content": "<p>given our only dynamic data structures are built on lists and strings (which know their exact size), I think it may be worth revisiting if we should pass the size into <code>roc_dealloc</code>. We already have to pass the size into <code>roc_realloc</code></p>",
+        "id": 390853443,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1694667766
+    },
+    {
+        "content": "<p>Yeah I've often thought we should pass the size to roc_dealloc. The current signature feels like it's modelled specifically on libc <code>free</code>. It forces the allocator to remember the size. But it's easy for us to generate code to load the size.</p>",
+        "id": 390860490,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1694672371
+    },
+    {
+        "content": "<p>I think there was a reason we couldn't always have access to the size when calling free - and I think it was seamless slices?</p>",
+        "id": 390900680,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1694687494
+    },
+    {
+        "content": "<p>but I also think we wanted to start storing capacity on the heap, which would address that</p>",
+        "id": 390900786,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1694687535
+    },
+    {
+        "content": "<p>So update list/str representation that store the capacity on heap when going from 1 to 2 RC. Then when freeing (roc 1 to 0), if a proper list, just use capacity stored on stack. If seamless slices, use the capacity on the heap.</p>\n<p>Then update roc_dealloc to also take a size?</p>",
+        "id": 390983268,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1694710566
+    },
+    {
+        "content": "<p>I think we might as well always store capacity on the heap, because we have to leave room for it either way</p>",
+        "id": 390991827,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1694713931
+    },
+    {
+        "content": "<p>because it's at the start of the allocation rather than the end</p>",
+        "id": 390991856,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1694713944
+    },
+    {
+        "content": "<p>I forget if we talked about storing it at the end, but that's actually interesting if we only did it when RC &gt; 1 because it could mean smaller heap allocation sizes if your thing is never shared <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 390991969,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1694713998
+    },
+    {
+        "content": "<p>But then you would have to reallocate on sharing if you don't have capacity?</p>",
+        "id": 391018148,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1694725547
+    },
+    {
+        "content": "<p>yep</p>",
+        "id": 391018669,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1694725826
+    },
+    {
+        "content": "<p>oh wait, if it's a slice it wouldn't know where to find that capacity bc it wouldn't know the original length or the original capacity ahead of time</p>",
+        "id": 391018958,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1694725975
+    },
+    {
+        "content": "<p>so I guess it would have to be next to the refcount</p>",
+        "id": 391018971,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1694725982
+    },
+    {
+        "content": "<p>Good catch</p>",
+        "id": 391021734,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1694727375
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.200.2E11/near/390991827\">said</a>:</p>\n<blockquote>\n<p>I think we might as well always store capacity on the heap, because we have to leave room for it either way</p>\n</blockquote>\n<p>Oh also, the reason I didn't say to always store it is to avoid wasting trips to memory. Only write it when there is a chance it will be needed</p>",
+        "id": 391021830,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1694727442
+    },
+    {
+        "content": "<p>So I changed the allocator stuff for the testing allocator in the standard library instead of trying to update the slice representation. Want to take a serious look at switching to zig 0.11 and llvm 16 with the easy path. Avoid us falling farther and farther behind on versioning. So for now, fine changing the allocator impl or switching to malloc and free if necessary.</p>",
+        "id": 392407955,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695337446
+    },
+    {
+        "content": "<p>A lot of gen tests that call zig functions that format numbers to strings are stack overflowing. Really unsure as to why. Did some testing directly in zig and the equivalent tests pass just fine. Not really sure what I am missing at the moment.</p>",
+        "id": 392408053,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695337520
+    },
+    {
+        "content": "<p>Interesting. Could it be something in the test setup on the rust side? Folkert mentioned that he is suspicious of that part of our code which might be causing issues with windows. Something about rust dropping things that were allocated in zig.</p>",
+        "id": 392408658,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695337919
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281543\">Folkert de Vries</span> <a href=\"#narrow/stream/395097-compiler-development/topic/Casual.20Conversation/near/392122386\">said</a>:</p>\n<blockquote>\n<p>we know the cause of these issues right?</p>\n<ul>\n<li>we use zig in a tempdir, which means nothing gets cached between builds. The solution is to have a tempdir per thread, not per test, so after the first test most zig stuff is cached</li>\n<li>we know that there is a segfault when rust tries to deallocate strings/lists that were allocated by a zig builtin.</li>\n</ul>\n</blockquote>",
+        "id": 392409185,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695338228
+    },
+    {
+        "content": "<p>I don't think this is the same. This is apparently only on m1 Mac, not on x86. And it is a stack overflow that looks to be happening in the bufPrint function in zig.</p>",
+        "id": 392409678,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695338547
+    },
+    {
+        "content": "<p>Also, apparently on m1 macs, dec is now <code>[2 x i64] %arg</code>, but on x86, it is <code>i64 %hi, i64 %lo</code>...that's just kinda inconvenient.</p>",
+        "id": 392410151,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695338832
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> related to your type erasure stuff, so maybe you have an idea. Do you know how we can get the type of the refcounter here. It is a pointer to a function, but we need to know the type of the underlying function, which is no longer stored with pointers in llvm anymore.</p>\n<p><a href=\"https://github.com/roc-lang/roc/blob/e91b50acf9e68ae84720e039c90ee2023c434788/crates/compiler/gen_llvm/src/llvm/refcounting.rs#L469\">old code</a></p>\n<p><a href=\"https://github.com/roc-lang/roc/blob/3a989d10d8b8cf8ff99c3b45418a9d5a20744dee/crates/compiler/gen_llvm/src/llvm/refcounting.rs#L469\">Current wrong testing code</a>. I had test just using the <code>fn_val</code> that was passed in, but it doesn have the right function signiture based on the generated llvm ir and is failing some capture tests.</p>",
+        "id": 392414088,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695341464
+    },
+    {
+        "content": "<p>i’m not 100% sure i follow. what is the difference between the two codes you shared you’re trying to reconcile? is one compiling with llvm opaque pointers?</p>",
+        "id": 392424170,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1695347035
+    },
+    {
+        "content": "<p>The old code could just use <code>build_call</code> which under the hood would understand the function pointer type and make a indirect call. The new version has to make the indirect call via <code>build_indirect_call</code>. That requires us to specify the function type since it is no longer possible to just grab it from the pointer. So yes, the second one is with opaque pointers and I think I am feeding the wrong function type to it, but I am not sure where I could get the correct one from.</p>",
+        "id": 392427948,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695349747
+    },
+    {
+        "content": "<p>nvm, figured it out. tests are passing now.</p>",
+        "id": 392441141,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695359648
+    },
+    {
+        "content": "<p>Also the tests that are stack overflowing are only doing so on my m1 mac. Somehow it is caused by the memcpy implementatoin or by how it is being called.</p>",
+        "id": 392442756,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695360916
+    },
+    {
+        "content": "<p>maybe I updated it to zig 0.11 wrong and it infinitely loops somehow or maybe it is exposed incorrectly.</p>",
+        "id": 392442867,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695360979
+    },
+    {
+        "content": "<p>Also, fun failing test case: <code>tan 1f64</code> on m1 mac: <code>1.5574077246549023</code>. Same thing on x86 linux: <code>1.5574077246549020</code>. Off by the lowest bit.</p>\n<p>The answers rounded opposite directions and thus are now failing on one device or the other. Interestingly, this fails starting with the newer version of zig/llvm, but was passing in the past.</p>",
+        "id": 392444115,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695361740
+    },
+    {
+        "content": "<p>Figured out the memcpy issue as well. The musl fallback memcpy was being optimized such that it was calling memcpy recursively. Definetly should long term look into disabling the promote to memcpy optimization here. But was able to work around it overall.</p>",
+        "id": 392446051,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695362700
+    },
+    {
+        "content": "<p>Awesome work Brendan!</p>",
+        "id": 392480611,
+        "sender_full_name": "Anton",
+        "timestamp": 1695375877
+    },
+    {
+        "content": "<p>This branch is actually turning out better than I expected.</p>\n<p>On x86 linux<br>\n<del><code>cargo test</code> on has only one failure. It is related to the dev backend and is probably due to incorrect cabi to a builtin (looks to be with returning a Result of a Dec).</del><br>\n<code>cargo test</code> is passing</p>\n<p>On m1 mac,<br>\n<del>3 cli run tests related to parsing are failing (not sure why yet,  still a memcpy issue) And</del><br>\nJust 1 gen test due to float rounding.</p>\n<p>wasm... is really broken right now (both dev and llvm, probably cabi and wasm-ld changes).</p>\n<p>But given <del>essentially</del> all cli run tests are working, I am pretty positive that we should be able to fix up these bugs and actually finally merge an update to zig and llvm. <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span></p>",
+        "id": 392552326,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695398269
+    },
+    {
+        "content": "<p>Oh wow, excellent stuff!</p>",
+        "id": 392560075,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695400144
+    },
+    {
+        "content": "<p>If I remember correctly, lots of things changed on the wasm side in Zig.</p>",
+        "id": 392560181,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695400172
+    },
+    {
+        "content": "<p>I think they fixed a load of CABI problems that we had workarounds for</p>",
+        "id": 392560238,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695400193
+    },
+    {
+        "content": "<p>Those were originally meant to be 0.10 but didn't make it... I think</p>",
+        "id": 392560328,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695400210
+    },
+    {
+        "content": "<p>anyway I had a branch for this at some point and I got the Wasm stuff working</p>",
+        "id": 392560374,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695400225
+    },
+    {
+        "content": "<p>I'll dig around and see if I can find something useful!</p>",
+        "id": 392560563,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695400277
+    },
+    {
+        "content": "<p>This is the PR I was thinking of. <a href=\"https://github.com/roc-lang/roc/pull/3856\">https://github.com/roc-lang/roc/pull/3856</a></p>",
+        "id": 392561191,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695400415
+    },
+    {
+        "content": "<p>There are lots of comments and I haven't gone through them to remember what's relevant or not</p>",
+        "id": 392561560,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695400487
+    },
+    {
+        "content": "<p>I'll start looking at the commits and see if I can pull in the wasm related changes.</p>",
+        "id": 392561825,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695400572
+    },
+    {
+        "content": "<p>Cherrypicking worked for the most part, dev wasm is mostly happy. It has just a couple of failures left:</p>\n<div class=\"codehilite\"><pre><span></span><code>failures:\n    gen_list::list_range_length_overflow\n    gen_list::release_excess_capacity\n    gen_list::release_excess_capacity_empty\n    gen_list::release_excess_capacity_with_len\n    gen_refcount::non_nullable_unwrapped_alignment_8\n    gen_refcount::union_recursive_inc\n    wasm_linking::test_linking_with_dce\n    wasm_linking::test_linking_without_dce\n</code></pre></div>\n<p>After those, I think all that is left should be llvm wasm updates. It has the wrong abi now in many cases.</p>",
+        "id": 392570704,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695403742
+    },
+    {
+        "content": "<p>Oh cool! I'm glad those commits finally got used, a year later, and worked!</p>",
+        "id": 392595269,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695414236
+    },
+    {
+        "content": "<p>I don't recognise those particular <code>gen_list</code> tests, they might be \"new\" since then.<br>\nThe refcount stuff involves that module in mono, <code>code_gen_help</code> or whatever I called it, and at the very lowest level it does call Zig builtins to do the dec or inc operation.<br>\nThe wasm_linking tests, as you would guess, are for the Wasm surgical linking functionality. I guess that must be some change in the ABI where we link to builtins.</p>",
+        "id": 392596316,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695414726
+    },
+    {
+        "content": "<p>yooooooo this is so great!!!</p>",
+        "id": 392615245,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1695424821
+    },
+    {
+        "content": "<p>If you have any issues with windows I am happy to assist where I can. I know Folkert and I discovered some differences between register use between zig versions which shouldn't be too hard to fix.</p>",
+        "id": 392624340,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695430659
+    },
+    {
+        "content": "<p>We left a note where to change it on zig version update.</p>",
+        "id": 392624432,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695430694
+    },
+    {
+        "content": "<p>Thanks. will definitely need help there. Though I think I have a computer that can boot windows, I don't know if it works and it definitely does not have roc setup.</p>",
+        "id": 392627570,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695432366
+    },
+    {
+        "content": "<p>Currently getting everything else working first.</p>",
+        "id": 392627581,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695432377
+    },
+    {
+        "content": "<p>Just got the llvm wasm tests passing. Hopefully that covers the full abi.</p>",
+        "id": 392628408,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695432879
+    },
+    {
+        "content": "<p>So it looks like we are down to:</p>\n<ul>\n<li>the 8 broken dev wasm tests (haven't looked into them yet)</li>\n<li>a handful a dev backend tests that hitting invalid frees.</li>\n<li>anything broken on windows</li>\n</ul>",
+        "id": 392630347,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695434076
+    },
+    {
+        "content": "<p>Which branch are you working on?</p>",
+        "id": 392635757,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695437711
+    },
+    {
+        "content": "<p>I think it is <code>zig-11-llvm-16</code>. Not at home to double check the name rn</p>",
+        "id": 392636862,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695438484
+    },
+    {
+        "content": "<p>I had forgotten how much wrangling it was to get LLVM set up correctly... <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 392643257,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695443576
+    },
+    {
+        "content": "<p>Also, I think I am getting to a point were the last few tests will be much harder for me to fix cause I don't know enough about them. I will definitely try to tinker with them, but I may need others to take over for some subsets of tests. The gen dev failures seem to be related to lambda sets, which I am not really familiar with. The wasm failures that are left are so far not obvious to me.</p>",
+        "id": 392644222,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695444299
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> I'm updating <code>roc-lang/llvm-package-windows</code> to build <code>16.0.4</code> for Windows</p>",
+        "id": 392645623,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695445400
+    },
+    {
+        "content": "<p>I've built 16.0.6 for windows because that's also the version nix is using<br>\n<a href=\"https://github.com/roc-lang/llvm-package-windows/releases/tag/v16.0.6\">https://github.com/roc-lang/llvm-package-windows/releases/tag/v16.0.6</a></p>",
+        "id": 392702551,
+        "sender_full_name": "Anton",
+        "timestamp": 1695477569
+    },
+    {
+        "content": "<p>Thank you Anton, I'll test using that.</p>",
+        "id": 392742706,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695505883
+    },
+    {
+        "content": "<p>Any idea what might be causing this issue?</p>\n<div class=\"codehilite\"><pre><span></span><code>error: failed to run custom build command for `roc_bitcode v0.0.1 (C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode)`\n\nCaused by:\n  process didn&#39;t exit successfully: `C:\\Users\\bosyl\\Documents\\GitHub\\roc\\target\\release\\build\\roc_bitcode-1e59ee36b356bf6b\\build-script-build` (exit code: 101)\n  --- stdout\n  cargo:rerun-if-changed=build.rs\n  Compiling zig object `object` to: C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-out\\builtins-host.obj\n\n  --- stderr\n  An internal compiler expectation was broken.\n  This is definitely a compiler bug.\n  Please file an issue here: https://github.com/roc-lang/roc/issues/new/choose\n  thread &#39;main&#39; panicked at &#39;zig build object -Drelease=true failed with:\n\n    error(mingw): clang exited with code 1 and stderr: error: unknown target triple &#39;x86-unknown-windows-gnu&#39;, please use -triple or -arch\n\n  error(mingw): clang exited with code 1 and stderr: error: unknown target triple &#39;x86-unknown-windows-gnu&#39;, please use -triple or -arch\n\n  error(mingw): clang exited with code 1 and stderr: error: unknown target triple &#39;x86-unknown-windows-gnu&#39;, please use -triple or -arch\n\n  error: unable to generate DLL import .lib file for advapi32: ClangPreprocessorFailed\n\n  &#39;, crates\\compiler\\builtins\\bitcode\\build.rs:188:21\n  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>",
+        "id": 392745259,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695507862
+    },
+    {
+        "content": "<p>See if that target is still in <code>zig targets</code></p>",
+        "id": 392745664,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1695508234
+    },
+    {
+        "content": "<p>I'm pretty sure it isn't, <a href=\"https://gist.github.com/lukewilliamboswell/afa9481513eed23e7796dc64a8340d07\">here</a> is the output from <code>zig targets</code> on my windows machine using zig version <code>0.11.0</code>.</p>",
+        "id": 392747240,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695509394
+    },
+    {
+        "content": "<p>But I don't see any triples in the output... so I'm not sure</p>",
+        "id": 392747304,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695509427
+    },
+    {
+        "content": "<p><code>x86_64-windows-gnu</code></p>",
+        "id": 392747336,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695509482
+    },
+    {
+        "content": "<p>From the output</p>",
+        "id": 392747339,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695509488
+    },
+    {
+        "content": "<p>But this seems like an issue with forwarding that info to clang rather than directly from zig</p>",
+        "id": 392747349,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695509516
+    },
+    {
+        "content": "<p>Though maybe we are feeding in the unknown and need to remove it</p>",
+        "id": 392747414,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695509553
+    },
+    {
+        "content": "<p>I can definitely see arch contains <code>x86_64</code>, os contains <code>windows</code>, and abi contains <code>gnu</code>, also libc contains <code>x86-windows-gnu</code> so it should be all ok</p>",
+        "id": 392747638,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695509774
+    },
+    {
+        "content": "<p>Yeah, but that is not the zig side</p>",
+        "id": 392747689,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695509856
+    },
+    {
+        "content": "<p>It is failing when calling mingw clang</p>",
+        "id": 392747693,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695509866
+    },
+    {
+        "content": "<p>So we probably need to see what that expects and that it is the right version</p>",
+        "id": 392747719,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695509883
+    },
+    {
+        "content": "<p><a href=\"https://gist.github.com/lukewilliamboswell/90cb90805bad05c745f5cb7f90afdbfa\">Here</a> is all of the error it gives. I think I left some important details out before</p>",
+        "id": 392747821,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695509983
+    },
+    {
+        "content": "<p>I still think it is an issue on the clang side or on the zig passing info to clang. Cause I think this error is that the builtins are failing to compile. Though not really sure why it needs clang at all</p>",
+        "id": 392748474,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695510519
+    },
+    {
+        "content": "<p>It should be using the 16.0.6 version <span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> built and I've added an environment variable <code>LLVM_SYS_160_PREFIX</code> pointing to it right?</p>",
+        "id": 392748475,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695510519
+    },
+    {
+        "content": "<p>Does zig use clang? maybe it has a different version compared to llvm we are using?</p>",
+        "id": 392748530,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695510577
+    },
+    {
+        "content": "<p>In <code>crates\\compiler\\builtins\\bitcode\\build.zig</code> this might be related?</p>\n<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"c1\">// TODO zig 0.9 can generate .bc directly, switch to that when it is released!</span>\n<span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"n\">generateLlvmIrFile</span><span class=\"p\">(</span><span class=\"w\"> </span><span class=\"p\">...</span>\n</code></pre></div>",
+        "id": 392748693,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695510699
+    },
+    {
+        "content": "<p>I updated that file but didn't pay attention to comments, so that may be stale now</p>",
+        "id": 392749310,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695511243
+    },
+    {
+        "content": "<p>I'm not very familiar with zig build but it has a <code>.use_llvm = true</code> option which makes me think it is using llvm -- which is clang right?</p>",
+        "id": 392749597,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695511541
+    },
+    {
+        "content": "<p>Pretty sure this is an issue locally with my zig setup</p>",
+        "id": 392750723,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695512614
+    },
+    {
+        "content": "<p>I can also reproduce the error with </p>\n<div class=\"codehilite\"><pre><span></span><code>PS C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode&gt; zig build\nerror(mingw): clang exited with code 1 and stderr: error: unknown target triple &#39;x86-unknown-windows-gnu&#39;, please use -triple or -arch\n\nSemantic Analysis [1742] error(mingw): clang exited with code 1 and stderr: error: unknown target triple &#39;x86-unknown-windows-gnu&#39;, please use -triple or -arch\n\nSemantic Analysis [5018] error(mingw): clang exited with code 1 and stderr: error: unknown target triple &#39;x86-unknown-windows-gnu&#39;, please use -triple or -arch\n\nerror: unable to generate DLL import .lib file for advapi32: ClangPreprocessorFailed\n</code></pre></div>",
+        "id": 392751026,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695512913
+    },
+    {
+        "content": "<p>Figured out a workaround, I had been downloading zig binaries from the zig downloads page which was giving me the above error. I installed using the scoop package manager and it it now building zig ok.</p>",
+        "id": 392752779,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695514293
+    },
+    {
+        "content": "<p>Interesting</p>",
+        "id": 392752813,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695514322
+    },
+    {
+        "content": "<p>So use llvm is because they use the llvm backend instead of the new zig backends</p>",
+        "id": 392752876,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695514344
+    },
+    {
+        "content": "<p>So not related to clang, but related to llvm the same way that roc uses llvm</p>",
+        "id": 392752897,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695514360
+    },
+    {
+        "content": "<p>We need it to generate bc and llvm ir files.</p>",
+        "id": 392752974,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695514408
+    },
+    {
+        "content": "<p>Or at least I assume we need it</p>",
+        "id": 392752982,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695514416
+    },
+    {
+        "content": "<p>Haven't tested otherwise</p>",
+        "id": 392752990,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695514421
+    },
+    {
+        "content": "<p>Getting a different error now</p>\n<div class=\"codehilite\"><pre><span></span><code>error: failed to run custom build command for `roc_bitcode v0.0.1 (C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode)`\n\nCaused by:\n  process didn&#39;t exit successfully: `C:\\Users\\bosyl\\Documents\\GitHub\\roc\\target\\release\\build\\roc_bitcode-1e59ee36b356bf6b\\build-script-build` (exit code: 101)\n  --- stdout\n  cargo:rerun-if-changed=build.rs\n  Compiling zig object `object` to: C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-out\\builtins-host.obj\n  Moving zig object `object` to: C:\\Users\\bosyl\\Documents\\GitHub\\roc\\target\\release\\build\\roc_bitcode-be7313a61ad78acf\\out\\builtins-host.obj\n\n  --- stderr\n  An internal compiler expectation was broken.\n  This is definitely a compiler bug.\n  Please file an issue here: https://github.com/roc-lang/roc/issues/new/choose\n  thread &#39;main&#39; panicked at &#39;Failed to copy object file C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-out\\builtins-host.obj to C:\\Users\\bosyl\\Documents\\GitHub\\roc\\target\\release\\build\\roc_bitcode-be7313a61ad78acf\\out\\builtins-host.obj: Os { code: 2, kind: NotFound, message: &quot;The system cannot find the file specified.&quot; }&#39;, crates\\compiler\\builtins\\bitcode\\build.rs:85:9\n  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nwarning: build failed, waiting for other jobs to finish...\nerror: failed to run custom build command for `roc_bitcode v0.0.1 (C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode)`\n\nCaused by:\n  process didn&#39;t exit successfully: `C:\\Users\\bosyl\\Documents\\GitHub\\roc\\target\\release\\build\\roc_bitcode-1e59ee36b356bf6b\\build-script-build` (exit code: 101)\n  --- stdout\n  cargo:rerun-if-changed=build.rs\n  Compiling zig object `object` to: C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-out\\builtins-host.obj\n\n  --- stderr\n  An internal compiler expectation was broken.\n  This is definitely a compiler bug.\n  Please file an issue here: https://github.com/roc-lang/roc/issues/new/choose\n  thread &#39;main&#39; panicked at &#39;zig build object -Drelease=true failed with:\n\n    install generated to builtins-host.o: error: unable to update file from &#39;C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-cache\\o\\bd7e129e78e30bd9f9a6e12129f6341d\\builtins-host.obj&#39; to &#39;C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-out\\builtins-host.o&#39;: AccessDenied\n  Build Summary: 1/3 steps succeeded; 1 failed (disable with --summary none)\n  object transitive failure\n  +- install generated to builtins-host.o failure\n  error: the following build command failed with exit code 1:\n  C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-cache\\o\\574ac17d089f96475a6e004e49db08e1\\build.exe C:\\Users\\bosyl\\scoop\\apps\\zig\\current\\zig.exe C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode C:\\Users\\bosyl\\Documents\\GitHub\\roc\\crates\\compiler\\builtins\\bitcode\\zig-cache C:\\Users\\bosyl\\AppData\\Local\\zig object -Drelease=true\n\n  &#39;, crates\\compiler\\builtins\\bitcode\\build.rs:188:21\n  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>",
+        "id": 392753075,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695514459
+    },
+    {
+        "content": "<p>Oh, do we need to change <code>.o</code> to <code>.obj</code>? I thought I already had that.</p>",
+        "id": 392753202,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695514544
+    },
+    {
+        "content": "<p>Is <a href=\"https://github.com/ziglang/zig/issues/8362#issuecomment-1033407110\">this issue</a> related?</p>",
+        "id": 392753303,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695514592
+    },
+    {
+        "content": "<p>Oh, actually yeah, it is failing to write the file to the output directory</p>",
+        "id": 392753498,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695514705
+    },
+    {
+        "content": "<p>Though also, it is trying to name it wrong</p>",
+        "id": 392753513,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695514718
+    },
+    {
+        "content": "<p>As a workaround I changed from <code>builtins-host.obj</code> to <code>builtins-host.o</code> in <code>crates\\compiler\\builtins\\bitcode\\build.rs</code> and was able to finish building roc using <code>cargo build --release --locked</code> with no further issues. <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span></p>",
+        "id": 392755578,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695515896
+    },
+    {
+        "content": "<p>I'm guessing we need zig to write the host as <code>.obj</code> when compiling on windows. There is the below, which I think is related, but not sure why it isn't working</p>\n<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"kr\">var</span><span class=\"w\"> </span><span class=\"n\">suffix</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">        </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">target</span><span class=\"p\">.</span><span class=\"n\">os_tag</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"p\">.</span><span class=\"n\">windows</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"s\">\"obj\"</span>\n<span class=\"w\">    </span><span class=\"k\">else</span>\n<span class=\"w\">        </span><span class=\"s\">\"o\"</span><span class=\"p\">;</span>\n</code></pre></div>",
+        "id": 392755661,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695515964
+    },
+    {
+        "content": "<p>Adding the debug print below...</p>\n<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"c1\">// Targets</span>\n<span class=\"kr\">const</span><span class=\"w\"> </span><span class=\"n\">host_target</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">b</span><span class=\"p\">.</span><span class=\"n\">standardTargetOptions</span><span class=\"p\">(.{</span>\n<span class=\"w\">    </span><span class=\"p\">.</span><span class=\"n\">default_target</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">CrossTarget</span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"p\">.</span><span class=\"n\">cpu_model</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">.</span><span class=\"n\">baseline</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">},</span>\n<span class=\"p\">});</span>\n\n<span class=\"n\">std</span><span class=\"p\">.</span><span class=\"n\">log</span><span class=\"p\">.</span><span class=\"n\">debug</span><span class=\"p\">(</span><span class=\"s\">\"{?}\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">.{</span><span class=\"n\">host_target</span><span class=\"p\">});</span>\n</code></pre></div>\n<p>Gives <code>debug: zig.CrossTarget{ .. other stuff, .os_tag = null, ...}</code>. However we use <code>target.os_tag</code> in <code>generateObjectFile</code> to determine the suffix.</p>",
+        "id": 392756560,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695516468
+    },
+    {
+        "content": "<p>From the docs, <code>os_tag: ?Target.Os.Tag = null</code>, null means native.</p>",
+        "id": 392756773,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695516586
+    },
+    {
+        "content": "<p>Pushed a fix for this, now builds without any issues. Running the other tests now.</p>",
+        "id": 392759850,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695518216
+    },
+    {
+        "content": "<p>All the llvm backend tests look like they are failing with the same issue <code>error: unrecognized parameter: '--strip'</code></p>\n<div class=\"codehilite\"><pre><span></span><code>--- STDERR:              test_gen::test_gen gen_compare::list_neq_nested ---\nerror: unrecognized parameter: &#39;--strip&#39;\nthread &#39;gen_compare::list_neq_nested&#39; panicked at &#39;\n___________\nLinking command failed with status ExitStatus(ExitStatus(1)):\n\n  Child { stdin: None, stdout: None, stderr: None, .. }\n___________\n&#39;, crates\\compiler\\build\\src\\link.rs:1305:5\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>",
+        "id": 392760159,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695518389
+    },
+    {
+        "content": "<p>All the Zig tests are still passing on Windows</p>",
+        "id": 392760808,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695518753
+    },
+    {
+        "content": "<p>Fixed the linking issue for Windows by removing the \"--strip\" option.</p>",
+        "id": 392761941,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695519417
+    },
+    {
+        "content": "<p>I updated the github workflows for Windows to reference the correct dependencies.</p>",
+        "id": 392764495,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695521325
+    },
+    {
+        "content": "<p>Almost all the CI tests for windows pass; however there are a few <code>cli_run</code> tests that are now failing with the same issue <code>I don't know the address of the libc.memcpy_decision function</code></p>\n<div class=\"codehilite\"><pre><span></span><code>---- cli_run::hello_gui stdout ----\nthread &#39;cli_run::hello_gui&#39; panicked at &#39;\n___________\nThe roc command:\n\n  &quot;C:\\\\Users\\\\bosyl\\\\Documents\\\\GitHub\\\\roc\\\\target\\\\debug\\\\roc.exe build --optimize C:\\\\Users\\\\bosyl\\\\Documents\\\\GitHub\\\\roc\\\\examples\\\\gui\\\\helloBROKEN.roc --&quot;\n\nhad unexpected stderr:\n\n  🔨 Rebuilding platform...\nI don&#39;t know the address of the libc.memcpy_decision function! this may cause segfaults\nI don&#39;t know the address of the libc.memcpy_decision function! this may cause segfaults\n\n___________\n&#39;, crates\\cli\\tests\\cli_run.rs:148:13\n</code></pre></div>",
+        "id": 392764631,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695521421
+    },
+    {
+        "content": "<p>I found this <a href=\"https://ziglang.org/download/0.10.0/release-notes.html#compiler-rt\">0.10.0/release-notes</a> which may be related and explain why we are seeing this issue now.</p>\n<blockquote>\n<p>Started consolidating libc functions that codegen depends on into compiler-rt (<a href=\"https://github.com/roc-lang/roc/issues/7265\">#7265</a>)<br>\nCompiler backends want to emit calls to e.g. memcpy or sqrt. These are typically provided by libc, but they might not be in the case of freestanding, or depending on which third party libc is linked against.<br>\nTherefore Zig has started to provide all possible symbols with weak linkage, meaning that these symbols will be overridden by libc if provided. This means the only necessary runtime library that Zig objects need to be linked against is compiler-rt, no matter the target.</p>\n</blockquote>",
+        "id": 392772930,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695528105
+    },
+    {
+        "content": "<p>Oh, that's really cool. May Mena for some libc functions we can just depend on zig and not provide our own if we want to cut out libc.</p>",
+        "id": 392775296,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695529600
+    },
+    {
+        "content": "<p>Though that depends on if they do highly optimized libc impls and if we want those</p>",
+        "id": 392775330,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695529620
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> I was working on Windows fixes for this branch with <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> and we made some good progress fixing some LLVM backend issues in <a href=\"https://github.com/roc-lang/roc/commit/ba0e203816a54d6eefe2e94098a460f4c3c3085f\">this commit</a>. We were able to find a fix for the dec issues but we weren't sure the best way to generalise it. Brendan can probably explain this much better than I. Also our assumption that .reloc is the final section for relocations doesn't hold so that it another issue. I am happy to work on this with you when you are back online and have some free time. <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 393597008,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1695865249
+    },
+    {
+        "content": "<p>This PR feels so close. I think we are down to just dev wasm bugs.</p>",
+        "id": 393802078,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695933719
+    },
+    {
+        "content": "<p>I updated to macOS Sonoma and I can't build roc anymore because zig 0.9.1 doesn't seem to support it. I naively started to update <code>bitcode/build.zig</code> to work with zig 0.11, but it looks like it wasn't that easy and you folks are already on it <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 393825048,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1695947668
+    },
+    {
+        "content": "<p>I should pay more attention to Zulip</p>",
+        "id": 393825149,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1695947724
+    },
+    {
+        "content": "<p>Figured out a little bit with the wasm tests. Somehow, calling roc_alloc is corrupting memory. It ends up messing up bytes in random places (for example changing bytes in a constant string). That then progagates to the output and thus we have broken tests.</p>",
+        "id": 393855968,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695965155
+    },
+    {
+        "content": "<p>Maybe we are linking wrong and it is leading to malloc scratch memory overlapping with some roc constants? <span class=\"user-mention\" data-user-id=\"431893\">@Brian Carroll</span> any thoughts?</p>",
+        "id": 393857135,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695965775
+    },
+    {
+        "content": "<p>I guess this also points to: first fix any linking related bugs, then turn back to look at other tests. Cause fixing the linker may end up fixing everything else.</p>",
+        "id": 393857518,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1695965996
+    },
+    {
+        "content": "<p>Yeah I agree. Everything else is way more confusing when there are linking bugs so it's worth fixing them first. Dev Wasm only uses its own linking. I wonder if there's some new kind of relocation used with roc_alloc that we don't support yet...</p>",
+        "id": 393866176,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695969765
+    },
+    {
+        "content": "<p>There is just one memory block, all with the same permissions. So yeah it's possible in theory for the stack to overflow into constants. There is no segmentation fault if that happens.</p>\n<p>Our memory organisation is:<br>\nConstants are at low addresses.<br>\nThen the stack, which grows downward.<br>\nThen the heap, which grows upwards when we extend the size of our total memory.</p>",
+        "id": 393866945,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695970058
+    },
+    {
+        "content": "<p>There's a source file called <code>linking.rs</code> and I think I put in comments with URLs of relevant docs.</p>",
+        "id": 393915618,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695988161
+    },
+    {
+        "content": "<p>Also copied and pasted some relevant parts of the docs</p>",
+        "id": 393915846,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1695988266
+    },
+    {
+        "content": "<p>Unrelated to the current bugs but I just noticed the following comment in <code>crates/compiler/build/src/link.rs</code>, might be worth removing in this PR?</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"c1\">// some examples need the compiler-rt in the app object file.</span>\n<span class=\"c1\">// but including it on windows causes weird crashes, at least</span>\n<span class=\"c1\">// when we use zig 0.9. It looks like zig 0.10 is going to fix</span>\n<span class=\"c1\">// this problem for us, so this is a temporary workaround</span>\n<span class=\"k\">if</span><span class=\"w\"> </span><span class=\"o\">!</span><span class=\"n\">target</span><span class=\"p\">.</span><span class=\"n\">contains</span><span class=\"p\">(</span><span class=\"s\">\"windows\"</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">zig_cmd</span><span class=\"p\">.</span><span class=\"n\">args</span><span class=\"p\">([</span>\n<span class=\"w\">        </span><span class=\"c1\">// include the zig runtime</span>\n<span class=\"w\">        </span><span class=\"s\">\"-fcompiler-rt\"</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">]);</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 394763940,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1696399059
+    },
+    {
+        "content": "<p>I would say we should first find out if we still need the code. Try deleting and see what happens. But we might want to get everything else green first so that if it goes red, we know it's because of this.<br>\nThen if we still need the code, we update the comment to reflect the current reality.<br>\nIf we don't need the code, we delete code and comment.</p>",
+        "id": 394769711,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1696402013
+    },
+    {
+        "content": "<p><code>valgrind: the 'impossible' happened</code></p>",
+        "id": 396392617,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697159143
+    },
+    {
+        "content": "<p>When valgrind itself crashes as doesn't know why... the \"impossible\" happened</p>",
+        "id": 396392697,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697159166
+    },
+    {
+        "content": "<p>#goals</p>",
+        "id": 396392912,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1697159268
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> can you double check that valgrind is fully updated on the ci server?</p>",
+        "id": 396392916,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697159269
+    },
+    {
+        "content": "<p>Whichever server would run this test: <a href=\"https://github.com/roc-lang/roc/actions/runs/6502213723/job/17660877316?pr=5851\">https://github.com/roc-lang/roc/actions/runs/6502213723/job/17660877316?pr=5851</a></p>",
+        "id": 396393011,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697159297
+    },
+    {
+        "content": "<p>I wonder if that one of the tests that was failing for the aarch64 dev backend stuff, might be related.</p>",
+        "id": 396394457,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1697159919
+    },
+    {
+        "content": "<p>I checked my results and it doesn't look like it was one of the aarch64 test failures</p>",
+        "id": 396397354,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1697161337
+    },
+    {
+        "content": "<p>So trying to dig into the wasm issues currently. Somehow we are getting memory corruption. It happens when calling <code>malloc</code>.</p>",
+        "id": 396399751,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697162522
+    },
+    {
+        "content": "<p>At least that is my understanding currently</p>",
+        "id": 396400102,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697162644
+    },
+    {
+        "content": "<p>I assume this is just the manifestation of a linking bug, but will be interesting to dig into</p>",
+        "id": 396416076,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697169199
+    },
+    {
+        "content": "<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"361169\">Anton</span> can you double check that valgrind is fully updated on the ci server?</p>\n</blockquote>\n<p>I've upgraded valgrind on the CI machine from 3.18 to 3.21 and restarted the job.</p>",
+        "id": 396453288,
+        "sender_full_name": "Anton",
+        "timestamp": 1697185071
+    },
+    {
+        "content": "<p>The error is very similar with the new valgrind but it did add names to the stacktrace instead of <code>???</code>:</p>\n<div class=\"codehilite\"><pre><span></span><code>host stacktrace:\n==167378==    at 0x5819CDAA: getUChar (guest_amd64_toIR.c:524)\n==167378==    by 0x5819CDAA: dis_ESC_NONE (guest_amd64_toIR.c:19967)\n==167378==    by 0x581BEA29: disInstr_AMD64_WRK (guest_amd64_toIR.c:32515)\n==167378==    by 0x581BF2D3: disInstr_AMD64 (guest_amd64_toIR.c:32683)\n==167378==    by 0x5814A176: disassemble_basic_block_till_stop (guest_generic_bb_to_IR.c:956)\n==167378==    by 0x5814B2C2: bb_to_IR (guest_generic_bb_to_IR.c:1365)\n==167378==    by 0x5812EE72: LibVEX_FrontEnd (main_main.c:583)\n==167378==    by 0x5812F7E0: LibVEX_Translate (main_main.c:1235)\n==167378==    by 0x5805B0D2: vgPlain_translate (m_translate.c:1831)\n==167378==    by 0x580A0679: handle_tt_miss (scheduler.c:1136)\n==167378==    by 0x580A0679: vgPlain_scheduler (scheduler.c:1526)\n==167378==    by 0x580E6A0D: thread_wrapper (syswrap-linux.c:102)\n==167378==    by 0x580E6A0D: run_a_thread_NORETURN (syswrap-linux.c:155)\n</code></pre></div>",
+        "id": 396468831,
+        "sender_full_name": "Anton",
+        "timestamp": 1697189898
+    },
+    {
+        "content": "<p>So we are crashing valgrind on that machine, but not on any other machines...fun</p>",
+        "id": 396518675,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697207954
+    },
+    {
+        "content": "<p>what are the other differences between that machine and the others? OS version? CPU architecture?</p>",
+        "id": 396520283,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1697208510
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"361169\">@Anton</span>  should know, I think he mentioned that it compiles for the specific cpu instead of generic x86 for example</p>",
+        "id": 396525144,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697210125
+    },
+    {
+        "content": "<p>That one runs without nix, so I believe some dependency difference to eventually result in this behavior. I'll do some digging.</p>",
+        "id": 396525313,
+        "sender_full_name": "Anton",
+        "timestamp": 1697210183
+    },
+    {
+        "content": "<p>I'm also going to a <code>apt update &amp;&amp; upgrade</code> on that server, you never know...</p>",
+        "id": 396526843,
+        "sender_full_name": "Anton",
+        "timestamp": 1697210663
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> for the bus error issue. I do know of an issue in the zig platform in roc_panic, the arg should be a *RocStr not *anyopaque. Maybe that is the issue here? I found this when working on my zig platform, but forgot to submit a PR for it as it seemed really minor.</p>",
+        "id": 396673080,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1697311826
+    },
+    {
+        "content": "<p>Here is a roc_panic that works well, sorry on my phone <a href=\"https://github.com/lukewilliamboswell/roc-graphics-mach/blob/76a6aa57e972ab82aab309b8bb0fa59bb95d96cd/platform/src/roc.zig#L51\">LINK</a></p>",
+        "id": 396673433,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1697312265
+    },
+    {
+        "content": "<p>I've been looking at the *RocStr thing and I cannot reproduce the issue I was having with the zig platform. I'm not sure how a pointer to <code>[*:0]const u8</code> and a pointer to RocStr can both print out correctly.</p>\n<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"kr\">pub</span><span class=\"w\"> </span><span class=\"kr\">const</span><span class=\"w\"> </span><span class=\"n\">RocStr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"kr\">extern</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">str_bytes</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"o\">?</span><span class=\"p\">[</span><span class=\"o\">*</span><span class=\"p\">]</span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">str_len</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">str_capacity</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>The issue I saw was roc_panic would print out garbage but I am not seeing that on the current example at <code>crates/cli_testing_examples/expects/expects.roc</code> so :<span aria-label=\"man shrugging\" class=\"emoji emoji-1f937-200d-2642\" role=\"img\" title=\"man shrugging\">:man_shrugging:</span></p>",
+        "id": 396712412,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1697344094
+    },
+    {
+        "content": "<p>If the error is a small string, they would have the same format</p>",
+        "id": 396714637,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1697345047
+    },
+    {
+        "content": "<p>Ah that makes sense. Can confirm that it does mess things up with a large string. I'll make the changes and push to the zig-11 branch, and maybe that will help with our bug.</p>",
+        "id": 396714743,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1697345145
+    },
+    {
+        "content": "<p>I've edited the bus error issue (<a href=\"https://github.com/roc-lang/roc/issues/5904\">#5904</a>) to clarify things. For using dbg with <code>roc dev</code> we use <a href=\"https://github.com/roc-lang/roc/blob/1c37d8adb1fadf7262711054d0238175fc08e8ec/crates/cli/src/lib.rs#L1074\">two \"connected\" processes</a>. If you don't set up the two processes correctly, like when manually running the executable produced by dev, you also get a bus error. So I think <a href=\"https://github.com/roc-lang/roc/blob/1c37d8adb1fadf7262711054d0238175fc08e8ec/crates/cli/src/lib.rs#L1090\">something in this code</a> is going wrong on the zig-11-llvm-16 branch on the CI machine.</p>",
+        "id": 396736170,
+        "sender_full_name": "Anton",
+        "timestamp": 1697361940
+    },
+    {
+        "content": "<p>this might get fixed by replacing the current <code>dbg</code> implementation with one that uses <code>Inspect</code> (once that's auto-derived, which is WIP on a branch but has bugs and doesn't work yet)</p>",
+        "id": 397948878,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1697985294
+    },
+    {
+        "content": "<p>at that point we no longer have the \"two connected processes\" design anymore (which has been basically the entire reason we've had so many <code>dbg</code> issues)</p>",
+        "id": 397948915,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1697985331
+    },
+    {
+        "content": "<p>It looks like all the test now pass on CI, awesome work <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span> this will make a big difference I think.</p>",
+        "id": 398202008,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1698121884
+    },
+    {
+        "content": "<p>Oh wow...yeah. We pushed off 2 issues for a later time (related to dbg rework and a specific wasm issue).</p>",
+        "id": 398202847,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698122255
+    },
+    {
+        "content": "<p>That said, I think we are ready to merge</p>",
+        "id": 398202859,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698122265
+    },
+    {
+        "content": "<p>We also may eventually need to update debugir as well, but again, that has no need to block this branch</p>",
+        "id": 398202937,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698122312
+    },
+    {
+        "content": "<p>Given this is a bigger change <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span>, if you want to give a review to approve the merge, that would be great. <a href=\"https://github.com/roc-lang/roc/issues/5851\">#5851</a></p>\n<p>Otherwise, if you have any concerns or blockers, please comment as so.</p>",
+        "id": 398203067,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698122415
+    },
+    {
+        "content": "<p>Also, thanks <span class=\"user-mention\" data-user-id=\"361169\">@Anton</span>, <span class=\"user-mention\" data-user-id=\"431893\">@Brian Carroll</span> and <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span>!</p>\n<p>You all helped fix various bugs on this branch to make it a reality.</p>",
+        "id": 398203202,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698122533
+    },
+    {
+        "content": "<p>Woohoo! This is great! Well done to you <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> for taking on this huge piece of work and pushing through it to the end!</p>",
+        "id": 398206247,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1698125017
+    },
+    {
+        "content": "<p>this is now merged!!! <span aria-label=\"heart eyes\" class=\"emoji emoji-1f60d\" role=\"img\" title=\"heart eyes\">:heart_eyes:</span>  <span aria-label=\"heart eyes\" class=\"emoji emoji-1f60d\" role=\"img\" title=\"heart eyes\">:heart_eyes:</span>  <span aria-label=\"heart eyes\" class=\"emoji emoji-1f60d\" role=\"img\" title=\"heart eyes\">:heart_eyes:</span></p>",
+        "id": 398543523,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1698259802
+    },
+    {
+        "content": "<p>thank you so much to everyone who helped make this happen!</p>",
+        "id": 398543587,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1698259812
+    },
+    {
+        "content": "<p>Yay!!!</p>",
+        "id": 398548097,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1698261831
+    },
+    {
+        "content": "<p>woohoo I can build on Sonoma <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 398548782,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1698262196
+    },
+    {
+        "content": "<p>cc <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> I think this was also blocking you on macOS?</p>",
+        "id": 398549878,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1698262692
+    },
+    {
+        "content": "<p>Woot!</p>",
+        "id": 398549936,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1698262715
+    },
+    {
+        "content": "<p>Been very busy recently with the process of buying and managing renovations on a house, but will look soon.</p>",
+        "id": 398550012,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1698262759
+    },
+    {
+        "content": "<p>whoa, awesome - congrats on the house! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 398551695,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1698263572
+    }
+]

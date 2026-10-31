@@ -1,0 +1,476 @@
+[
+    {
+        "content": "<h2>Problem Description: Formatter Creates Different Parse Errors for Malformed Input</h2>\n<h3>Summary</h3>\n<p>The Roc formatter is failing a fuzz test because it transforms malformed input with tokenization errors into output with different parse errors, violating the expectation that formatting should be stable and preserve error characteristics.</p>\n<h3>Specific Case</h3>\n<p><strong>Input:</strong> <code>module[]0}0.</code><br>\n<strong>Formatted Output:</strong> <code>module []00.</code><br>\n<strong>Issue:</strong> Different error types between input and output</p>\n<h3>Root Cause Analysis</h3>\n<h4>1. Tokenization Behavior</h4>\n<p>Original input <code>module[]0}0.</code> tokenizes as:</p>\n<ul>\n<li><code>KwModule(1:1-1:7)</code> → <code>module</code></li>\n<li><code>OpenSquare(1:7-1:8)</code> → <code>[</code></li>\n<li><code>CloseSquare(1:8-1:9)</code> → <code>]</code></li>\n<li><code>Int(1:9-1:10)</code> → <code>0</code></li>\n<li><code>Float(1:11-1:13)</code> → <code>0.</code> (the <code>}</code> at position 10 is processed as \"OverClosedBrace\" error and discarded)</li>\n<li><code>EndOfFile(1:13-1:13)</code></li>\n</ul>\n<p>The <code>}</code> character creates a tokenization diagnostic but doesn't appear in the token stream.</p>\n<h4>2. Parsing Behavior</h4>\n<p>The parser sees the token sequence <code>[Int, Float]</code> and creates two separate valid expression nodes:</p>\n<ul>\n<li><code>(e-int @1-9-1-10 (raw \"0\"))</code></li>\n<li><code>(e-frac @1-11-1-13 (raw \"0.\"))</code></li>\n</ul>\n<p><strong>Key Issue:</strong> The tokenization error (<code>}</code>) doesn't prevent successful parsing of two separate expressions.</p>\n<h4>3. Formatting Behavior</h4>\n<p>The formatter processes each expression independently:</p>\n<ul>\n<li>Integer <code>0</code> → outputs <code>0</code></li>\n<li>Float <code>0.</code> → outputs <code>0.</code></li>\n<li>Combined: <code>00.</code> (no separator because they're parsed as separate statements)</li>\n</ul>\n<h4>4. Re-parsing the Formatted Output</h4>\n<p>When <code>module []00.</code> is parsed:</p>\n<ul>\n<li><code>00</code> tokenizes as <code>Int</code> (with \"LeadingZero\" warning)</li>\n<li><code>.</code> tokenizes as <code>Dot</code></li>\n<li>Parser creates an integer expression for <code>00</code> but fails to handle the unexpected <code>.</code> token</li>\n<li>Results in <code>(e-malformed @1-12-1-13 (reason \"expr_unexpected_token\"))</code></li>\n</ul>\n<h3>Error Type Transformation</h3>\n<ul>\n<li><strong>Original:</strong> Tokenization error (<code>OverClosedBrace</code>) + successful parsing (0 parse diagnostics)</li>\n<li><strong>Formatted:</strong> Tokenization warning (<code>LeadingZero</code>) + parse error (<code>expr_unexpected_token</code>)</li>\n</ul>\n<p>The fuzzer expects the formatted output to have the same number of parse diagnostics as the original (0), but gets 1 instead.</p>\n<h3>Technical Details</h3>\n<h4>Fuzzer Test Logic</h4>\n<p>The <code>moduleFmtsStable</code> function in <code>src/fmt.zig</code>:</p>\n<ol>\n<li>Formats the input once</li>\n<li>Attempts to format it again</li>\n<li>The second attempt fails because <code>parseAndFmt</code> expects no parse diagnostics:<br>\n<code>zig\n   std.testing.expectEqualSlices(AST.Diagnostic, &amp;[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {\n       return error.ParseFailed;\n   };\n   </code></li>\n</ol>\n<h4>Information Loss</h4>\n<p>The core issue is that <strong>tokenization errors cause information loss</strong> that makes it impossible for the formatter to recreate something faithful to the original. The <code>}</code> character is completely lost because:</p>\n<ol>\n<li>It's processed as an error during tokenization</li>\n<li>No AST node represents it</li>\n<li>The formatter has no way to know it existed</li>\n</ol>\n<h3>Proposed Solution Direction</h3>\n<p>The fundamental issue is that <strong>malformed syntax should be better represented in the AST</strong> so the formatter can recreate something closer to the original. Specifically:</p>\n<h4>Possible Solution: Token Error Preservation</h4>\n<p>Modify the tokenization/parsing pipeline to preserve error tokens in the AST so they can be reconstructed during formatting.</p>\n<h3>Reproduction</h3>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>$<span class=\"w\"> </span>zig<span class=\"w\"> </span>build<span class=\"w\"> </span>repro-parse<span class=\"w\"> </span>--<span class=\"w\"> </span>-b<span class=\"w\"> </span>bW9kdWxlW10wfTAu<span class=\"w\"> </span>-v\n</code></pre></div>",
+        "id": 526186133,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1751096206
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> <span class=\"user-mention\" data-user-id=\"781658\">@Anthony Bullard</span> -- I'm not sure the best way forward on this one. I'm not keen to make a big mess of the tokenizer. I'm hoping you have some advice for me.</p>",
+        "id": 526186173,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1751096263
+    },
+    {
+        "content": "<p>Of note, if something is truly broken, the correct solution may be to bail and just verbatim copy the original source.</p>",
+        "id": 526186903,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751097154
+    },
+    {
+        "content": "<p>Of course nicest if we can do that for the minimal chunk and then format everything else</p>",
+        "id": 526186932,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751097184
+    },
+    {
+        "content": "<p>I've never seen a language where the formatter does ANYTHING when there is a parse error</p>",
+        "id": 526197602,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751109974
+    },
+    {
+        "content": "<p>If there is a parse error the formatter should return an error and bail</p>",
+        "id": 526197659,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751110025
+    },
+    {
+        "content": "<p>I understand \"Never Block, Always Inform\", but I think at a <em>minimum</em> it has to have valid parse tree for the compiler to work with</p>",
+        "id": 526197728,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751110108
+    },
+    {
+        "content": "<p>I would expect treesitter-like parsing. In some cases it's possible to format what is known to be correct and leave unknowns as is</p>",
+        "id": 526197911,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751110295
+    },
+    {
+        "content": "<p>treesitter can do that because of it being a concrete syntax tree, but we are expecting to be able to do something with the output - which is unlikely to be meaningful with parse errors.</p>",
+        "id": 526198549,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751110990
+    },
+    {
+        "content": "<p>We could try to format top level constructs until the first one that contains a malformed, and then just print the original source from there</p>",
+        "id": 526198584,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751111031
+    },
+    {
+        "content": "<p>But once you have a parse error, it's not always possible to output something reasonable from there on out</p>",
+        "id": 526198608,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751111062
+    },
+    {
+        "content": "<p>But I personally like a simple bail out and error (for a specific module) when there is a parse error, along with a good diagnostic so that I can fix it quickly</p>",
+        "id": 526198656,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751111121
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"781658\">Anthony Bullard</span> <a href=\"#narrow/channel/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing/near/526197602\">said</a>:</p>\n<blockquote>\n<p>I've never seen a language where the formatter does ANYTHING when there is a parse error</p>\n</blockquote>\n<p>I know, and I hate it <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 526199366,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751111976
+    },
+    {
+        "content": "<p>it leads to the common experience of \"I'm trying to work on this code and everything looks terrible until I stop what I'm doing and hunt down the missing delimiter, then suddenly everything I'd been working on snaps jarringly into place\"</p>",
+        "id": 526199410,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112014
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"781658\">Anthony Bullard</span> <a href=\"#narrow/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing/near/526198656\">said</a>:</p>\n<blockquote>\n<p>But I personally like a simple bail out and error (for a specific module) when there is a parse error, along with a good diagnostic so that I can fix it quickly</p>\n</blockquote>\n<p>Generally agree, but an often scenario for me is writing a long function not paying attention at formatting. Then format and save. If there was an error during parsing, I'd like to have valid formatting at least up to the first error. This way it's easier for me to read the messy nonsense I wrote.</p>",
+        "id": 526199413,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751112018
+    },
+    {
+        "content": "<p>I think the better approach is what Zig does, which is where there are certain points that the parser can say \"okay we've gotten into an invalid state, but we'll stop being in an invalid state once we get to a certain marker that we can recover from\"</p>",
+        "id": 526199469,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112069
+    },
+    {
+        "content": "<p>a very simple example of this is an unclosed single-line string literal</p>",
+        "id": 526199475,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112077
+    },
+    {
+        "content": "<p>such as:</p>\n<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"n\">foo</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"s\">\"missing close quote</span>\n<span class=\"n\">bar</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"s\">\"all good\"</span>\n</code></pre></div>",
+        "id": 526199491,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112094
+    },
+    {
+        "content": "<p>although we're missing the closing quote, we know that it's a single-line string literal, so as soon as we encounter a newline, the parser can end the literal and report a problem</p>",
+        "id": 526199548,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112131
+    },
+    {
+        "content": "<p>and then continue as normal</p>",
+        "id": 526199552,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112134
+    },
+    {
+        "content": "<p>Yeah, exactly! There are cases with no ambiguity!</p>",
+        "id": 526199607,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751112196
+    },
+    {
+        "content": "<p>we can adopt this philosophy in other situations too besides string literals</p>",
+        "id": 526199623,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112214
+    },
+    {
+        "content": "<p>I'm down with parse error recovery for unambiguous cases like that</p>",
+        "id": 526199725,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751112327
+    },
+    {
+        "content": "<p>a really useful one is top-level declarations being a boundary</p>\n<p>for example, suppose we hit an unexpected assignment before a literal was closed, e.g. <code>[5, 6, x =</code></p>\n<p>if we look at the <code>x =</code> and discover that there's a newline right before the <code>x =</code> in the source code, then we can helpfully assume it's intended to be a new top-level declaration.</p>\n<p>at that point we can end the current top-level decl we've been parsing (and record it as an error with an unclosed delimiter) and continue parsing the rest of the module instead of giving up</p>",
+        "id": 526199766,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112374
+    },
+    {
+        "content": "<p>But for cases like the motivating source at the top of this thread:</p>\n<div class=\"codehilite\"><pre><span></span><code>module[]0}0\n</code></pre></div>\n<p>There is nothing useful for us to do here</p>",
+        "id": 526199774,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751112382
+    },
+    {
+        "content": "<p>agreed</p>",
+        "id": 526199784,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112392
+    },
+    {
+        "content": "<p>But if I forget a comma in a list or record literal, I agree we can probably help there</p>",
+        "id": 526199830,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751112439
+    },
+    {
+        "content": "<p>But that may be a fair amount of complexity in the formatter - and if that's worth it that's ok!  But we should go into that with clear eyes</p>",
+        "id": 526199857,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751112481
+    },
+    {
+        "content": "<p>yeah I definitely think it makes the formatter more  complicated, and I also definitely think it's worth it <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 526199875,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112505
+    },
+    {
+        "content": "<p>to me the analogy is high-quality error messages - more compiler complexity for a nicer end user experience when a mistake has been made</p>",
+        "id": 526199885,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112528
+    },
+    {
+        "content": "<p>So we are really saying \"in the formatter, if there is an unambiguous case of a syntax error we will fix it for you\"</p>",
+        "id": 526199925,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751112593
+    },
+    {
+        "content": "<p>I'm trying to figure out what we could and could not do</p>",
+        "id": 526199964,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751112633
+    },
+    {
+        "content": "<p>I think it makes sense to support these things on a case by case basis</p>",
+        "id": 526200007,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112702
+    },
+    {
+        "content": "<p>Things we definitely COULD do:</p>\n<ol>\n<li>Terminate unclosed string literals</li>\n<li>Terminate unclosed lists/tuples/records that are single line and not deeply nested</li>\n<li>Insert commas into lists/tuples/records/calls</li>\n</ol>",
+        "id": 526200026,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751112716
+    },
+    {
+        "content": "<p>for example, start with the unclosed string literal one</p>",
+        "id": 526200028,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112718
+    },
+    {
+        "content": "<p>I think the top-level decl one is a good one because it can really isolate error scenarios</p>",
+        "id": 526200058,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112756
+    },
+    {
+        "content": "<p>also removing redundant commas, e.g. <code>[1, 2,, 3]</code></p>",
+        "id": 526200067,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751112772
+    },
+    {
+        "content": "<p>Yeah, that's what I was suggesting above</p>",
+        "id": 526200069,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751112772
+    },
+    {
+        "content": "<p>But the chances of us doing something very wrong, and very irritating goes up  FAST if we try to format after an unrecoverable-from parse error</p>",
+        "id": 526200104,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751112817
+    },
+    {
+        "content": "<p>Even across that \"boundary\"</p>",
+        "id": 526200153,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751112902
+    },
+    {
+        "content": "<p>I think if we pick the right heuristics we'll be ok</p>",
+        "id": 526200455,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751113151
+    },
+    {
+        "content": "<p>I think heuristics are a tough thing when you are changing someone's source code</p>",
+        "id": 526200536,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751113192
+    },
+    {
+        "content": "<p>If that heuristic is wrong 2% of the time, there is going to be some very frustrated users</p>",
+        "id": 526200608,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751113234
+    },
+    {
+        "content": "<p>But maybe I'm misunderestimating us <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 526200647,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751113272
+    },
+    {
+        "content": "<p>Yeah, my complexity spidey sense is tingling here :p</p>",
+        "id": 526201921,
+        "sender_full_name": "Anton",
+        "timestamp": 1751114850
+    },
+    {
+        "content": "<p>what I mean is that we need to be thoughtful about which things we do and don't choose to recover from</p>",
+        "id": 526203533,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751116862
+    },
+    {
+        "content": "<p>like the unclosed string literal seems super uncontroversial to me</p>",
+        "id": 526203647,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751116997
+    },
+    {
+        "content": "<p>the top level decl one is more likely to have a false positive in theory, but seems so unlikely to me that I'd rather have it than not</p>",
+        "id": 526203675,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751117025
+    },
+    {
+        "content": "<p>in contrast, trying to auto close delimiters inside a given expression sounds much riskier</p>",
+        "id": 526203715,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751117068
+    },
+    {
+        "content": "<p>and by default I'd want to not do that</p>",
+        "id": 526203728,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751117089
+    },
+    {
+        "content": "<p>I think assuming we can find the right closing, it makes sense to format other things. For example, a broken header probably should not affect formatting the main function.</p>",
+        "id": 526210211,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751124120
+    },
+    {
+        "content": "<p>And one function should not affect another</p>",
+        "id": 526210222,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751124130
+    },
+    {
+        "content": "<p>I think both of those are handled by the top-level decl thing</p>",
+        "id": 526212267,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751126299
+    },
+    {
+        "content": "<p>For this specific example, I'd actually suggest three different fixes (defense in depth). This has uncovered multiple separate problems.</p>\n<ol>\n<li>The over-closed brace should be reflected in the token stream and we should let the parser \"forward\" that error to the parse tree so we can see where in the tree it ends up</li>\n<li>We should make sure that idents/keywords/numbers can never accidentally be merged in the formatter by keeping track of the \"kind\" of token we last spit into the output, and if we just spit out a ident/keyword/number and we're about to spit another one, we should force a space.</li>\n<li>If the formatter sees a node with a parse error under it, we should _default_ to working out what the range of tokens that corresponds to, and copying that range from the source verbatim. Only if we feel confident in isolating the error and formatting the rest (or fixing the error all together), should we try to format.</li>\n</ol>",
+        "id": 526212375,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1751126396
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"453336\">Joshua Warner</span> <a href=\"#narrow/channel/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing/near/526212375\">said</a>:</p>\n<blockquote>\n<p>For this specific example, I'd actually suggest three different fixes (defense in depth). This has uncovered multiple separate problems.</p>\n<ol>\n<li>The over-closed brace should be reflected in the token stream and we should let the parser \"forward\" that error to the parse tree so we can see where in the tree it ends up</li>\n<li>We should make sure that idents/keywords/numbers can never accidentally be merged in the formatter by keeping track of the \"kind\" of token we last spit into the output, and if we just spit out a ident/keyword/number and we're about to spit another one, we should force a space.</li>\n<li>If the formatter sees a node with a parse error under it, we should _default_ to working out what the range of tokens that corresponds to, and copying that range from the source verbatim. Only if we feel confident in isolating the error and formatting the rest (or fixing the error all together), should we try to format.</li>\n</ol>\n</blockquote>\n<p>I don't think I understand 1 quite fully.  2 is a great idea, and I think 3 was the consensus we reached.</p>",
+        "id": 526217465,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751131580
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> I think situations like:</p>\n<div class=\"codehilite\"><pre><span></span><code> module [\n    foo,\n\nbar = 42\n</code></pre></div>\n<p>Are hard to work out.  If we comsume foo and bar and then bail when we see the <code>=</code>, we can't parse the next decl correctly</p>",
+        "id": 526217610,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751131698
+    },
+    {
+        "content": "<p>And it's pretty contentious to work out the intent there through heuristics even though in this example the intent is pretty clear</p>",
+        "id": 526217669,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751131760
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code> module [\n    foo,\n\nbar = 42\n</code></pre></div>\n<p>That module header has no clear end. We could guess one, but I expect that to break formatting...at least until we hit something that clearly can't be in the header, but full bail is fine.</p>\n<p>Though if an equal sign is not valid in a header, we could start formatting everything after the bar line</p>",
+        "id": 526218056,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751132136
+    },
+    {
+        "content": "<p>I think we would do that.  we would copy the two spans for the malformed header, and malformed statement and print them verbatim, and then continue down the statements</p>",
+        "id": 526218116,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751132200
+    },
+    {
+        "content": "<p>On the other hand, if foo was some garbage instead, but the module header has an ending <code>]</code>, we could skip formatting the module header and format everything after</p>",
+        "id": 526218128,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751132211
+    },
+    {
+        "content": "<p>what's wrong with the heuristic of \"we hit a parsing error and noticed that the decl has a \\n in front, so we assume it's supposed to be a new top-level decl and proceed accordingly?\"</p>",
+        "id": 526218158,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751132242
+    },
+    {
+        "content": "<p>Yeah, a case like:</p>\n<div class=\"codehilite\"><pre><span></span><code> module [\n    @#&amp;,\n]\n\nbar = 42\n</code></pre></div>\n<p>Is easy</p>",
+        "id": 526218162,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751132244
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"781658\">Anthony Bullard</span> <a href=\"#narrow/stream/395097-compiler-development/topic/fuzz.20crash.20-.20handling.20malformed.20tokens.20and.20parsing/near/526218116\">said</a>:</p>\n<blockquote>\n<p>I think we would do that.  we would copy the two spans for the malformed header, and malformed statement and print them verbatim, and then continue down the statements</p>\n</blockquote>\n<p>Yeah, sounds great....wasn't sure what level we handle currently. The original failing case like shared seemed to suggest that we were still trying to format what is invalid</p>",
+        "id": 526218187,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751132275
+    },
+    {
+        "content": "<p>Well the formatter doesn't really know about newlines</p>",
+        "id": 526218188,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751132277
+    },
+    {
+        "content": "<p>I mean in the parser</p>",
+        "id": 526218201,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751132285
+    },
+    {
+        "content": "<p>it can look at the source byte right before the pattern's region begins</p>",
+        "id": 526218235,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751132318
+    },
+    {
+        "content": "<p>so this is about parser recoverability more than formatter</p>",
+        "id": 526218257,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751132333
+    },
+    {
+        "content": "<p>Hmmm....that sounds more complicated than formatter error recovery, and requires state to be passed forward through the parser, no?</p>",
+        "id": 526218310,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751132381
+    },
+    {
+        "content": "<p>So a lookbehind?</p>",
+        "id": 526218337,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751132404
+    },
+    {
+        "content": "<p>the benefit is that we can keep checking the rest of the file and give you errors as normal</p>",
+        "id": 526218487,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751132533
+    },
+    {
+        "content": "<p>if I had to pick between either parser or formatter error tolerance, I'd pick parser for that reason <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 526218508,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751132562
+    },
+    {
+        "content": "<p>I don't think special state handling would be needed; if we've found an <code>=</code>, the parser ends up knowing the lhs and the rhs nodes of that <code>=</code></p>",
+        "id": 526218626,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751132669
+    },
+    {
+        "content": "<p>so from there we look at the lhs node's region, and that tells us all we need to know where to look for the newline</p>",
+        "id": 526218669,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751132703
+    },
+    {
+        "content": "<p>and the parse error would occur right when we encountered the unexpected <code>=</code></p>",
+        "id": 526218709,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751132732
+    },
+    {
+        "content": "<p>Btw, is there a plan on having an incremental parser?</p>",
+        "id": 526219443,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751133545
+    },
+    {
+        "content": "<p>depends on what you mean by that <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 526219612,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751133707
+    },
+    {
+        "content": "<p>I suppoae a lot of heuristics would come from deltas. Like, if we know the prev state is stable, and changes introduced a problem - we can narrow the invalid part of the tree</p>",
+        "id": 526219774,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751133837
+    },
+    {
+        "content": "<p>I think the parser should only have full source bytes as its input</p>",
+        "id": 526219947,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751133994
+    },
+    {
+        "content": "<p>I don't think we should have a version of the parser that takes \"what we parsed to last time\" as an input</p>",
+        "id": 526219958,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751134004
+    }
+]

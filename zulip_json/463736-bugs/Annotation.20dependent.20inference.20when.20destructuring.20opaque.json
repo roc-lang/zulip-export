@@ -1,0 +1,62 @@
+[
+    {
+        "content": "<p>I'm not sure if there's some syntax I don't yet know, but I'm getting a type error only when I don't annotate push or pop from the following:</p>\n<div class=\"codehilite\"><pre><span></span><code>Stack(v) :: {s: List(v)}.{\n    push : Stack(v), v -&gt; Stack(v)\n    push = |{s}, v| {\n        {s: s.append(v)}\n    }\n\n    pop : Stack(v) -&gt; (Stack(v), Try(v, [ListWasEmpty]))\n    pop = |s| {\n        last = s.last()\n        dropped = s.drop_last(1)\n        (Stack.{s: dropped}, last)\n    }\n    new = || {Stack.{s: []}}\n}\n</code></pre></div>\n<p>In both push and pop, the opaque backing type is destructured to get the list. If I use without annotations, I get the following error:</p>\n<div class=\"codehilite\"><pre><span></span><code>┌───────────────┐\n│ TYPE MISMATCH ├─ The push method on Stack has an incompatible type. ────────────────────────────┐\n└┬──────────────┘                                                                                 │\n │                                                                                                │\n │  $s = $s.push(2)                                                                               │\n │       ‾‾                                                                                       │\n └───────────────────────────────────────────── main.roc:54:10 ┘\n\n    The method push has the type:\n\n        { s: a }, b -&gt; { s: c } where [a.append : a, b -&gt; c]\n\n    But I need it to have the type:\n\n        Stack(v), a -&gt; _ret\n          where [a.from_numeral : Numeral -&gt; Try(a, [InvalidNumeral(Str)])]\n</code></pre></div>\n<p>Adding in annotations the error goes away. Here is an example use for reproduction</p>\n<div class=\"codehilite\"><pre><span></span><code>main! = |_| {\n    var $s = Stack.new()\n    $s = $s.push(2)\n    Ok({})\n}\n</code></pre></div>\n<ul>\n<li>I would have thought that without annotations would be ok, as the <code>Stack</code> member functions can access opaque internal state, as well as any other record of shape <code>{s} where s.append ...</code></li>\n<li>It's invalid syntax (version from last week) to try and destructure like <code>|Stack.{s}|</code>, so I'm not sure how else to signal without annotations that I am expecting <code>Stack</code> not a generic record.</li>\n</ul>",
+        "id": 611333588,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1784307582
+    },
+    {
+        "content": "<p>Instead of  <code>Stack.{s}</code>, you can use <code>Stack.({x})</code>! But I think that <code>pop</code> would still not work without the annotation (the compiler needs some way to know that <code>s</code> is <code>Stack</code>)</p>",
+        "id": 611340477,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1784309941
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"820027\">Jonathan</span> <a href=\"#narrow/channel/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque/near/611333588\">said</a>:</p>\n<blockquote>\n<ul>\n<li>I would have thought that without annotations would be ok, as the <code>Stack</code> member functions can access opaque internal state, as well as any other record of shape <code>{s} where s.append ...</code></li>\n</ul>\n</blockquote>\n<ul>\n<li><code>the `Stack` member functions can access opaque internal state</code>: this is not true! the scope inside the <code>Stack.{ ... }</code> has no special access to <code>Stack</code> internals!</li>\n<li><code>as well as any other record of shape `{s}` </code>: this is correct! in many cases the compiler can lift structural types like a record into the nominal type implicitly</li>\n</ul>",
+        "id": 611341130,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1784310107
+    },
+    {
+        "content": "<p>More broadly, this is a known (and not really solvable) constraint. In many cases, the compiler can figure out how to lift structural values (eg <code>{ ... }</code> or a tag) into a nominal (eg <code>Stack</code>), but not always. In these cases, either annotation or explicitly using the nominal constructor is necessary (eg <code>Stack.({ ... })</code>)</p>",
+        "id": 611341347,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1784310155
+    },
+    {
+        "content": "<p>All that said, <code>Stack.{s}</code> <em>should</em> work, so that is definitely a bug. I will make an issue &amp; fix</p>",
+        "id": 611341873,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1784310281
+    },
+    {
+        "content": "<blockquote>\n<p>Stack.({s})</p>\n</blockquote>\n<p>Ahh <span aria-label=\"face palm\" class=\"emoji emoji-1f926\" role=\"img\" title=\"face palm\">:face_palm:</span> Thank you, that's bitten me a few times now.</p>\n<blockquote>\n<p>Stack.{s} should work</p>\n</blockquote>\n<p>Is it conceptually different from Stack(.. or just equivalent sugar?</p>\n<blockquote>\n<p>has no special access to Stack internals</p>\n</blockquote>\n<p>I don't follow here, isn't this the point of opaque? From the langref:</p>\n<blockquote>\n<p>outside its defining module the backing representation is hidden, so the type can only be created and inspected through the methods that module exposes.</p>\n</blockquote>",
+        "id": 611343898,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1784310873
+    },
+    {
+        "content": "<p>equivalent sugar!</p>\n<p>then sorry, my wording was confusing there:</p>\n<ul>\n<li>you can only create a nominal type in the module that declares it (so yes this is \"special access\")</li>\n<li>but in the defining module, there is no special nominal coercion logic</li>\n</ul>\n<p>so more on that second point: for all accessible nominal types (eg an opaque nominal in the defining module OR a transparent Nominal anywhere), the compiler can coerce that nominal's backing type into the nominal itself, is it's clear from surrounding context. eg:</p>\n<div class=\"codehilite\" data-code-language=\"Python\"><pre><span></span><code><span class=\"n\">xxx</span> <span class=\"p\">:</span> <span class=\"n\">Stack</span>\n<span class=\"n\">xxx</span> <span class=\"o\">=</span> <span class=\"p\">{</span> <span class=\"n\">s</span><span class=\"p\">:</span> <span class=\"p\">[</span> <span class=\"o\">...</span> <span class=\"p\">]</span> <span class=\"p\">}</span>\n</code></pre></div>\n<p>works, because we know that <code>xxx</code> should be <code>Stack</code>, so we can coerce the plain record</p>\n<p>what I meant was that inside a nominal types method block (<code>Stack := { s: List }.{ ... }</code>), there no <em>extra</em> coercion logic, just the regular coercion I just described</p>",
+        "id": 611345987,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1784311424
+    },
+    {
+        "content": "<p>I have a PR up for <code>|Stack.{s}|</code>! <a href=\"https://github.com/roc-lang/roc/pull/10190\">https://github.com/roc-lang/roc/pull/10190</a></p>",
+        "id": 611347742,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1784312082
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"341568\">Jared Ramirez</span> <a href=\"#narrow/channel/463736-bugs/topic/Annotation.20dependent.20inference.20when.20destructuring.20opaque/near/611345987\">said</a>:</p>\n<blockquote>\n<p>what I meant was that inside a nominal types method block (<code>Stack := { s: List }.{ ... }</code>), there no <em>extra</em> coercion logic, just the regular coercion I just described</p>\n</blockquote>\n<p>ahh, gotcha. Thanks!</p>",
+        "id": 611357969,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1784316023
+    },
+    {
+        "content": "<blockquote>\n<p>Thank you, that's bitten me a few times now.</p>\n</blockquote>\n<p>And also, I'm not sure what to suggest, but I have found it a bit easy to mix up the similar syntaxes <code>|S.({x})|</code>/<code>|S.{x}|</code> and <code>|S({x})|</code> for two distinct types. I don't imagine I'll be the last, perhaps an error hint for this kind of thing?</p>",
+        "id": 611359496,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1784316696
+    }
+]

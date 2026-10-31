@@ -1,0 +1,85 @@
+<html>
+<head><meta charset="utf-8"><title>zig arena bug affects Roc · bugs · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/index.html">bugs</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/zig.20arena.20bug.20affects.20Roc.html">zig arena bug affects Roc</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="635030816"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/zig%20arena%20bug%20affects%20Roc/near/635030816" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Steve Howell <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/zig.20arena.20bug.20affects.20Roc.html#635030816">(Oct 26 2026 at 14:46)</a>:</h4>
+<p>See <a class="stream-topic" data-stream-id="304902" href="/#narrow/channel/304902-show-and-tell/topic/roc.20on.20a.20unikernel.20.28venting.20about.20LLM.20policies.29/with/635027106">#show and tell &gt; roc on a unikernel (venting about LLM policies)</a> for a little more context, but the executive summary is that zig 0.17 has a double-allocation bug that can plausibly bloat Roc programs.</p>
+<p>Here's a tiny Roc app:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>app [make] { pf: platform "./platform/main.roc" }
+
+make : U64 -&gt; List(U8)
+make = |n| {
+        small = List.repeat(1, 100)
+        big = List.repeat(2, n)
+        big.concat(small)
+}
+</code></pre></div>
+<p>The host's <code>roc_alloc</code> allocates from an <code>ArenaAllocator</code>, and I log what the arena asks of its own allocator. For <code>make(1_000_000)</code>, Roc asks for 3,000,164 bytes in all:</p>
+<p>stock Zig 0.17.0:   arena node grows 1,500,120 -&gt; 5,000,296; arena holds 5,000,272<br>
+patched 0.17.0:     arena node grows 1,500,120 -&gt; 3,500,152; arena holds 3,500,128</p>
+<p><a href="https://github.com/showell/patched-zig-compiler/commit/b2d40f4eff542f5a19c88107cb05b1b5872e57a4">https://github.com/showell/patched-zig-compiler/commit/b2d40f4eff542f5a19c88107cb05b1b5872e57a4</a> is the fix. I'm not submitting upstream to zig for reasons that I mention on the other topic.</p>
+
+
+
+<a name="635031421"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/zig%20arena%20bug%20affects%20Roc/near/635031421" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Steve Howell <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/zig.20arena.20bug.20affects.20Roc.html#635031421">(Oct 26 2026 at 14:48)</a>:</h4>
+<div class="codehilite"><pre><span></span><code>platform ""
+        requires {
+                make : U64 -&gt; List(U8)
+        }
+        exposes []
+        packages {}
+        provides { "roc_make": make_for_host }
+        targets: {
+                x64musl: {
+                        inputs: [app],
+                        output: Archive,
+                },
+        }
+
+make_for_host : U64 -&gt; List(U8)
+make_for_host = make
+</code></pre></div>
+
+
+
+<a name="635032684"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/zig%20arena%20bug%20affects%20Roc/near/635032684" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> notramo <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/zig.20arena.20bug.20affects.20Roc.html#635032684">(Oct 26 2026 at 14:51)</a>:</h4>
+<p>Isn't it related somehow to hugepages?</p>
+
+
+
+<a name="635032883"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/zig%20arena%20bug%20affects%20Roc/near/635032883" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> notramo <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/zig.20arena.20bug.20affects.20Roc.html#635032883">(Oct 26 2026 at 14:52)</a>:</h4>
+<p>Or maybe allocating a bit more upfront, to reduce fragmentation and speed up subsequent allocations?</p>
+
+
+
+<a name="635037423"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/zig%20arena%20bug%20affects%20Roc/near/635037423" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Steve Howell <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/zig.20arena.20bug.20affects.20Roc.html#635037423">(Oct 26 2026 at 15:03)</a>:</h4>
+<p>It's literally double allocating. Zig does allocate extra bytes optimistically, but the double allocation isn't intentional here. I saw the symptoms of it in a real-world program that's too big to post here.</p>
+
+
+
+<a name="635042963"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/zig%20arena%20bug%20affects%20Roc/near/635042963" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Steve Howell <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/zig.20arena.20bug.20affects.20Roc.html#635042963">(Oct 26 2026 at 15:14)</a>:</h4>
+<p><a href="https://github.com/showell/patched-zig-compiler/commit/502e0e447597f0b3e73c354f816a8abb1083c19f">https://github.com/showell/patched-zig-compiler/commit/502e0e447597f0b3e73c354f816a8abb1083c19f</a> has more details.</p>
+
+
+
+<a name="635045022"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/463736-bugs/topic/zig%20arena%20bug%20affects%20Roc/near/635045022" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Steve Howell <a href="https://roc-lang.github.io/zulip-export/stream/463736-bugs/topic/zig.20arena.20bug.20affects.20Roc.html#635045022">(Oct 26 2026 at 15:18)</a>:</h4>
+<p>(deleted message sent to wrong topic)</p>
+
+
+
+<hr><p>Last updated: Oct 31 2026 at 16:21 UTC</p>
+</html>

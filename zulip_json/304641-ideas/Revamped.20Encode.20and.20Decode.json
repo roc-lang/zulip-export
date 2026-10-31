@@ -1,0 +1,632 @@
+[
+    {
+        "content": "<p>Though the current iterations of <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/builtins/roc/Encode.roc\">Encode</a> and <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/builtins/roc/Decode.roc\">Decode</a> have served us well, they have restrictions that make them less than ideal. While they are roughly based off of <a href=\"https://serde.rs/\">serde</a> from rust, they are not powerful enough to represent many of the patterns that serde can.</p>\n<h3>State in Roc</h3>\n<p>For <code>Decode</code> in roc, it is fundamentally a list of bytes along with a formatting config being converted into a result any type. That said, the error type is only allowed to be <code>TooShort</code>.</p>\n<p>For <code>Encode</code> in roc, it is any type with a formatting config to a list of bytes.</p>\n<h3>Roughly, how does that compare to serde?</h3>\n<p>For deserialization (decode), serde is any type (that a derserializer uses) to a result of any type with any error.</p>\n<p>For serialization (encode), serde is any type to a result of any type (that a serializer uses) with any error.</p>\n<h3>Roc is missing a ton of flexibility</h3>\n<p>The core missing piece is that <code>Encode</code> and <code>Decode</code> need to be able to define the an internal state and use that to generate input/output. They can not be restricted to <code>List U8</code>. They can not be restricted in allowed errors variants.</p>\n<h3>What would this look like?</h3>\n<p>Luckily, we already have a perfect template for what the correct interface would look like (at least for <code>Encode</code>). <code>Inspect</code> is a ability that can take any type as input and allows the specific ability implementation to define exactly what the output is. I would argue that today, <code>Inspect</code> is a better <code>Encode</code> than <code>Encode</code> is. A perfect example of this is the <a href=\"https://github.com/roc-lang/roc/blob/main/examples/GuiFormatter.roc\">GuiFormatter</a>. Though a simple proof of concept, it is able to \"encode\" any data into a tree structure that can be render in a gui. It does this by allowing the implementation of <code>GuiFormatter</code> to define it's own internal state that is built up with ever call and eventual exposed as a tree.</p>\n<p>That said, <code>Inspect</code> does not replace <code>Encode</code>. We can't just one to one map. Inspect has a different set of autoderive rules and defaults related to opaque types and functions that don't makes sense in encode. On top of that, both <code>Encode</code> and <code>Decode</code> likely should enforce the final return value being a <code>Result</code> of something. So we still need a bespoke interface.</p>\n<h3>Important Note</h3>\n<p>One minor loss of the <code>Inspect</code> api is that without higher kinded types, it is not possible to have a generic <code>Inspect.inspect</code> method that returns the final wanted output type. Instead, <code>inspect</code> returns the <code>Formatter</code> which must be unwrapped by a different function.</p>\n<p>That said, I don't see this as a real drawback at all. It just means that the <code>Json</code> library will create a wrapper function that when called generates the formatter and then unwraps it. So the api will be <code>Json.decode someJson</code> instead of <code>Decode.decode someJson</code>. <code>Decode.decode someJson</code> would still work, but it would output a <code>JsonDecoder</code> instead of the final wanted roc type.</p>\n<h3>Proposed API</h3>\n<p>I don't want to write out this entire api, so just gonna note the core of the change.</p>\n<p>Instead of:<br>\n<code>Encoder fmt := List U8, fmt -&gt; List U8 where fmt implements EncoderFormatting</code><br>\nWhere we strictly have a <code>List U8</code></p>\n<p>It would be:<br>\n<code>Encoder fmt err := fmt -&gt; Result fmt err where fmt implements EncoderFormatting</code><br>\nThe <code>fmt</code> is able to store data type that it likes.</p>\n<blockquote>\n<p>Note: I am actually less sure this <code>Decode</code> change is correct. I noticed that serde had to use some sort of visitor builder pattern, so we may need to follow suit. But am not really sure.... Just would need to tinker with types.</p>\n</blockquote>\n<p><code>Decoder</code> would similarly be:<br>\n<code>Decoder val fmt err := fmt -&gt; Result { value: val, rest: fmt } err where fmt implements DecoderFormatting</code><br>\nwhere <code>fmt</code> is initialized with what is being decoded and would store all the internal state.</p>\n<p>From that change, some other minor api differences would be needed, but it would mostly be the same, just with corrected types.</p>\n<hr>\n<p>One important difference from <code>Inspect</code> and <code>Encode</code>/<code>Decode</code>. <code>Inspect</code> requires an <code>init</code> method that generates a formatter. I don't think <code>Encode</code>/<code>Decode</code> should have the same requirement. Instead, each api will decide what is required for initialization and expose that. For example, a <code>JsonFormatter</code> may require config options for initialization. So it would have <code>Json.encode : x, Config -&gt; List U8</code>. Where it takes a  piece of data to encode, a set of configurations options and then outputs a list of bytes. Internally, it would deal with intialization, running encode, extracting the <code>List U8</code> result from its formatter, and unwrapping the result (I'm assuming the error type was chosen to be <code>[]</code>)</p>\n<hr>\n<p>Extra minor note, when we do this change, we should also add a special encoding/decoding method for at least dictionaries. Other options that we should consider adding are listed in the <a href=\"https://docs.rs/serde/latest/serde/trait.Deserializer.html#required-methods\">Deserializer trait required methods</a>.</p>",
+        "id": 447120962,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719376796
+    },
+    {
+        "content": "<p>It seems like the majority of users would still have a very easy time using this API, but I just want to confirm that: we would still autoderive Encode and Decode, and it would be one extra function call, but otherwise basically the same effort to turn JSON into a Roc datatype?</p>",
+        "id": 447124069,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1719377615
+    },
+    {
+        "content": "<p>I guess two extra calls (though realistically, they would be all wrapped behind a single function call)</p>\n<div class=\"codehilite\" data-code-language=\"Haskell\"><pre><span></span><code><span class=\"o\">#</span><span class=\"w\"> </span><span class=\"kt\">Json</span><span class=\"o\">.</span><span class=\"n\">roc</span>\n\n<span class=\"nf\">encode</span><span class=\"w\"> </span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">Config</span><span class=\"w\"> </span><span class=\"ow\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"kt\">U8</span>\n<span class=\"nf\">encode</span><span class=\"w\"> </span><span class=\"ow\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"n\">val</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">config</span><span class=\"w\"> </span><span class=\"ow\">-&gt;</span>\n<span class=\"w\">  </span><span class=\"n\">initEncoder</span><span class=\"w\"> </span><span class=\"n\">config</span>\n<span class=\"w\">  </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Encode</span><span class=\"o\">.</span><span class=\"n\">encode</span><span class=\"w\"> </span><span class=\"n\">val</span>\n<span class=\"w\">  </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"n\">unwrapEncoder</span>\n</code></pre></div>",
+        "id": 447124336,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719377766
+    },
+    {
+        "content": "<p>And yeah still autoderive in the same cases as today.</p>",
+        "id": 447124421,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719377854
+    },
+    {
+        "content": "<p>What is <code>unwrapFormatter</code> doing there?</p>",
+        "id": 447124629,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1719377948
+    },
+    {
+        "content": "<p>Is roc-json the only implementation of Encode/Decode in the wild? If so it shouldn't be too hard to update just that one package and avoid breaking lots of things for users. We need a way to test these changes and roc-json would probably be a good choice to have a pair PR developed.</p>",
+        "id": 447124821,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719378020
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>unwrapEncoder : Result JsonEncoder [] -&gt; List U8\nunwrapEncoder = \\res -&gt;\n    when res is\n        Ok (@JsonEncoder {bytes}) -&gt; bytes\n</code></pre></div>",
+        "id": 447129277,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719380714
+    },
+    {
+        "content": "<p>This is a case where I assume that json encoding chose to have no error types at all. So it's error tag is <code>[]</code>. And I am assuming <code>JsonEncoder := {bytes: List U8, config: Config}</code>.</p>",
+        "id": 447129439,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719380816
+    },
+    {
+        "content": "<p>Slightly related. But for now I think we might want to throw an error if we are trying to encode something that we cant decode. For example with <a href=\"https://github.com/roc-lang/roc/issues/5294\">#5294</a> we can't decode a <code>Dict</code>. I'd love it if we could include that functionality when we make this larger change, though not sure if that would only complicate things.</p>",
+        "id": 447137222,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719384827
+    },
+    {
+        "content": "<p>Yeah. That should be doable with this change. Both encode and decode have the option to return errors.</p>",
+        "id": 447236823,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719413747
+    },
+    {
+        "content": "<p>It is up to the specific encoder/decoder to pick what errors it might generate</p>",
+        "id": 447237006,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1719413795
+    },
+    {
+        "content": "<p>I've started on something in <a href=\"https://github.com/roc-lang/roc/pull/6846\">PR 6846</a>. So far it's just been brute force changes, after adjusting the types</p>",
+        "id": 447637698,
+        "sender_full_name": "Trevor Settles",
+        "timestamp": 1719544104
+    },
+    {
+        "content": "<p>As I am working on sqlite in basic webserver, I realized that even these revamped versions of decode/encode are potentially missing a big feature.</p>\n<p>I'm not sure if it fits in standard decode or makes more sense in a separate ability (or always using bespoke code), but effectual decoding would be huge. For SQLite, I have a stmt and would like to decode directly from it. The decoding would be running effects to continue executing the query and load the data.</p>\n<p>I'm sure the same would happen with many network protocols where you may want to decode from a network stream instead of waiting for all bytes to be loaded into a roc list before beginning to decode.</p>",
+        "id": 449543309,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720291455
+    },
+    {
+        "content": "<p>Hmm... actually, if the state was a task, would that enable effectful decoding. I think it would, but I also expect that it would fail to compile with the current compiler</p>",
+        "id": 449543333,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720291496
+    },
+    {
+        "content": "<p>One other related update to this api to suggest. This is done <code>Inspect</code> already.</p>\n<p>I think we should make encode/decode have a function for both lists and dictionaries.<br>\nI also think that they should avoid being type locked to <code>List a</code> and <code>Dict k v</code>. Instead, they will take in any value and a walk function. So list would be an element walk function:</p>\n<div class=\"codehilite\"><pre><span></span><code>ElemWalker state collection elem : collection, state, (state, elem -&gt; state) -&gt; state\n</code></pre></div>\n<p>This way a <code>List a</code>, <code>Set a</code>, any other <code>Container a</code> can be encoded/decoded as a list.<br>\nFor decode, it will instead take a container builder function (like <code>List.append</code>).</p>",
+        "id": 449741495,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720398893
+    },
+    {
+        "content": "<p>In <code>serde</code>, they call these two encoding types as <code>seq</code> and <code>map</code>. They are used for any sort of container / dict type structure.</p>",
+        "id": 449741566,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720398942
+    },
+    {
+        "content": "<p>Serde api is built different, but for useful context:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"c1\">// Seq</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">serialize</span><span class=\"o\">&lt;</span><span class=\"n\">S</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">serializer</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">S</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">S</span><span class=\"p\">::</span><span class=\"nb\">Ok</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">S</span><span class=\"p\">::</span><span class=\"n\">Error</span><span class=\"o\">&gt;</span>\n<span class=\"w\">    </span><span class=\"k\">where</span>\n<span class=\"w\">        </span><span class=\"n\">S</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Serializer</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">seq</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">serializer</span><span class=\"p\">.</span><span class=\"n\">serialize_seq</span><span class=\"p\">(</span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()))</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"n\">element</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">seq</span><span class=\"p\">.</span><span class=\"n\">serialize_element</span><span class=\"p\">(</span><span class=\"n\">element</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"n\">seq</span><span class=\"p\">.</span><span class=\"n\">end</span><span class=\"p\">()</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"c1\">// Map</span>\n<span class=\"w\">    </span><span class=\"k\">fn</span><span class=\"w\"> </span><span class=\"nf\">serialize</span><span class=\"o\">&lt;</span><span class=\"n\">S</span><span class=\"o\">&gt;</span><span class=\"p\">(</span><span class=\"o\">&amp;</span><span class=\"bp\">self</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">serializer</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">S</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">-&gt;</span><span class=\"w\"> </span><span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">S</span><span class=\"p\">::</span><span class=\"nb\">Ok</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">S</span><span class=\"p\">::</span><span class=\"n\">Error</span><span class=\"o\">&gt;</span>\n<span class=\"w\">    </span><span class=\"k\">where</span>\n<span class=\"w\">        </span><span class=\"n\">S</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"nc\">Serializer</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">map</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">serializer</span><span class=\"p\">.</span><span class=\"n\">serialize_map</span><span class=\"p\">(</span><span class=\"nb\">Some</span><span class=\"p\">(</span><span class=\"bp\">self</span><span class=\"p\">.</span><span class=\"n\">len</span><span class=\"p\">()))</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"k\">for</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">k</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">v</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"k\">in</span><span class=\"w\"> </span><span class=\"bp\">self</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">map</span><span class=\"p\">.</span><span class=\"n\">serialize_entry</span><span class=\"p\">(</span><span class=\"n\">k</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">v</span><span class=\"p\">)</span><span class=\"o\">?</span><span class=\"p\">;</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"n\">map</span><span class=\"p\">.</span><span class=\"n\">end</span><span class=\"p\">()</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 449741816,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720399107
+    },
+    {
+        "content": "<p><a href=\"https://gist.github.com/bhansconnect/3854d9bc5951ea306e777745a92ec924\">https://gist.github.com/bhansconnect/3854d9bc5951ea306e777745a92ec924</a><br>\ncc: <span class=\"user-mention\" data-user-id=\"479378\">@Trevor Settles</span></p>\n<p>I am not 100% sure all of this is correct, but I think it is close. Also including changes from <a class=\"stream-topic\" data-stream-id=\"383402\" href=\"/#narrow/stream/383402-API-Design/topic/Encode.20with.20list.20manifesting\">#API Design &gt; Encode with list manifesting</a>, I think this is what our <code>Encode.roc</code> and <code>Decode.roc</code> should be (maybe with an extra helper function or two). The types are a bit more complex in some places to deal with allocations and to make it more flexible.</p>\n<p>Specifically, any list like collection can encode/decode the same as a list. Currently, I named this <code>Encode.seq</code> for any sequence. Just matched serde here. But names of course can change. Same with any dict like collection. They can now encode/decode the same as a dict via <code>Encode.map</code>. Again, took the serde name. We can change it.</p>\n<p>Then also removed all <code>List ...</code> from the api. Instead requiring the use of lambdas that load values and build the type out. This avoids an allocation and instead makes things a few direct calls to build up the encoder.</p>\n<hr>\n<p>Compared to serde we are still missing a few minor pieces and require extra mapping in some cases.</p>\n<ol>\n<li>Serde supports named structs (honestly not sure if this matter, would only be important for opaque types if it does. I guess it would be a way to distinguish two specific opaque types with the same internal data)</li>\n<li>Serde passes both the tag name and the tag index to the constructor. We only allow for the name due to tags not being nominal types. So opaque types are required for tags to map as integer variants. That said, we don't have any way to encode an integer variant. It has be encoded as something like <code>{ tag: U8, data: * }</code>. I think we might need something special here that opaque types can opt into (but that definitely can be added later). </li>\n<li>Serde doesn't require field names in the serialized format to decode a record. Instead, the decoder is given a slice of field names and chooses how to use them. So it could ignore the names and just decode sequential like a tuple (many binary formats do this) or it could choose to check the names (like json would). This is likely something we may want to change, but I'm not fully sure. Otherwise, user need to change there decoder type to use a binary format. It would have to use all tuples and no records.</li>\n</ol>\n<p>Thoughts? (point 3 being the most important for opinions)</p>",
+        "id": 449755993,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720406475
+    },
+    {
+        "content": "<p>Note, for 3 passing a list in isn't as big of a deal as our other lists. The other lists where List of <code>Encoders</code> that could only be generated at runtime. This list would be a constant list of strings that could be compiled directly into the binary.</p>\n<p>EDIT: I guess that would make the whole api change to be this:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"w\">    </span><span class=\"nv\">record</span><span class=\"w\"> </span><span class=\"nf\">:</span>\n<span class=\"w\">        </span><span class=\"nv\">state</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">(</span><span class=\"nv\">state</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">U64</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">Next</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Decoder</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"p\">),</span><span class=\"w\"> </span><span class=\"kt\">TooLong</span><span class=\"p\">]),</span>\n<span class=\"w\">        </span><span class=\"p\">(</span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Result</span><span class=\"w\"> </span><span class=\"nv\">val</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Decoder</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"nv\">val</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"kr\">where</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"nv\">implements</span><span class=\"w\"> </span><span class=\"kt\">DecoderFormatting</span>\n</code></pre></div>\n<p>Basically the exact same as a tuple, but you also pass in a <code>List Str</code> of field names. The implementation if encodes/decodes field names can look up the name in the list to get the index. If it doesn't encode field names, it can just ignore them</p>\n<p>EDIT 2: Since I realized this is simple, I just put it in the gist as well.</p>",
+        "id": 449756172,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720406637
+    },
+    {
+        "content": "<p>Have we got a design for encoding/decoding Dicts?</p>",
+        "id": 449756439,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1720406807
+    },
+    {
+        "content": "<p>Yep! It's in that gist I posted.</p>",
+        "id": 449756460,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720406824
+    },
+    {
+        "content": "<p>Ohk, having trouble seeing it</p>",
+        "id": 449756486,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1720406841
+    },
+    {
+        "content": "<p><a href=\"https://gist.github.com/bhansconnect/3854d9bc5951ea306e777745a92ec924#file-decode-roc-L92-L97\">https://gist.github.com/bhansconnect/3854d9bc5951ea306e777745a92ec924#file-decode-roc-L92-L97</a></p>",
+        "id": 449756504,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720406861
+    },
+    {
+        "content": "<p>I called it <code>map</code> to match serde...It is generic. So it could work for <code>Dict k v</code> or <code>OrderedMap k v</code> or <code>EtcMap k v</code></p>",
+        "id": 449756658,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720406954
+    },
+    {
+        "content": "<p>maybe I should still call it <code>dict</code></p>",
+        "id": 449756678,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720406973
+    },
+    {
+        "content": "<p>Ohk, I see. So <code>Seq</code> is for a collection that only has values, and <code>Map</code> is for collections with values and keys</p>",
+        "id": 449756696,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1720406987
+    },
+    {
+        "content": "<p>Yeah. So <code>Seq</code> for <code>List a</code>, <code>Set a</code>, etc</p>",
+        "id": 449756778,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720407012
+    },
+    {
+        "content": "<p>May be a bit lame, but I find this simpler</p>\n<div class=\"codehilite\"><pre><span></span><code>ValueInit\nValueBuilder\n\nKeyValueInit\nKeyValueBuilder\n</code></pre></div>",
+        "id": 449756873,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1720407083
+    },
+    {
+        "content": "<p>Is it not possible to also combine record, tags and tuples in the same way? Like a record or tag is just a KeyValue but with Str names, and tuples might be KeyValue but with numbers for names?</p>",
+        "id": 449757090,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1720407211
+    },
+    {
+        "content": "<p>The original names where:</p>\n<div class=\"codehilite\"><pre><span></span><code>ElemInit\nElemBuilder\n\nKeyValueInit\nKeyValueBuilder\n</code></pre></div>\n<p>But it doesn't quite make sense. it isn't initializing an Elem or a KeyValue. It is initializing a <code>List elem</code> or <code>Dict key value</code></p>",
+        "id": 449757103,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720407224
+    },
+    {
+        "content": "<blockquote>\n<p>Is it not possible to also combine record, tags and tuples in the same way? Like a record or tag is just a KeyValue but with Str names, and tuples might be KeyValue but with numbers for names?</p>\n</blockquote>\n<p>No. Cause this type of combination function only works if all elements are the same type, all keys are the same type, and all values are the same type. That is not true for tuples and records.</p>",
+        "id": 449757292,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720407293
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode/near/449757103\">said</a>:</p>\n<blockquote>\n<p>But it doesn't quite make sense. it isn't initializing an Elem or a KeyValue. It is initializing a <code>List elem</code> or <code>Dict key value</code></p>\n</blockquote>\n<p>Hence using the words <code>Seq</code>uence or <code>Map</code>ping to generate of of these things.</p>",
+        "id": 449757707,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1720407462
+    },
+    {
+        "content": "<p>Would you consider spelling them out in full, considering this isn't going to be seen every day. Like</p>\n<div class=\"codehilite\"><pre><span></span><code>SequenceInit\nSequenceBuilder\n\nMappingInit\nMappingBuilder\n</code></pre></div>",
+        "id": 449757882,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1720407579
+    },
+    {
+        "content": "<p>Then <code>Encode.mapping</code> and <code>Encode.sequence</code>. I think that reads really well actually. I would be for it.</p>",
+        "id": 449757997,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720407624
+    },
+    {
+        "content": "<p>Updated gist with new names.</p>",
+        "id": 449758781,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720408033
+    },
+    {
+        "content": "<p>I think this API looks good. </p>\n<p>For point 3. -- If I understand correctly the issue is that when we pass the fields of a record to be decoded they won't be ordered. I would have assumed this ordering would be stable, like sorted by field name.</p>",
+        "id": 449758803,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1720408044
+    },
+    {
+        "content": "<p>I think we can just order it by name or order by alignment and name. Either would be fine. Just have to pick something stable and fly with it.</p>",
+        "id": 449759219,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720408176
+    },
+    {
+        "content": "<p>Given we auto generate the encoder, the auto generated encoders can just pick something and sort</p>",
+        "id": 449759301,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720408198
+    },
+    {
+        "content": "<p>For user generated encoders. They can pick any order they please.</p>",
+        "id": 449759372,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720408211
+    },
+    {
+        "content": "<p>It is decided by the order of the list of names passed to decode for a decoder. For encoders, it is order by the order in with the field encoders are called. This is 100% controllable in code.</p>",
+        "id": 449759532,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720408269
+    },
+    {
+        "content": "<p>Just can't be field declaration order for roc cause that has no meaning.</p>",
+        "id": 449759669,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720408318
+    },
+    {
+        "content": "<p>Personally, I think alignment then name makes the most sense cause that is also what we expose to the platform (plus for some formats, it might make a difference on bytes used just like it does on hardware)</p>",
+        "id": 449759854,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720408373
+    },
+    {
+        "content": "<p>That said, if we just want simplicity, I see zero problem with alphabetical by default.</p>",
+        "id": 449759928,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720408403
+    },
+    {
+        "content": "<p>This looks neat! Ok, just checking my understanding here. This new API would define a new way to encode/decode list-like things and map-like things either streaming, or all in one go. How would records and tuples fit into this? Since they don't contain a single type, but instead contain a mix of types</p>",
+        "id": 449761459,
+        "sender_full_name": "Trevor Settles",
+        "timestamp": 1720408855
+    },
+    {
+        "content": "<p>Records and tuples still have their own special functions cause they can't use the sequence/mapping functions</p>",
+        "id": 449761632,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720408896
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode/near/449759854\">said</a>:</p>\n<blockquote>\n<p>Personally, I think alignment then name makes the most sense cause that is also what we expose to the platform (plus for some formats, it might make a difference on bytes used just like it does on hardware)</p>\n</blockquote>\n<p>yeah, although the downside would be that now application authors have to learn about alignment if they want to understand how fields are encoded <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 449830556,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720434714
+    },
+    {
+        "content": "<p>that said, for binary formats I could imagine that making a significant performance difference <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 449830748,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720434776
+    },
+    {
+        "content": "<p>It actually probably won't for most binary formats</p>",
+        "id": 449904261,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720452443
+    },
+    {
+        "content": "<p>Most pack without any padding no matter the order</p>",
+        "id": 449904333,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720452457
+    },
+    {
+        "content": "<p>So only a handful of more tailored binary formats would see benefits. Generally the binary formats that are tailored to attempt to match a languages runtime format.</p>",
+        "id": 449904828,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720452543
+    },
+    {
+        "content": "<p>Also, I think it mostly would be opaque to application authors. More a funny quirk than something they have to learn about. If they want to control order they have to make an opaque type (or tuple I guess). If they have a standard record, they probably will just think that roc has a strange order and not know why....at least that would be my guess.</p>",
+        "id": 449905430,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720452647
+    },
+    {
+        "content": "<p>One other random thought/question:</p>\n<p>Should <code>DecodeResult</code> return the decoder state even on failure? I changed it to <code>Result (state, val) err</code>. My thought was that on failure to decode, the decoder may be in an invalid state. So there isn't a point of returning a failed decoder. But maybe I am missing something.</p>",
+        "id": 450011359,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720483700
+    },
+    {
+        "content": "<p>I'm not sure.</p>",
+        "id": 450011905,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1720483937
+    },
+    {
+        "content": "<p>What about trying to get the results in the middle of a stream? There might be a better way around that though</p>",
+        "id": 450012086,
+        "sender_full_name": "Trevor Settles",
+        "timestamp": 1720483991
+    },
+    {
+        "content": "<blockquote>\n<p>What about trying to get the results in the middle of a stream?</p>\n</blockquote>\n<p>Like skipping some part of the stream and then decoding into a result?</p>",
+        "id": 450012911,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720484312
+    },
+    {
+        "content": "<p>That was in reference to adding <code>state</code> to the <code>DecodeResult</code> type. (This may be a contrived example) Say you've got a steam of bytes. Calling <code>decode</code> part way through the stream would give part of the List of elems for <code>val</code>. Calling <code>decode</code> on the <code>state</code> from <code>Ok (state, val)</code>  would only return elems that haven't already been decoded.</p>\n<p>I was trying to come up with some example where the act of decoding itself would cause a change in state itself. If that's not clear, its on me. Its just the seed of an idea I just came up with</p>",
+        "id": 450050279,
+        "sender_full_name": "Trevor Settles",
+        "timestamp": 1720496571
+    },
+    {
+        "content": "<p><code>state</code> is actually already in the decode result. The difference is if you get a state on the failure case or not:</p>\n<p><code>Result (state, val) err</code></p>\n<p>vs<br>\n<code>{ val: Result val err, rest: state }</code></p>",
+        "id": 450050726,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720496705
+    },
+    {
+        "content": "<p>Also, I am now working on implementing a version of the new decoder and encoder just to make sure the types in my gist are correct. Definitely have some pieces that are off.</p>\n<p><a href=\"https://github.com/bhansconnect/roc-msgpack\">https://github.com/bhansconnect/roc-msgpack</a></p>",
+        "id": 450064958,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720502278
+    },
+    {
+        "content": "<p>I've just been updating the gist as I notice issues.</p>",
+        "id": 450065319,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720502459
+    },
+    {
+        "content": "<p>Something definitely still doesn't feel right with the record encoding signature. Playing around with it as I am trying to implement the encoder.</p>",
+        "id": 450070424,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720504263
+    },
+    {
+        "content": "<p>This is my current iteration of record encoding (not sure if this is the best way, but it avoids the list allocation):</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kt\">TestRGB</span><span class=\"w\"> </span><span class=\"nf\">:=</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">r</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">g</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">b</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"nv\">implements</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">        </span><span class=\"kt\">FutureEncoding</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"nv\">toFutureEncoder</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">toFutureEncoderTestRGB</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">},</span>\n<span class=\"w\">    </span><span class=\"p\">]</span>\n\n<span class=\"nv\">toFutureEncoderTestRGB</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">TestRGB</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">FutureEncoder</span><span class=\"w\"> </span><span class=\"nv\">state</span>\n<span class=\"nv\">toFutureEncoderTestRGB</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"err\">@</span><span class=\"kt\">TestRGB</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">r</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">g</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">b</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">encodeFields</span><span class=\"w\"> </span><span class=\"nf\">=</span>\n<span class=\"w\">        </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">namedField</span><span class=\"w\"> </span><span class=\"s\">\"r\"</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">u8</span><span class=\"w\"> </span><span class=\"nv\">r</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">chain</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">namedField</span><span class=\"w\"> </span><span class=\"s\">\"g\"</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">u8</span><span class=\"w\"> </span><span class=\"nv\">g</span><span class=\"p\">))</span>\n<span class=\"w\">        </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">chain</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">namedField</span><span class=\"w\"> </span><span class=\"s\">\"b\"</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">u8</span><span class=\"w\"> </span><span class=\"nv\">b</span><span class=\"p\">))</span>\n\n<span class=\"w\">    </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">record</span><span class=\"w\"> </span><span class=\"mi\">3</span><span class=\"w\"> </span><span class=\"nv\">encodeFields</span>\n</code></pre></div>\n<p>The definition seems to be valid. Basically you define how to encode all fields and pass that into the record encoder function. That said, this form breaks the compiler if I try to call <code>encodeFields</code> in the record encoder:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">encodeRecord</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">size</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">addFields</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">encodeHeader</span><span class=\"w\"> </span><span class=\"nv\">size</span>\n<span class=\"w\">    </span><span class=\"err\">#</span><span class=\"w\"> </span><span class=\"kt\">Works</span><span class=\"w\"> </span><span class=\"kr\">if</span><span class=\"w\"> </span><span class=\"nv\">the</span><span class=\"w\"> </span><span class=\"nv\">following</span><span class=\"w\"> </span><span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"nv\">is</span><span class=\"w\"> </span><span class=\"nv\">commented</span><span class=\"w\"> </span><span class=\"nv\">out</span>\n<span class=\"w\">    </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">chain</span><span class=\"w\"> </span><span class=\"nv\">addFields</span>\n</code></pre></div>\n<p>Errors with:</p>\n<div class=\"codehilite\"><pre><span></span><code>thread &#39;main&#39; panicked at crates/compiler/mono/src/borrow.rs:396:33:\ninternal error: entered unreachable code: no borrow signature for LambdaName { name: `18.IdentId(119)`, niche: Niche(Captures([InLayout(146), InLayout(147)])) } layout\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>",
+        "id": 450076889,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720506821
+    },
+    {
+        "content": "<p>Oh, I think I found a nicer api for records:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">toFutureEncoderTestRGB</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">TestRGB</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">FutureEncoder</span><span class=\"w\"> </span><span class=\"nv\">state</span>\n<span class=\"nv\">toFutureEncoderTestRGB</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"err\">@</span><span class=\"kt\">TestRGB</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">r</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">g</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">b</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">record</span><span class=\"w\"> </span><span class=\"mi\">3</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">state</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">addNamedField</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">        </span><span class=\"nv\">state</span>\n<span class=\"w\">        </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"nv\">addNamedField</span><span class=\"w\"> </span><span class=\"s\">\"r\"</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">u8</span><span class=\"w\"> </span><span class=\"nv\">r</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"nv\">addNamedField</span><span class=\"w\"> </span><span class=\"s\">\"g\"</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">u8</span><span class=\"w\"> </span><span class=\"nv\">g</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"nv\">addNamedField</span><span class=\"w\"> </span><span class=\"s\">\"b\"</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">u8</span><span class=\"w\"> </span><span class=\"nv\">b</span><span class=\"p\">)</span>\n</code></pre></div>",
+        "id": 450208721,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720540383
+    },
+    {
+        "content": "<p>Then the actually encoder implementation looks like this:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">encodeRecord</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">U64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">MsgPack</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"kt\">NamedFieldFn</span><span class=\"w\"> </span><span class=\"kt\">MsgPack</span><span class=\"w\"> </span><span class=\"kt\">MsgPack</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">MsgPack</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">FutureEncoder</span><span class=\"w\"> </span><span class=\"kt\">MsgPack</span>\n<span class=\"nv\">encodeRecord</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">size</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">addFields</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">msgPack</span><span class=\"w\"> </span><span class=\"nf\">&lt;-</span><span class=\"w\"> </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">custom</span>\n<span class=\"w\">    </span><span class=\"nv\">msgPack</span>\n<span class=\"w\">    </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">appendWith</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">encodeHeader</span><span class=\"w\"> </span><span class=\"nv\">size</span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"nv\">addFields</span><span class=\"w\"> </span><span class=\"nv\">encodeNamedField</span>\n\n<span class=\"nv\">encodeNamedField</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">MsgPack</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">FutureEncoder</span><span class=\"w\"> </span><span class=\"kt\">MsgPack</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">MsgPack</span>\n<span class=\"nv\">encodeNamedField</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"err\">@</span><span class=\"kt\">MsgPack</span><span class=\"w\"> </span><span class=\"nv\">res</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">key</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">value</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">when</span><span class=\"w\"> </span><span class=\"nv\">res</span><span class=\"w\"> </span><span class=\"nv\">is</span>\n<span class=\"w\">        </span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">bytes</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">encodeFieldNames</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">            </span><span class=\"kr\">if</span><span class=\"w\"> </span><span class=\"nv\">encodeFieldNames</span><span class=\"w\"> </span><span class=\"kr\">then</span>\n<span class=\"w\">                </span><span class=\"err\">@</span><span class=\"kt\">MsgPack</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">bytes</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">encodeFieldNames</span><span class=\"w\"> </span><span class=\"p\">})</span>\n<span class=\"w\">                </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">appendWith</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nv\">encodeString</span><span class=\"w\"> </span><span class=\"nv\">key</span><span class=\"p\">)</span>\n<span class=\"w\">                </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">appendWith</span><span class=\"w\"> </span><span class=\"nv\">value</span>\n<span class=\"w\">            </span><span class=\"kr\">else</span>\n<span class=\"w\">                </span><span class=\"err\">@</span><span class=\"kt\">MsgPack</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Ok</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">bytes</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">encodeFieldNames</span><span class=\"w\"> </span><span class=\"p\">})</span>\n<span class=\"w\">                </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">FutureEncode</span><span class=\"nf\">.</span><span class=\"nv\">appendWith</span><span class=\"w\"> </span><span class=\"nv\">value</span>\n\n<span class=\"w\">        </span><span class=\"kt\">Err</span><span class=\"w\"> </span><span class=\"nv\">e</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">            </span><span class=\"err\">@</span><span class=\"kt\">MsgPack</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">Err</span><span class=\"w\"> </span><span class=\"nv\">e</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>Sadly, still can seem to win the type battle. Now hitting:</p>\n<div class=\"codehilite\"><pre><span></span><code>ambient functions don&#39;t unify\nLocation: crates/compiler/unify/src/unify.rs:201:18\n</code></pre></div>",
+        "id": 450209304,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720540509
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> in case it can still be of value;  I also just hit <code>no borrow signature for LambdaName</code> and it happened because I called a function (that takes one argument) with zero arguments.</p>",
+        "id": 450237373,
+        "sender_full_name": "Anton",
+        "timestamp": 1720546424
+    },
+    {
+        "content": "<p>From what I can tell, the issue seems to be related to an encoder capturing another encoder in its lambda closure.</p>",
+        "id": 450303595,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720565211
+    },
+    {
+        "content": "<p>Running with a debug build of the compiler I get:</p>\n<div class=\"codehilite\"><pre><span></span><code>thread &#39;&lt;unnamed&gt;&#39; panicked at /Users/bren077s/Projects/roc/crates/compiler/unify/src/unify.rs:1217:5:\nmember signature should not have solved lambda sets\n</code></pre></div>\n<p>Does that have meaning to anyone?</p>",
+        "id": 450305359,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720566111
+    },
+    {
+        "content": "<p>After a bit more messing with types and trying slightly different apis, I at least have something which I think is useful:</p>\n<div class=\"codehilite\"><pre><span></span><code>Full source: procedure `FutureEncode.appendWith` (`FutureEncode.state`, `FutureEncode.122`):\n    let `FutureEncode.164` : [C [C U64, C , C , C ], C {List U8, Int1}] = CallByName `MsgPack.163` `FutureEncode.state` `FutureEncode.122`;\n    ret `FutureEncode.164`;\nIR PROBLEMS FOUND:\n── PROC SPECIALIZATION NOT DEFINED ─────────────────────────────────────────────\n\nin appendWith : ([C [C U64, C , C , C ], C {List U8, Int1}], {U64, []}) -&gt;\n[C [C U64, C , C , C ], C {List U8, Int1}] ((niche {}))\n\n0│  procedure `FutureEncode.appendWith` (`FutureEncode.state`, `FutureEncode.122`):\n1│&gt;     let `FutureEncode.164` : [C [C U64, C , C , C ], C {List U8, Int1}] = CallByName `MsgPack.163` `FutureEncode.state` `FutureEncode.122`;\n2│      ret `FutureEncode.164`;\n\nNo specialization\n\n163 : ([C [C U64, C , C , C ], C {List U8, Int1}], {U64, []}) -&gt;\n[C [C U64, C , C , C ], C {List U8, Int1}] ((niche {U64, []}))\n\nwas found\n\nThe following specializations of MsgPack.163 were built:163 :\n([C [C U64, C , C , C ], C {List U8, Int1}], {U64, {U8, U8, U8}}) -&gt;\n[C [C U64, C , C , C ], C {List U8, Int1}] ((niche {U64, {U8, U8, U8}}))\n</code></pre></div>\n<p>Caused by this test: <a href=\"https://github.com/bhansconnect/roc-msgpack/blob/3d545816c18b9a7fd74746137f280348c123f18c/package/MsgPack.roc#L443-L447\">https://github.com/bhansconnect/roc-msgpack/blob/3d545816c18b9a7fd74746137f280348c123f18c/package/MsgPack.roc#L443-L447</a></p>",
+        "id": 450313935,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720569734
+    },
+    {
+        "content": "<p>That said, I still don't really know how to debug it.</p>",
+        "id": 450313989,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720569762
+    },
+    {
+        "content": "<p>Ok. A little more context that I have derived:</p>\n<ol>\n<li>The bug seems to always happen when calling one encoder from within another. So always when you are inside an encoder and call <code>FutureEncode.appendWith</code></li>\n<li>The expected lambdaset definition is wrong. It is missing captures.</li>\n</ol>\n<p>More specific on 2:<br>\nIf you look at the printout above, the wanted specialization is missing <code>{U64, {U8, U8, U8}}</code>. <code>{U64, {U8, U8, U8}}</code> is the actual data captured by the passed in encoder. <code>U64</code> is the size. <code>{U8, U8, U8}</code> is <code>{ r : U8, g : U8, b : U8 } </code>.</p>\n<p>So fundamentally we are ending up with a call to the wrong specialization that is missing captures.</p>",
+        "id": 450337039,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720582922
+    },
+    {
+        "content": "<p>I am uncertain why this affects the modified version of encode, but does not seem to affect <code>Inspect</code>. I think it also should have the same issue. (also possible it affects <code>Inspect</code> it just is more specific than I realize so I haven't hit it)</p>",
+        "id": 450337303,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720583046
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> I know you are very busy nowadays, but if you have any time to give tips or take a quick look, it would be greatly appreciate. I don't know much of what level of complexity this form of error falls into. Like I get the rough idea of what is wrong, but I know nothing of the code that actually does with the wiring here.</p>",
+        "id": 450338604,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720584037
+    },
+    {
+        "content": "<p>to be honest i’m not sure i can give any advice without debugging this, which i don’t have the bandwidth for ATM unfortunately. I would say probably the easiest thing to do here would be to finish implementing boxed closures. it will be much simpler and problems like this will likely not disappear, but be much easier diagnose and resolve for anyone</p>",
+        "id": 450340577,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720584902
+    },
+    {
+        "content": "<p>Fair answer. Do we have any documentation on the state of that</p>",
+        "id": 450340614,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720584946
+    },
+    {
+        "content": "<p>there’s a long standing issue with recursive structural types, which may be the problem here too, i discusses a suggestion for how it can be fixed elsewhere</p>",
+        "id": 450340666,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720584969
+    },
+    {
+        "content": "<p>umm yes give me 10 minutes i’ll type it up</p>",
+        "id": 450340674,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720584980
+    },
+    {
+        "content": "<p>Is the boxed closure work something that a layperson can work on, or does it really need expertise that's expensive to transfer? I should be able to help with that once I finish with built-in Tasks and documentation for the new record builder syntax.</p>",
+        "id": 450340701,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1720585013
+    },
+    {
+        "content": "<p>my hope is anyone can work on it</p>",
+        "id": 450340765,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720585042
+    },
+    {
+        "content": "<p>Hell yeah brother</p>",
+        "id": 450340822,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1720585077
+    },
+    {
+        "content": "<p>that’s partially why i want it to land/am upset at myself that i didn’t land it when i had more time to give to Roc, it’s a much simpler and easier model than what currently exists (at the expense of other things obviously)</p>",
+        "id": 450340883,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720585103
+    },
+    {
+        "content": "<p>Well, the nice thing is that Roc seems to be getting better with respect to its bus factor</p>",
+        "id": 450340914,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1720585138
+    },
+    {
+        "content": "<p>So you being unavailable isn't blocking the change from going through</p>",
+        "id": 450340936,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1720585160
+    },
+    {
+        "content": "<p>I think it's a good thing to recognize. And also, don't beat yourself up too much, you've already given so much for this project.</p>",
+        "id": 450341007,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1720585199
+    },
+    {
+        "content": "<p>alright here's the high level of how i think it should be implemented<br>\n<a href=\"https://github.com/roc-lang/rfcs/blob/main/0012-type-erasure.md\">https://github.com/roc-lang/rfcs/blob/main/0012-type-erasure.md</a></p>",
+        "id": 450341874,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720585655
+    },
+    {
+        "content": "<p>here's the only PR i made for it: <a href=\"https://github.com/roc-lang/roc/pull/5576\">https://github.com/roc-lang/roc/pull/5576</a></p>\n<p>it supports erased closure types for very simple programs</p>",
+        "id": 450341971,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720585696
+    },
+    {
+        "content": "<p>here's an example of a program and the corresponding IR I sent to Folkert recently. It's worth understanding it I think<br>\n<a href=\"https://gist.github.com/ayazhafiz/dd16a5586b9621dce061c902e6d44bb0\">https://gist.github.com/ayazhafiz/dd16a5586b9621dce061c902e6d44bb0</a></p>",
+        "id": 450342078,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720585767
+    },
+    {
+        "content": "<p>The missing pieces are:</p>\n<ul>\n<li>Reference counting. The erased closure layout has a slot for a pointer to a function that performs refcounting on the closure data, but the pointer is never populated right now. some works needs to be done to store a reference to the refcounting function that should be generated, and insert the pointer appropriately. I'm sure this is not that hard to do, but I don't know the details off the top of my head.</li>\n<li>Abilities. This is actually very simple, the main thing is that all the machinery to support abilities with lambda sets (there's a lot of it, if you see anything about \"ambient functions\" that has to do with it) needs to be skipped. I'm happy to explain what needs to be done to support resolution of abilities in the erasure world when it comes time (I think it's very simple, it's like one new check I believe)</li>\n<li>Some fixes to the mono IR. There are a number of todos related to erased closures that will need to be resolved. One I am aware of is passing closures to higher-order functions by value does not work right now, just because that branch is a TODO.</li>\n</ul>",
+        "id": 450342568,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720586051
+    },
+    {
+        "content": "<p>Okay, cool. Unless someone else starts on this before I get back from my trip, I'll be in Japan until July 23rd, after which point I'll try to David this Goliath.</p>",
+        "id": 450342807,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1720586241
+    },
+    {
+        "content": "<p>love the metaphor</p>",
+        "id": 450342929,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720586319
+    },
+    {
+        "content": "<p>Thanks Ayaz!</p>\n<p>Looping back to the general encode/decode design. I realized one more inconsistency that I thought might be good to reconsider:</p>\n<p>For contains, we explicitly pass in an element encode function <code>elem -&gt; Encoder state</code>. Instead we could skip that by requiring <code>where elem implements Encoding</code>. This is a simpler api with one extra arg, but does have a minor but important difference. If we take <code>elem -&gt; Encoder state</code> it allows for opaque containers to modify or otherwise change what the element encoder function would be when calling <code>Encode.sequence</code>. I'm not sure if this matters in practice, but I am curious what other thinks:<br>\nA)</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"w\">    </span><span class=\"nv\">sequence</span><span class=\"w\"> </span><span class=\"nf\">:</span>\n<span class=\"w\">        </span><span class=\"nv\">seq</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">[</span><span class=\"kt\">Size</span><span class=\"w\"> </span><span class=\"kt\">U64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">UnknownSize</span><span class=\"p\">],</span>\n<span class=\"w\">        </span><span class=\"kt\">SequenceWalker</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"nv\">seq</span><span class=\"w\"> </span><span class=\"nv\">elem</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">(</span><span class=\"nv\">elem</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Encoder</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Encoder</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"kr\">where</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"nv\">implements</span><span class=\"w\"> </span><span class=\"kt\">EncoderFormatting</span>\n</code></pre></div>\n<p>vs<br>\nB)</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"w\">    </span><span class=\"nv\">sequence</span><span class=\"w\"> </span><span class=\"nf\">:</span>\n<span class=\"w\">        </span><span class=\"nv\">seq</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">[</span><span class=\"kt\">Size</span><span class=\"w\"> </span><span class=\"kt\">U64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">UnknownSize</span><span class=\"p\">],</span>\n<span class=\"w\">        </span><span class=\"kt\">SequenceWalker</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"nv\">seq</span><span class=\"w\"> </span><span class=\"nv\">elem</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Encoder</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"kr\">where</span><span class=\"w\"> </span><span class=\"nv\">elem</span><span class=\"w\"> </span><span class=\"nv\">implements</span><span class=\"w\"> </span><span class=\"kt\">Encoding</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">state</span><span class=\"w\"> </span><span class=\"nv\">implements</span><span class=\"w\"> </span><span class=\"kt\">EncoderFormatting</span>\n</code></pre></div>\n<p>With <code>A</code>, you would pass in an <code>elem -&gt; Encoder state</code> function that transforms the element type in some way or ignores fields before encoding. It enables a container of non-encodable things to be encoded if you write a custom mapper.</p>\n<p>With <code>B</code>, that power is still technically available, but it has to be obtained by modifying the <code>SequenceWalker</code> to transform the element type.  So probably less likely to be used.</p>\n<p>Note: with std lib containers and auto-derive, there is no difference between A and B. So only matters for user defined opaque types.</p>",
+        "id": 450494154,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720626939
+    },
+    {
+        "content": "<p>Is <a href=\"https://github.com/roc-lang/roc/issues/3816\">this the issue</a> for tracking tag decoding? </p>\n<p>Would future decode support tag unions?</p>",
+        "id": 457510073,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1723151522
+    },
+    {
+        "content": "<p>I think deciding supports tags. Maybe it just doesn't auto derive</p>",
+        "id": 457515355,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1723152089
+    },
+    {
+        "content": "<p>Oh, method is literally missing</p>",
+        "id": 458406995,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1723152754
+    },
+    {
+        "content": "<p>And we want to support tags both by name and by index for encode and decode. Index will just be alphabetical</p>",
+        "id": 458408005,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1723153221
+    },
+    {
+        "content": "<p>yeah we never implemented it</p>",
+        "id": 458409295,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1723153911
+    },
+    {
+        "content": "<p>I added an <a href=\"https://github.com/roc-lang/roc/issues/6985\">issue to track Type Erasure</a> from abocve</p>",
+        "id": 462043705,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1723534839
+    },
+    {
+        "content": "<p>btw I'd definitely recommend anyone talk to <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> about this before starting on implementation stuff, to get tips on how to proceed!</p>",
+        "id": 462083231,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1723547230
+    },
+    {
+        "content": "<p>Hello there :) Complete beginner here <span aria-label=\"hello\" class=\"emoji emoji-1f44b\" role=\"img\" title=\"hello\">:hello:</span></p>\n<p>I didn't take the time to read the whole discussion here but I had a reflection about the <a href=\"https://github.com/roc-lang/roc/blob/main/design/language/Abilities.md#encode-and-hash\">Encode and Hash</a> section of the design article and I believe this is the place to talk about it.</p>\n<p>I am writing a lot of Elm and I have to say <a href=\"https://github.com/MartinSStewart/elm-serialize/tree/1.3.1\">codecs</a> saved my life. They combine Encoding and Decoding into a single type and guarantee that what you encode will be decoded in the exact same way. Through that lens, mashing the hashing consept into the encoding one makes a lot less sense. Encoding comes with the implicit idea that your data is conserved, only encoded in an other format.</p>\n<p>Other notes :</p>\n<p>And again on the following paragraph, the use of bot <code>isEq</code> and <code>isNotEq</code> could create strange results if their implementations do not perfectly match (eg. <code>expect isEq a b == True</code> and <code>expect isNotEq a b == True</code> at the same time). Though I guess that it was an example and probably not the actual implementation you would go for.</p>\n<p>Though I just got on board with Roc so I hope my remarks are relevant to you :)</p>",
+        "id": 502061459,
+        "sender_full_name": "Simon Taeter",
+        "timestamp": 1740580382
+    },
+    {
+        "content": "<p>Welcome!</p>",
+        "id": 502109756,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740592681
+    },
+    {
+        "content": "<p>Just took a skim over where our hash and encode abilities landed.</p>\n<p>They definitely could be forced to be merged together. That said, they have some pertinent differences. A very simple example is that when hashing a set, you have to hash without considering order. When serializing a set, you have to pick an order to serialize to (most serialization formats only have lists and don't have sets). So I dont think they should be merged in practice. On top of that, encoding does lots of extra work that would just slow down hashing</p>",
+        "id": 502111140,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740593077
+    },
+    {
+        "content": "<p>As for codecs, that is a really interesting idea. I do think we will want a separate encode and decode either way though. It is valid to encode to a lossy format that has no equivalent decoder. A simple example is that you could use encode to pretty print a datastructure.</p>",
+        "id": 502111384,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740593157
+    },
+    {
+        "content": "<p>That said, enabling codec libraries sounds like a good idea to keep track of</p>",
+        "id": 502111468,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740593173
+    },
+    {
+        "content": "<p>Cause most formats will want encode and decode</p>",
+        "id": 502111513,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740593184
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/304641-ideas/topic/Revamped.20Encode.20and.20Decode/near/502111384\">said</a>:</p>\n<blockquote>\n<p>A simple example is that you could use encode to pretty print a datastructure.</p>\n</blockquote>\n<p>To me pretty print is more of a <code>toStr</code> thing though.</p>\n<p>A codec ability might make sense here. Though I believe you want to remove abilities? Curious to know about the proposed alternative.</p>",
+        "id": 502282902,
+        "sender_full_name": "Simon Taeter",
+        "timestamp": 1740662672
+    },
+    {
+        "content": "<p>Abilities as a separate concept is going way, but you can create a type alias that works in a similar fashion</p>",
+        "id": 502287832,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1740663961
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"881082\">@Simon Taeter</span> Here is a link to the relevant section of the  proposal: <a href=\"https://docs.google.com/document/d/1OUd0f4PQjH8jb6i1vEJ5DOnfpVBJbGTjnCakpXAYeT8/edit?tab=t.0#heading=h.x6h2qzxs7o9o\">https://docs.google.com/document/d/1OUd0f4PQjH8jb6i1vEJ5DOnfpVBJbGTjnCakpXAYeT8/edit?tab=t.0#heading=h.x6h2qzxs7o9o</a></p>",
+        "id": 502289144,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1740664301
+    }
+]

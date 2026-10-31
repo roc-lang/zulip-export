@@ -1,0 +1,98 @@
+[
+    {
+        "content": "<p>What is our general opinion around passing both <code>gpa</code> and <code>arena</code> to many functions. I noticed that we have a solid number of tiny allocations going to the gpa (like paths and such). Generally it is better for those to got to an arena instead. On top of that, we have some memory leaks that I am fixing up and in a few case, I think it might be nicer to put those things in the arena and not need to worry about them not being freed.</p>\n<hr>\n<p>My general thought is that this is best practice, but definitely a bit inconvenient. Definitely not something that needs to be done of first pass or anything. I'm just in general thinking of cleaning up some locations and also trying to explicitly name allocators as <code>gpa</code> or <code>arena</code> to make it clearer what is expected. Of course for agnostic functions, it would stay as <code>allocator</code>.</p>\n<p>Thoughts?</p>",
+        "id": 544365433,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1760237181
+    },
+    {
+        "content": "<p>Given we make both the gpa and the arena right at the start of main, maybe we should just eventually switch to a struct that contains both. That way, all functions can just choose what makes sense for each allocation?</p>\n<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"kr\">const</span><span class=\"w\"> </span><span class=\"n\">Allocators</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"k\">struct</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">gpa</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"n\">Allocator</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">arena</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"n\">Allocator</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 544365895,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1760237899
+    },
+    {
+        "content": "<p>This is kinda what zig does in their compiler, just at a per stage basis:<br>\n<a href=\"https://github.com/ziglang/zig/blob/87c18945c207c77b5bc84123a7ba043b848bbabb/src/Sema.zig#L43-L46\">https://github.com/ziglang/zig/blob/87c18945c207c77b5bc84123a7ba043b848bbabb/src/Sema.zig#L43-L46</a></p>",
+        "id": 544366275,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1760238064
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Zig\"><pre><span></span><code><span class=\"c1\">/// Alias to `zcu.gpa`.</span>\n<span class=\"n\">gpa</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"n\">Allocator</span><span class=\"p\">,</span>\n<span class=\"c1\">/// Points to the temporary arena allocator of the Sema.</span>\n<span class=\"c1\">/// This arena will be cleared when the sema is destroyed.</span>\n<span class=\"n\">arena</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"n\">Allocator</span><span class=\"p\">,</span>\n</code></pre></div>\n<p>Though I guess they have a perf stage arena instead of a global arena here. I think for all the paths and other things we would have global arena for roc. Separately we could consider per stage arenas for roc, but I think we already have our scratch buffers which kinda fill that role.</p>",
+        "id": 544366458,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1760238152
+    },
+    {
+        "content": "<p>Also, context: <a href=\"https://github.com/roc-lang/roc/actions/runs/18436673436/job/52531070396?pr=8285\">https://github.com/roc-lang/roc/actions/runs/18436673436/job/52531070396?pr=8285</a></p>\n<p>These are some memory leaks we currently have that probably should be in an arena anyway.</p>",
+        "id": 544366934,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1760238831
+    },
+    {
+        "content": "<p>I like that idea!</p>",
+        "id": 544367983,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1760240271
+    },
+    {
+        "content": "<p>+1 to more arena usage</p>",
+        "id": 544367986,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1760240277
+    },
+    {
+        "content": "<p>could we call it like <code>scratch</code> or something?</p>",
+        "id": 544368012,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1760240301
+    },
+    {
+        "content": "<p>since sometimes we use an arena allocator for gpa <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 544368023,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1760240319
+    },
+    {
+        "content": "<p>In the most extreme I would see 3 categories:</p>\n<ol>\n<li><code>gpa</code> only for things that grow and reallocate like all our arraylists</li>\n<li><code>arena</code> for things that like the whole program (or at least for multiple stages) but are tiny and not worth deallocating.</li>\n<li><code>scratch</code> anything that is specific to a compiler stage but is static size or exceptionally unlikely to grow and thus fine to consider static. Will be fully cleared between each compiler stage.</li>\n</ol>\n<hr>\n<p>That said, I'm not sure it is worth having all 3. Might just be inconvenient to wrangle. I'm also not sure how much stuff we have in category 3. If it isn't a lot, it can still just go into 2 instead.</p>\n<p>And I'm open to whatever name. I was assuming functions would have <code>allocs: Allocators</code> as the first arg and then use <code>allocs.gpa</code> and <code>allocs.arena</code> (or whatever other name).</p>",
+        "id": 544368346,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1760240659
+    },
+    {
+        "content": "<p>Do you have a sense of how much stuff we have in category 3? I know that some of the stages have scratch space, but to my understand it is dynamically resizing, so probably should be under the gpa instead of in a true scratch buffer for the specific stage.</p>",
+        "id": 544368406,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1760240737
+    },
+    {
+        "content": "<p>Of note, I think zig used to have the 3 allocator system. They called them <code>gpa</code>, <code>perm_arena</code>, and <code>arena</code>. But they remove the <code>perm_arena</code> actually.</p>",
+        "id": 544368476,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1760240836
+    },
+    {
+        "content": "<p>interesting! We actually have a bunch of scratch array lists that are used as typed stacks of temporary work, so maybe those are sufficient</p>",
+        "id": 544407609,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1760281911
+    },
+    {
+        "content": "<p>Yeah, as long as they are amortizing the allocations, they are probably fine. Different ways to essentially do the same thing.</p>\n<p>Like the other design with an arena would probably be to free form allocate into the arena instead of having the n different array lists for scratch.</p>\n<p>I would say that for now these are a fine scratch solutions and I just want to add a global arena for all the random tiny allocations that we really don't care about.</p>",
+        "id": 544412870,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1760286474
+    },
+    {
+        "content": "<p>sounds good to me, go for it!</p>",
+        "id": 544414296,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1760287604
+    },
+    {
+        "content": "<p>Add new Allocators struct to pass gpa and arena to more functions <a href=\"https://github.com/roc-lang/roc/issues/8285\">#8285</a></p>\n<p>Really only got to updating main.zig (tons of paths and things now using the arena). That said, I think it is big enough that it is worth submitting. And follow ups and expand to more files.</p>",
+        "id": 545143929,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1760571951
+    }
+]
