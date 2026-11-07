@@ -1,0 +1,32 @@
+[
+    {
+        "content": "<p>On current main (and nightly-2026-10-21), keep_if, drop_if, keep_oks and keep_errs are a fold over concat:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>keep_if = |list, predicate|\n        List.fold(list, [], |acc, item| if predicate(item) { List.concat(acc, [item]) } else { acc })\n</code></pre></div>\n<p>Each kept item allocates a one-item list, and acc grows by reallocating. Keeping all 12 items of a 12-item list costs 13 allocations and 4 reallocs, even when the input list is unique. The doc comment says a unique list is filtered in place with no allocation, and that a fully kept list comes back unchanged. The code doesn't do either. As far as I can tell, keep_if dates from <a href=\"https://github.com/roc-lang/roc/issues/8501\">#8501</a> and never got the reuse work that <a href=\"http://List.map\">List.map</a> got in <a href=\"https://github.com/roc-lang/roc/issues/9610\">#9610</a> and <a href=\"https://github.com/roc-lang/roc/issues/10594\">#10594</a>.</p>\n<p>I hit this when building examples in the Rocco game engine, where view filters entities every frame. In that frame it accounted for 12 allocations and all 4 reallocs.</p>\n<p>Proposed fix (I have a local branch with tests):</p>\n<ul>\n<li>Unique list: after list_map_prepare_reuse and list_owned_unique, the same order sort_impl uses, swap each kept item down with list_swap_unsafe, then List.drop_last the rest. Order is kept, dropped items are freed once, capacity is unchanged, and an all-kept list comes back as it was. No allocation.</li>\n<li>Shared list: if every item is kept, return the list as it is. Otherwise copy the kept items into one List.with_capacity(len) buffer, allocated only when the first kept item needs a place.</li>\n<li>drop_if becomes keep_if with the predicate negated.</li>\n<li>keep_oks and keep_errs use the single-buffer copy. They don't work in place, because Try(a, e) and a rarely share a layout.</li>\n</ul>\n<p>Results: 12 of 12 kept goes from 13/4 to 1/0 (allocs/reallocs), and a unique list filtered in step goes from 13/4 to 1/0. The full eval suite and rc_conformance pass. The new tests cover a shared list reused afterwards and a predicate that captures the list being filtered, the <a href=\"https://github.com/roc-lang/roc/issues/10368\">#10368</a> shape.</p>\n<p>Unlike map's extract/write loop, the in-place path only uses list_swap_unsafe and drop_last, which copy a shared list unless the call is marked in-place. So a wrong uniqueness answer should cost a copy, not a wrong result.</p>\n<p><strong>Questions:</strong></p>\n<ol>\n<li>Is this the direction you'd want, or is there a plan to filters, for example via <a href=\"https://github.com/roc-lang/roc/issues/9775\">#9775</a>?</li>\n<li>Should the in-place path be gated off in dev builds and the interpreter, as map's reuse is?</li>\n<li>Should the \"return a shared list unchanged when all  of the same PR, or a separate one?</li>\n</ol>\n<p>Happy to open an issue and PR with this optimisation.</p>",
+        "id": 635132046,
+        "sender_full_name": "pixelsprout",
+        "timestamp": 1793042181
+    },
+    {
+        "content": "<p>yeah this is what we always should have been doing <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 635141134,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1793043987
+    },
+    {
+        "content": "<p>I think that implementation is probably a very old \"just get it working to unblock people\" impl that we never got around to revising</p>",
+        "id": 635141239,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1793044016
+    },
+    {
+        "content": "<p>PR welcome!</p>",
+        "id": 635141250,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1793044019
+    },
+    {
+        "content": "<p>Cool I have put up a PR <a href=\"https://github.com/roc-lang/roc/pull/12645\">#12645</a></p>",
+        "id": 635148981,
+        "sender_full_name": "pixelsprout",
+        "timestamp": 1793045601
+    }
+]

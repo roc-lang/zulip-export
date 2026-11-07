@@ -1,0 +1,620 @@
+[
+    {
+        "content": "<p>I'm trying to build a wasm host and app manually to check I really understand the process. </p>\n<p>I've been following along closely with the implementation in <code>crates/compiler/build/src/link.rs</code> specifically for <code>build_zig_host_wasm32</code> and <code>link_wasm32</code>, and experimenting with a bunch of things. </p>\n<p>I dont have an easy way to reproduce this rn, though I guess I could make a random commit if that would help. </p>\n<p>But basically I'm running the following commands, but having some issues. This is the furthest I've managed to get I think (it's hard to follow the errors and see if I'm progressing or regressing sometimes).</p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code><span class=\"c1\"># compile host into a LLVM .bc file</span>\nzig<span class=\"w\"> </span>build-obj<span class=\"w\"> </span>-target<span class=\"w\"> </span>wasm32-wasi-musl<span class=\"w\"> </span>-lc<span class=\"w\"> </span>-rdynamic<span class=\"w\"> </span>-femit-llvm-ir<span class=\"o\">=</span>platform/host.bc<span class=\"w\"> </span>host/main.zig\n\n<span class=\"c1\"># compile app into a LLVM .ll file</span>\nroc<span class=\"w\"> </span>build<span class=\"w\"> </span>--no-link<span class=\"w\"> </span>--emit-llvm-ir<span class=\"w\"> </span>rocLovesWebAssembly.roc\n\n<span class=\"c1\"># link together host and app</span>\nzig<span class=\"w\"> </span>build-exe<span class=\"w\"> </span>-target<span class=\"w\"> </span>wasm32-wasi-musl<span class=\"w\"> </span>-fPIC<span class=\"w\"> </span>-fstrip<span class=\"w\"> </span>-rdynamic<span class=\"w\"> </span>-lc<span class=\"w\"> </span>platform/host.bc<span class=\"w\"> </span>rocLovesWebAssembly.ll\n</code></pre></div>\n<p>My understanding here is that we are successfuly building the <code>host.zig</code> into a LLVM bitcode <code>.bc</code> file (I'm still not 100% sure why we need to go that route, but I can't get a library or anything else working either). </p>\n<p>Roc is generating a LLVM human readable bitcode <code>.ll</code> file.</p>\n<p>When we link these together to build a <code>.wasm</code> file the implementation of symbols in compiler-rt is slightly different, and we are missing setjmp and longjmp. </p>\n<p>I am looking for any ideas why the roc generated code might be missing these, or different to zig. I'm using zig version 0.11.0 for everything. Do we include our own version of compiler-rt? playing with zig's <code>-fcompiler-rt</code> doesn't seem to make any difference. Maybe we have included those in the builtins or something? </p>\n<p>Also unsure why setjmp and longjmp are undefined. From what I can tell these should be included in musl. </p>\n<div class=\"codehilite\"><pre><span></span><code>error: wasm-ld:\n    note: defined as (i32, i32, i32) -&gt; i32 in /Users/luke/.cache/zig/o/e1ad72288e7681c39fb42e87c2506cfb/libcompiler_rt.a(/Users/luke/.cache/zig/o/e1ad72288e7681c39fb42e87c2506cfb/libcompiler_rt.a.o)\n    note: defined as (i32, i32, i64) -&gt; i32 in /Users/luke/.cache/zig/o/8e32b79d2f74ce8703ec76103c3fa0de/rocLovesWebAssembly.o\nerror: wasm-ld:\n    note: defined as (i32, i32, i32) -&gt; i32 in /Users/luke/.cache/zig/o/e1ad72288e7681c39fb42e87c2506cfb/libcompiler_rt.a(/Users/luke/.cache/zig/o/e1ad72288e7681c39fb42e87c2506cfb/libcompiler_rt.a.o)\n    note: defined as (i32, i32, i64) -&gt; i32 in /Users/luke/.cache/zig/o/8e32b79d2f74ce8703ec76103c3fa0de/rocLovesWebAssembly.o\nerror: wasm-ld: /Users/luke/.cache/zig/o/8e32b79d2f74ce8703ec76103c3fa0de/rocLovesWebAssembly.o: undefined symbol: setjmp\nerror: wasm-ld: /Users/luke/.cache/zig/o/8e32b79d2f74ce8703ec76103c3fa0de/rocLovesWebAssembly.o: undefined symbol: longjmp\n</code></pre></div>",
+        "id": 436821262,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714715384
+    },
+    {
+        "content": "<p>If I update the final step to <code>zig build-exe -target wasm32-wasi-musl -lc platform/host.bc rocLovesWebAssembly.ll</code>, now I get;</p>\n<div class=\"codehilite\"><pre><span></span><code>LLD Link... warning(link): unexpected LLD stderr:\nwasm-ld: warning: function signature mismatch: memcpy\n&gt;&gt;&gt; defined as (i32, i32, i64) -&gt; i32 in /Users/luke/.cache/zig/o/7f59f835ce3672f0de84e2fa02508ea0/rocLovesWebAssembly.o\n&gt;&gt;&gt; defined as (i32, i32, i32) -&gt; i32 in /Users/luke/.cache/zig/o/8b8b8ee442982e6b4064dc7bd089866a/libc.a(/Users/luke/.cache/zig/o/10a7521927d8b2330ade4b85f73bcd27/memcpy.o)\n\nwasm-ld: warning: function signature mismatch: memset\n&gt;&gt;&gt; defined as (i32, i32, i64) -&gt; i32 in /Users/luke/.cache/zig/o/7f59f835ce3672f0de84e2fa02508ea0/rocLovesWebAssembly.o\n&gt;&gt;&gt; defined as (i32, i32, i32) -&gt; i32 in /Users/luke/.cache/zig/o/8b8b8ee442982e6b4064dc7bd089866a/libc.a(/Users/luke/.cache/zig/o/46d827fde6ae7406d7854e8a8727cccb/memset.o)\n</code></pre></div>",
+        "id": 436821754,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714715775
+    },
+    {
+        "content": "<p>I think removing <code>-rdynamic</code> solves the setjmp and longjmp issue</p>",
+        "id": 436821769,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714715796
+    },
+    {
+        "content": "<p>It all seems far more complicated than I had expected. I thought we would compile the host to a <code>.wasm</code> file and then the app too, and link them together.</p>",
+        "id": 436822751,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714716438
+    },
+    {
+        "content": "<p>If I use <code>zig build-exe -target wasm32-wasi  host/main.zig</code> I get a nice wasm file, that I can inspect with <code>wasmer inspect</code>. </p>\n<p>But <code>roc build --target=wasm32 --no-link rocLovesWebAssembly.roc</code> gives me a file that seems broken.</p>\n<div class=\"codehilite\"><pre><span></span><code>$ wasmer inspect rocLovesWebAssembly.wasm\nerror: failed to inspect `rocLovesWebAssembly.wasm`\n╰─▶ 1: WebAssembly translation error: Error when converting wat: input bytes aren&#39;t valid utf-8\n</code></pre></div>\n<p>Sharing all this here... because I don't really know which way is up, and trying to make sense of things.</p>",
+        "id": 436823675,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714717029
+    },
+    {
+        "content": "<p>Actually... digging some more, these issues may all just be from using LLVM backend. If we switch over to look at the dev backend then it looks like we are using <code>roc_wasm_module</code>. So maybe the question I should be asking is how to preprocess a wasm host for the surgical linker?</p>",
+        "id": 436824689,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714717607
+    },
+    {
+        "content": "<p>re that wasmer thing: something seems confused between the text and binary formats there</p>",
+        "id": 436834027,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1714722276
+    },
+    {
+        "content": "<p><code>wat</code> is the webassembly text format, that lisp-like syntax for wasm. What we produce is a binary file.</p>",
+        "id": 436834068,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1714722301
+    },
+    {
+        "content": "<p>Yeah, seems strange.</p>",
+        "id": 436840469,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714725312
+    },
+    {
+        "content": "<p>Do you think the WASM examples should focus on support for legacy or surgical linker or both?</p>",
+        "id": 436840500,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1714725336
+    },
+    {
+        "content": "<p>unfortunately we need both for now</p>",
+        "id": 436861200,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1714734084
+    },
+    {
+        "content": "<p>do we? I thought wasm was pretty much complete too? what breaks when we feed it a module produced by LLVM?</p>",
+        "id": 436862795,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1714734728
+    },
+    {
+        "content": "<p>Instead of wasmer inspect, try to get your hands on wasm-objdump and wasm-validate, which are part of a project called.. binaryen I think</p>",
+        "id": 438036294,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715369798
+    },
+    {
+        "content": "<p>Or maybe wabt</p>",
+        "id": 438040444,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715372057
+    },
+    {
+        "content": "<p>Thank you.</p>",
+        "id": 438040682,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1715372175
+    },
+    {
+        "content": "<p>Ill give that a go</p>",
+        "id": 438040704,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1715372187
+    },
+    {
+        "content": "<p>Actually <code>wasmer inspect</code> works just fine for me on files that I know for sure have binary webassembly inside them.<br>\nI wonder if you somehow have a file that has the text format inside it but with a .wasm extension which is for the binary format.</p>",
+        "id": 438162924,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715496343
+    },
+    {
+        "content": "<blockquote>\n<p>Do we include our own version of compiler-rt?</p>\n</blockquote>\n<p>As part of building the Roc project, <code>crates/wasi-libc-sys/build.rs</code> uses Zig to generate compiled libc and compiler-rt, finds their paths, and sets constants equal to those paths.<br>\nThen in the linker commands in <code>crates/compiler/build/src/link.rs</code> we provide <code>wasm-ld</code> with those paths as well as the paths to the host and the Roc app. See <code>preprocess_host_wasm32</code>.</p>",
+        "id": 438163296,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715496746
+    },
+    {
+        "content": "<p>In the early days this build process only worked when building Roc from source. But I think later we made it work with nightly builds too. Could be worth double checking that though.</p>",
+        "id": 438163546,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715497045
+    },
+    {
+        "content": "<p>How did setjmp end up in the roc binary? Shouldn't that be a host-side thing? I have been a bit out of touch with Roc lately, might have missed some big change.</p>",
+        "id": 438163936,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715497500
+    },
+    {
+        "content": "<p>I don't think it's actually possible to implement <code>setjmp</code> and <code>longjmp</code> in the Wasm instruction set. There are no arbitrary jumps, only structured control flow. So the compiler would have to generate early returns in every function all the way up the call stack. And then I'm not sure why you would even need functions with those names. So maybe one of these errors is happening because they don't exist in this target?<br>\nI just downloaded a zip of the Zig repo at tag <code>0.11.0</code> and searched for references to <code>setjmp</code> in wasm libc and compiler-rt files etc., and I can't find anything.</p>",
+        "id": 438165823,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715499715
+    },
+    {
+        "content": "<p>One of the error messages complains about a mismatch in last argument of <code>memcpy </code>and <code>memset</code> so we can look up <a href=\"https://en.cppreference.com/w/c/string/byte/memset\">cppreference.com</a> to find out the actual type signatures.</p>\n<div class=\"codehilite\"><pre><span></span><code>void* memcpy( void *dest, const void *src, size_t count );\nvoid *memset( void *dest, int ch, size_t count );\n</code></pre></div>\n<p>The last argument for each is a <code>size_t</code>. That's a pointer-sized integer, so 32 bits is the correct size for that in Wasm. Whichever one is generating 64 is wrong. Most likely there is somewhere we forgot about 32-bit targets and generated <code>size_t</code> as 64 bits. This is very common. Everyone forgets about 32 bits. It's the root cause of 99% of code gen issues with Wasm.</p>",
+        "id": 438166314,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715500246
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> any idea on the setjmp part of that question?</p>",
+        "id": 438176175,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715510807
+    },
+    {
+        "content": "<p>I think this message is pretty clear</p>\n<div class=\"codehilite\"><pre><span></span><code>// Utils continued - SJLJ\n// For tests (in particular test_gen), roc_panic is implemented in terms of\n// setjmp/longjmp. LLVM is unable to generate code for longjmp on AArch64 (https://github.com/roc-lang/roc/issues/2965),\n// so instead we ask Zig to please provide implementations for us, which is does\n// (seemingly via musl).\npub extern fn setjmp([*c]c_int) c_int;\npub extern fn longjmp([*c]c_int, c_int) noreturn;\npub extern fn _setjmp([*c]c_int) c_int;\npub extern fn _longjmp([*c]c_int, c_int) noreturn;\npub extern fn sigsetjmp([*c]c_int, c_int) c_int;\npub extern fn siglongjmp([*c]c_int, c_int) noreturn;\npub extern fn longjmperror() void;\n</code></pre></div>",
+        "id": 438176400,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1715511028
+    },
+    {
+        "content": "<p>so: tests need an implementation of <code>roc_panic!</code>. There is not much we can do there beside a longjmp really</p>",
+        "id": 438176453,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1715511090
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"431893\">@Brian Carroll</span> what are your thoughts on the best way to pre-build a WASM platform? I'm updating roc so that the platform rebuilding is the sole responsibility of the platform, which provides the pre-built binaries. What should this look like for WASM though?</p>",
+        "id": 438201610,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1715537152
+    },
+    {
+        "content": "<p>What are you doing for the others and how is Wasm different?</p>",
+        "id": 438202111,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715537651
+    },
+    {
+        "content": "<p>Actually let me rephrase that as a statement rather than a question! I don't think there's any conceptual difference with Wasm, it just uses a different linker. And you can't rely on the OS to provide libc for you.</p>",
+        "id": 438202376,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715537958
+    },
+    {
+        "content": "<p>So I assume that what you want to produce for all targets, including Wasm, is a library that contains:</p>\n<ul>\n<li>the host itself</li>\n<li>any libc things you need</li>\n<li>roc_alloc and friends</li>\n<li>Any Roc builtins that the app might want to call</li>\n</ul>",
+        "id": 438202478,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715538063
+    },
+    {
+        "content": "<p>Although for most targets you can make the library depend on the host machine's libc. For Wasm you have to link that in.</p>",
+        "id": 438202561,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715538141
+    },
+    {
+        "content": "<p>I've converted all the others in <a href=\"https://github.com/roc-lang/roc/pull/6696\">https://github.com/roc-lang/roc/pull/6696</a></p>",
+        "id": 438202573,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1715538164
+    },
+    {
+        "content": "<p>I've written a build script for each of the different platforms.</p>",
+        "id": 438202585,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1715538175
+    },
+    {
+        "content": "<p>Can you outline it for me so I don't have to go through the whole PR?</p>",
+        "id": 438202598,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715538191
+    },
+    {
+        "content": "<p>Most of these only support the legacy linker though... so I'm generating a <code>macos-arm64.a</code> file for the platform prebuilt-binary.</p>",
+        "id": 438202610,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1715538204
+    },
+    {
+        "content": "<p>That c-archive sits next to the platform/main.roc file and then when we <code>roc run app.roc</code> the roc cli will build the app, link with the platform to produce the final application binary</p>",
+        "id": 438202673,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1715538254
+    },
+    {
+        "content": "<p>I'm just not sure about WASM, in that the same (or similar) approach seems to require jumping through a lot of hoops. If it should be the same, and we just have a bug somewhere to track down then that is very helpful to know.</p>",
+        "id": 438202783,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1715538386
+    },
+    {
+        "content": "<p>What hoops are those?</p>",
+        "id": 438202787,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715538404
+    },
+    {
+        "content": "<p>Well to support the legacy linker at least. I suspect the surgical linker would be much easier</p>",
+        "id": 438202818,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1715538438
+    },
+    {
+        "content": "<p>For example, we need to compile the host into a LLVM <code>.bc</code> file, instead of just a <code>c-archive</code></p>",
+        "id": 438202899,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1715538540
+    },
+    {
+        "content": "<p>OK why is that?<br>\nI was going to say I haven't seen .a used very much with wasm. But not sure what constraint actually forces this because it's just a concatenation of object files.</p>",
+        "id": 438203021,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715538653
+    },
+    {
+        "content": "<p>I would have guessed you could create a <code>.wasm</code> file, or a <code>.a</code> file, containing everything you need.<br>\nI don't see why .bc is necessary unless LLVM is for some reason forcing that.<br>\nBut I am not super familiar with trying to get LLVM to produce Wasm in various ways. Most of my experience with this stuff is from working on the Wasm dev back end with no LLVM in the path.</p>",
+        "id": 438203528,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715539102
+    },
+    {
+        "content": "<p>The Wasm dev backend has no understanding whatsoever of <code>.bc</code> or <code>.ll</code> so that would be incompatible with this setup.</p>",
+        "id": 438203564,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715539164
+    },
+    {
+        "content": "<p>Essentially nobody would ever be able to use the Wasm dev backend because the ecosystem would be incompatible with it.</p>",
+        "id": 438203662,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715539229
+    },
+    {
+        "content": "<p>So I think it would be worth trying to find a way to use .wasm as that's the only thing the dev backend can work with</p>",
+        "id": 438203692,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715539264
+    },
+    {
+        "content": "<p>You can look at what I've done for the wasm unit tests or the wasm REPL. They both have \"test hosts\" that I build into .wasm files.</p>",
+        "id": 438203856,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715539409
+    },
+    {
+        "content": "<p>crates/repl_wasm/build.rs <code>build_wasm_platform</code><br>\ncrates/compiler/test_gen/build.rs <code>build_wasm_test_host</code></p>",
+        "id": 438204015,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715539539
+    },
+    {
+        "content": "<p>I think currently we generated a <code>.bc</code> and then let llvm directly consume the <code>.bc</code> file cause it was easy and it worked around some early issue when setting up wasm linking with the llvm backend (<span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> may know what the issue actually was). That said, it is just a hack, our over-reliance on zig for llvm backend wasm linking is also a dependency we need to fix. Fundamentally, I think most of that is old tech debt that we really need to wrip out a clean up</p>",
+        "id": 438253110,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715581587
+    },
+    {
+        "content": "<p>Wasm should just generate a/multiple <code>.wasm</code> file and let the additive linker concatenate them together.</p>",
+        "id": 438253201,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715581624
+    },
+    {
+        "content": "<p>That said, last time I checked, the additive linker could only be used with our wasm dev backend and had some sort of issue linking wasm files generated form the llvm backend (but that might just be a setup/wiring issue and not a real bug, been a long time since I looked at any of this).</p>",
+        "id": 438253313,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715581680
+    },
+    {
+        "content": "<p>Even if we don't change the llvm backend to use the additive linker, it should still generate a <code>.wasm</code> and that should be consumed by the platform or by a linker of some sort to generate the final executable. The <code>.bc</code> stuff all needs to die and is just a workaround.</p>",
+        "id": 438253457,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715581736
+    },
+    {
+        "content": "<p>Yes \"additive linking\" is a term I came up with for the linking that is built into the wasm dev back end.  It is a feature of that back end<br>\nIt is not possible to extract as a separate thing and use with LLVM.</p>",
+        "id": 438253848,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715581907
+    },
+    {
+        "content": "<p>ah. Thought it could be generalized to anything wasm...guess not</p>",
+        "id": 438253977,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715581946
+    },
+    {
+        "content": "<p>It works by reading in the host file and using that to initialise the state of the code generator so that when you generate more code it is \"added on top\".<br>\nWe do not have that kind of access to the internals of LLVM.</p>",
+        "id": 438254007,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715581962
+    },
+    {
+        "content": "<p>I see. Yeah, I thought it came at a later stage and was consuming fully generated functions from the wasm dev backend. Thus, I assumed we could pass full wasm functions from llvm to be added on top of the wasm platform. Good to know that is not the case and it is more integrated.</p>",
+        "id": 438254245,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715582055
+    },
+    {
+        "content": "<p>yeah, so we still need to figure out a good linking story for llvm wasm (that or leave it 100% to the end users). Today, IIRC, we compile to a <code>.bc</code> and then pass the <code>.bc</code> to zig such that it can build the host with the <code>.bc</code> file and generate a finalized platform.</p>",
+        "id": 438254357,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715582113
+    },
+    {
+        "content": "<p>So we essentially use <code>.bc</code> in a way to avoid needing to figure out correctly linking.</p>",
+        "id": 438254400,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715582135
+    },
+    {
+        "content": "<p>leave it all to zig</p>",
+        "id": 438254418,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1715582144
+    },
+    {
+        "content": "<p>I believe I might have solved that problem already in the <code>build.rs</code> files I mentioned above. Or at least a very similar problem.</p>",
+        "id": 438254448,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715582155
+    },
+    {
+        "content": "<p>They produce a preprocessed host as .wasm file containing the host, the Roc builtins, and any libc stuff the host and builtins need.<br>\nSo then with LLVM Wasm you would just need to do a final linking step with <code>wasm-ld</code> to combine the preprocessed host <code>.wasm</code> file with the app <code>.wasm</code> file.<br>\nAnd the Wasm dev backend can also use it by having the preprocessed host passed via CLI options. That's already implemented.</p>",
+        "id": 438254958,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715582370
+    },
+    {
+        "content": "<p>By the way, a <code>.wasm</code> file is most comparable to <code>.so</code> on Linux or <code>.dylib</code> on Mac. By definition of how Wasm works, it always needs to receive some callback functions from the Wasm interpreter at runtime. And that is a dynamic linking step.</p>",
+        "id": 438256193,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715582953
+    },
+    {
+        "content": "<p>So they are always dynamic libraries, and they can be linked together. The \"imports\" and \"exports\" get merged, and sometimes one export satisfies another import and it gets removed from the final file. In the end you are left with just the ones that actually need to be exposed at runtime.</p>",
+        "id": 438256482,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715583095
+    },
+    {
+        "content": "<p>is it possible to do stack unwinding in wasm?</p>",
+        "id": 438527395,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715675789
+    },
+    {
+        "content": "<p>No</p>",
+        "id": 438527423,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715675801
+    },
+    {
+        "content": "<p>If you had enough power to do that, it would break the security model.</p>",
+        "id": 438527750,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715675892
+    },
+    {
+        "content": "<p>hm, I see</p>",
+        "id": 438527876,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715675929
+    },
+    {
+        "content": "<p>I was trying to think of other ways we could potentially make <code>roc_panic</code> work in wasm</p>",
+        "id": 438527990,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715675963
+    },
+    {
+        "content": "<p>since setjmp/longjmp don't work</p>",
+        "id": 438528011,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715675968
+    },
+    {
+        "content": "<p>You can \"trap\" and catch outside and call again</p>",
+        "id": 438528038,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1715675977
+    },
+    {
+        "content": "<p>ah gotcha</p>",
+        "id": 438528288,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715676054
+    },
+    {
+        "content": "<p>so that works as long as you don't need to recover from the roc_panic from within wasm code</p>",
+        "id": 438528369,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715676081
+    },
+    {
+        "content": "<p>I guess the <a href=\"https://github.com/WebAssembly/exception-handling/blob/d399b9e0711b408e15fdfbea1cafe956a6f3d481/proposals/exception-handling/Exceptions.md\">exception handling proposal</a> could address that in the future</p>",
+        "id": 438528640,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1715676176
+    },
+    {
+        "content": "<p>for tests we don't need to recover from <code>roc_panic</code>, so if setjmp/longjmp in the compiler is a problem we can explore that?</p>",
+        "id": 438541487,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1715680778
+    },
+    {
+        "content": "<p>I need to write up a bit of a summary -- but this is where I got to on the plane. <a href=\"https://github.com/lukewilliamboswell/roc-platform-template-wasi\">https://github.com/lukewilliamboswell/roc-platform-template-wasi</a></p>",
+        "id": 439495605,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1716180387
+    },
+    {
+        "content": "<p>Basically, I think the way we do linking from roc cli makes this a bit interesting and unique. Most tooling i.e. zig is geared towards making a standalone <code>.wasm</code> library. So a bit of a challenge if we want roc to drive the build/linking. If we build the app separately using <code>roc build --target=wasm32 --no-link app.roc</code> and then use zig or something else to drive the build I think things get much simpler (but not the end user experience consistent with the other platforms). </p>\n<p>I think the next step is to figure out how to manually create the <code>_start</code> symbol, so when we link using e.g. something like <code>/opt/homebrew/opt/llvm@16/bin/wasm-ld app.wasm platform/host.wasm -o out.wasm</code>  it has everything required. Once we can build the pre-built binary and link manually, we will need to revisit the linking in roc cli if we want to support this workflow.</p>\n<p>Mostly leaving this comment to remind my future self.</p>",
+        "id": 439496066,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1716180715
+    },
+    {
+        "content": "<p>That all sounds good <br>\nI don't think you should have to manually create _start. The toolchain should be doing that for you if configured to generate a WASI executable. But this is the sort of thing that can be tricky to set up.</p>",
+        "id": 439508250,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1716186254
+    },
+    {
+        "content": "<p>Thank you. I think I need to investigate it further. From what I can tell so far it's not generated by zig with <code>b.addSharedLibrary</code> but it is with <code>b.addExecutable</code>. So that's why my current hypothesis is we may need to generate that manually.</p>",
+        "id": 439515724,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1716189338
+    },
+    {
+        "content": "<p>As an aside to resolve the <code>function signature mismatch: memset</code> issue, I changed the <code>void</code> return in our zig extern from <code>extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;</code> to <code>extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) i32;</code>. </p>\n<p>It works now and is happy. </p>\n<p>But, I'm just wondering if that is something we should be changing in the other zig platforms too, or maybe it is actually a symptom of another bug elsewhere.</p>",
+        "id": 439516176,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1716189546
+    },
+    {
+        "content": "<p>I'm having trouble working with WASM things. I think our build pipeline is a bit broken at the moment.</p>\n<p>If I have two files, <code>platform/main.roc</code> and <code>main.roc</code> and I build this using <code>roc build --target=wasm32 --no-link main.roc</code> on current main I should get valid WASM right?</p>\n<div class=\"codehilite\"><pre><span></span><code>platform &quot;wasm&quot;\n    requires {} { main : Str }\n    exposes []\n    packages {}\n    imports []\n    provides [mainForHost]\n\nmainForHost : Str\nmainForHost = main\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>app [main] {\n        pf: platform &quot;platform/main.roc&quot;,\n    }\n\nmain = &quot;hi&quot;\n</code></pre></div>\n<div class=\"codehilite\"><pre><span></span><code>$ roc build --target=wasm32 --no-link main.roc\n0 errors and 0 warnings found in 53 ms\n while successfully building:\n\n    main.wasm\n$ wasmer inspect main.wasm\nerror: failed to inspect `main.wasm`\n╰─▶ 1: WebAssembly translation error: Error when converting wat: input bytes aren&#39;t valid utf-8\n$ wasmer validate main.wasm\nerror: failed to validate `main.wasm`\n╰─▶ 1: `wasmer validate` only validates WebAssembly files\n</code></pre></div>\n<p>Also, it doesn't seem to like the dev backend. </p>\n<div class=\"codehilite\"><pre><span></span><code>$ roc build --target=wasm32 --no-link --dev main.roc\nAn internal compiler expectation was broken.\nThis is definitely a compiler bug.\nPlease file an issue here: https://github.com/roc-lang/roc/issues/new/choose\nthread &#39;main&#39; panicked at crates/compiler/build/src/program.rs:499:9:\nFailed to read host object file platform/wasm32.rh! Try omitting --prebuilt-platform\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>",
+        "id": 447914118,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719631696
+    },
+    {
+        "content": "<p>Ok, update on progress with <a href=\"https://github.com/lukewilliamboswell/roc-platform-template-wasi\">https://github.com/lukewilliamboswell/roc-platform-template-wasi</a> <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span> </p>\n<p>I think I am now <strong>really</strong> close to having a working WASM platform -- specifically, a WASI platform using a Task based API. <span aria-label=\"fingers crossed\" class=\"emoji emoji-1f91e\" role=\"img\" title=\"fingers crossed\">:fingers_crossed:</span> </p>\n<p>I updated the repository to use <code>shell.nix</code> so it provides zig 13. (I spent ages trying to get a flake working, but alas no joy... <span aria-label=\"sad\" class=\"emoji emoji-2639\" role=\"img\" title=\"sad\">:sad:</span> )</p>\n<p>Updated the glue script to use the latest release of <a href=\"https://github.com/lukewilliamboswell/roc-glue-code-gen\">roc-glue-code-gen</a>.</p>\n<p>Fixed up <code>build.zig</code> and <code>main.zig</code> with some minor changes for zig 13. </p>\n<p>Now we have it building the host and it looks good to me. </p>\n<div class=\"codehilite\"><pre><span></span><code>$ roc build.roc\n🎉 Generated type declarations in:\n\n    host/\n\n$ wasmer inspect platform/host.wasm\nType: wasm\nSize: 13.3 KB\nImports:\n  Functions:\n    &quot;wasi_snapshot_preview1&quot;.&quot;args_get&quot;: [I32, I32] -&gt; [I32]\n    &quot;wasi_snapshot_preview1&quot;.&quot;args_sizes_get&quot;: [I32, I32] -&gt; [I32]\n    &quot;wasi_snapshot_preview1&quot;.&quot;fd_write&quot;: [I32, I32, I32, I32] -&gt; [I32]\n    &quot;wasi_snapshot_preview1&quot;.&quot;proc_exit&quot;: [I32] -&gt; []\n  Memories:\n    &quot;env&quot;.&quot;memory&quot;: not shared (1 pages..)\n  Tables:\n    &quot;env&quot;.&quot;__indirect_function_table&quot;: FuncRef (1..)\n  Globals:\n    &quot;env&quot;.&quot;__stack_pointer&quot;: I32 (mutable)\n    &quot;env&quot;.&quot;__memory_base&quot;: I32 (constant)\n    &quot;env&quot;.&quot;__table_base&quot;: I32 (constant)\n    &quot;GOT.mem&quot;.&quot;__heap_end&quot;: I32 (mutable)\n    &quot;GOT.mem&quot;.&quot;__heap_base&quot;: I32 (mutable)\nExports:\n  Functions:\n    &quot;__wasm_apply_data_relocs&quot;: [] -&gt; []\n    &quot;_start&quot;: [] -&gt; []\n    &quot;main&quot;: [I32, I32] -&gt; [I32]\n    &quot;roc_alloc&quot;: [I32, I32] -&gt; [I32]\n    &quot;roc_realloc&quot;: [I32, I32, I32, I32] -&gt; [I32]\n    &quot;roc_dealloc&quot;: [I32, I32] -&gt; []\n    &quot;roc_panic&quot;: [I32, I32] -&gt; []\n    &quot;roc_dbg&quot;: [I32, I32, I32] -&gt; []\n    &quot;roc_memset&quot;: [I32, I32, I32] -&gt; [I32]\n    &quot;roc_fx_stdoutLine&quot;: [I32, I32] -&gt; []\n  Memories:\n  Tables:\n  Globals:\n</code></pre></div>\n<p>The problem is I can't get roc to produce valid WASM for the app using <code>--no-link</code> to then link and verify things manually. I would like to be able to do things manually, before hacking away at the cli build pipeline.</p>\n<p>The cli is definitely not working yet... it tries to rebuild the host using <code>host.zig</code>, or tries to use the surgical linker, or some other combination of things that all fail. Some examples below.</p>\n<div class=\"codehilite\"><pre><span></span><code>$ roc build --target=wasm32 app.roc\n🔨 Rebuilding platform...\nerror: unrecognized file extension of parameter &#39;glue&#39;\nthread &#39;main&#39; panicked at crates/compiler/build/src/program.rs:1048:17:\nnot yet implemented: gracefully handle `ld` (or `zig` in the case of wasm with --optimize) returning exit code Some(1)\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n$ roc build --target=wasm32 --dev app.roc\n🔨 Rebuilding platform...\nAn internal compiler expectation was broken.\nThis is definitely a compiler bug.\nPlease file an issue here: https://github.com/roc-lang/roc/issues/new/choose\nthread &#39;&lt;unnamed&gt;&#39; panicked at crates/compiler/build/src/link.rs:1410:21:\nError:\n    Failed to rebuild platform/wasm32.rh:\n        The executed command was:\n            zig wasm-ld /tmp/host_bitcodecUbER9HV.wasm platform/main.o /Users/luke/Documents/GitHub/roc/target/release/lib/wasi-libc.a /Users/luke/Documents/GitHub/roc/target/release/build/wasi_libc_sys-0c00ed7e69066201/out/zig-cache/o/fbe76c5baee393dea3c7d358da7d00e5/libcompiler_rt.a -o platform/wasm32.rh --export-all --no-entry --import-undefined --relocatable\n        stderr of that command:\n            wasm-ld: error: cannot open platform/main.o: No such file or directory\n\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\nthread &#39;main&#39; panicked at crates/compiler/build/src/program.rs:927:18:\nFailed to (re)build platform.: Any { .. }\n\n$ roc build --target=wasm32 --prebuilt-platform app.roc\nBecause I was run with --prebuilt-platform, I was expecting this file to exist:\n\n    platform/host.zig\n\nHowever, it was not there!\n\nIf you have the platform&#39;s source code locally, you may be able to generate it by re-running this command omitting --prebuilt-platform\n</code></pre></div>",
+        "id": 447922225,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719635826
+    },
+    {
+        "content": "<blockquote>\n<p>I spent ages trying to get a flake working, but alas no joy...</p>\n</blockquote>\n<p>I really wanted something that would give me a shell with the correct versions of roc and zig. It feels like something nix can do, based on the flakes we have in basic-cli and basic-webserver</p>",
+        "id": 447923685,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719636338
+    },
+    {
+        "content": "<p>So I think the next steps with this are to;</p>\n<ol>\n<li>figure out how to get roc to build an app with <code>--no-link</code> and produce valid WASM</li>\n<li>use that to manually link with the host and confirm it produces a valid WASI executable</li>\n<li>modify the roc cli to use either the dev backend parts, or wasm-ld, so that it can link a prebuilt <code>.wasm</code> host instead of building that from source. Maybe it defaults to using the prebuilt platform and only tries to rebuild the host if it cant find a <code>platform/host.wasm</code> or something</li>\n</ol>",
+        "id": 447925965,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719637931
+    },
+    {
+        "content": "<p>Great progress Luke! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 447934463,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1719641879
+    },
+    {
+        "content": "<p>Those next steps make sense.</p>\n<p>At step 2 I'd be curious to know how long <code>wasm-ld</code> takes to link the app and host. If it turns out to be really fast maybe there'll be no need to make our own surgical linker for Wasm (from pieces of the dev backend). The decision might be different from native code.</p>\n<p>Maybe we can also run the same app through the dev backend and dump some timing info.</p>",
+        "id": 447938815,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1719644024
+    },
+    {
+        "content": "<p>It looks like <code>wasmer validate</code> is not useful for figuring out _why_ a file is invalid, and debugging it. I always used <code>wasm-objdump</code> for that.</p>",
+        "id": 447939806,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1719644324
+    },
+    {
+        "content": "<p>It's part of the WebAssembly Binary Toolkit, wabt</p>",
+        "id": 447940781,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1719645024
+    },
+    {
+        "content": "<p>I was working a little with Luke here. Here is the relevant excerpt from our DMs<br>\n<a href=\"/user_uploads/22008/6Ib0hh6Eg3eH_Iz51lqAvJJu/image.png\">image.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/6Ib0hh6Eg3eH_Iz51lqAvJJu/image.png\" title=\"image.png\"><img src=\"/user_uploads/22008/6Ib0hh6Eg3eH_Iz51lqAvJJu/image.png\"></a></div>",
+        "id": 447941355,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719645499
+    },
+    {
+        "content": "<p>When the llvm compiles wasm currently it is emitting the LLVM bytecode directly to the wasm file because of that 2nd branch</p>",
+        "id": 447941412,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719645552
+    },
+    {
+        "content": "<p>allowing wasm to follow the same branch as native code (plus a little bit of feature flag cleanup) results in this<br>\n<a href=\"https://github.com/roc-lang/roc/pull/6852\">https://github.com/roc-lang/roc/pull/6852</a></p>",
+        "id": 447941586,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719645610
+    },
+    {
+        "content": "<p>I am able to compile the nodejs interop example without linking</p>",
+        "id": 447941693,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719645650
+    },
+    {
+        "content": "<p>obviously there is some stuff missing from that output (but at least it builds in &lt;10ms even with a debug build of the compiler <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span> )</p>",
+        "id": 447941810,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719645697
+    },
+    {
+        "content": "<p>Most notably it is missing the bump allocator that gets inlined to the wasm output of the <code>gen_wasm</code> module</p>",
+        "id": 447942095,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719645806
+    },
+    {
+        "content": "<p>Good job debugging that <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span><br>\nMakes sense now why it wasn't valid Wasm if it was actually LLVM!</p>",
+        "id": 447950899,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1719651728
+    },
+    {
+        "content": "<p>I didn't follow what you meant in the last part about the bump allocator. Do you mean that the output file has no roc_alloc? Does the nodejs host use a bump allocator?</p>",
+        "id": 447950906,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1719651730
+    },
+    {
+        "content": "<blockquote>\n<p>I really wanted something that would give me a shell with the correct versions of roc and zig. It feels like something nix can do, based on the flakes we have in basic-cli and basic-webserver</p>\n</blockquote>\n<p>In the inputs section you'll need to change the line <code>nixpkgs.follows = \"roc/nixpkgs\";</code> to <code>nixpkgs.url = \"github:nixos/nixpkgs?rev=ab7cf5d23c90ee5b83444e0a80a606688d278ecd\";</code> if you want to be able to get zig 13. The package is just named zig in that case, not zig_0_13.</p>",
+        "id": 447957214,
+        "sender_full_name": "Anton",
+        "timestamp": 1719654749
+    },
+    {
+        "content": "<p>Ok, I am getting very close on this PR. At this point I think I am running into artificial limitations / panics in the compiler. I can hand generate the unlinked app, host, wasi-libc and link them. Which basically leaves the platform. I cannot just <code>roc build platform/main.roc --target=wasm32 --no-link --optimize</code>. Is there a reason for or do we want to keep this limitation?</p>",
+        "id": 448156857,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719773240
+    },
+    {
+        "content": "<p>I also have questions about how much of the wasi platform we include in the compiler. It seems like the entire <code>wasm_interp/src/wasi.rs</code> should be pulled out into a seperate wasi platform. This would simplefy a bunch. You would not have to ship a wasi-libc. You would get <code>freestanding</code> wasm for free since now since wasi is not baked into the compiler. There could be a yet another wasm freestanding platform.</p>",
+        "id": 448157780,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719773614
+    },
+    {
+        "content": "<p>Another platform author could provide their own wasi implementation that does not depend on libc</p>",
+        "id": 448157944,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719773682
+    },
+    {
+        "content": "<p>Wasm interp is not part of the compiler, we just use it for our tests</p>",
+        "id": 448159957,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1719774392
+    },
+    {
+        "content": "<p>My mistake. I was wondering what was providing all <a href=\"https://github.com/WebAssembly/WASI/blob/main/legacy/preview1/docs.md#-wasi_snapshot_preview1\">this</a> in the final wasm binary. It must be <code>wasi-libc.a</code> then?</p>",
+        "id": 448163910,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719775734
+    },
+    {
+        "content": "<p>I just started hunting for the symbols in the roc codebase and hit that module</p>",
+        "id": 448164101,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719775850
+    },
+    {
+        "content": "<p>Yeah there's a crate called something like <code>wasi-libc-sys</code>. It contains almost no code, just a <a href=\"http://build.rs\">build.rs</a> that fools zig into giving us a path to its libc implementation.</p>",
+        "id": 448175739,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1719781928
+    },
+    {
+        "content": "<p>If an app doesn't use anything from libc then the linker just won't need to use that library and that's it.</p>",
+        "id": 448176409,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1719782108
+    },
+    {
+        "content": "<p>So check this out. Platformless Roc.</p>\n<p><a href=\"https://github.com/roc-lang/roc/pull/6852/files\">https://github.com/roc-lang/roc/pull/6852/files</a></p>\n<p>You can check it out and run:</p>\n<div class=\"codehilite\"><pre><span></span><code>export PROJ=$(pwd)\ncargo build\ncd examples/nodejs-interop/noplatform\nbash doit.sh\n</code></pre></div>\n<p>Running this gets you:</p>\n<div class=\"codehilite\"><pre><span></span><code>+ /home/ryan/src/roc-lang/roc/target/debug/roc build main.roc --target=wasm32 --optimize --no-link\n0 errors and 0 warnings found in 160 ms\n while successfully building:\n\n    main.wasm\n+ wasm-ld main.wasm -o out.wasm --export-all --no-entry --export-table --import-undefined\n+ node nolink.js\n@om Roc! 3\n</code></pre></div>\n<p>Now obviously in my haste to throw this together and experiment i messed up my pointers somewhere (probably not taking alignment into account). But I see it! Roc performs the computation and spits out the result without a (compiled) platform in wasm! This also omits wasi-libc.a and the compiler_rt.a (though admittedly i do not know what this one does) from the linking process.</p>\n<p>So basically I forked and was experimenting with the nodejs-interop/wasm example. I used --no-link and --optimize to build an unlinked main.wasm. I have to run wasm-ld to populate the global memory and stack pointer as well as publicly expose the roc functions.</p>",
+        "id": 448185401,
+        "sender_full_name": "Ryan Barth",
+        "timestamp": 1719787863
+    }
+]

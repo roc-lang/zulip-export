@@ -1,0 +1,164 @@
+[
+    {
+        "content": "<p>Apologies for the long post, my main questions are in some bullet points below if TL;DR :).<br>\nI was working on something I probably shouldn't have, and at some point the type-foo is a certain code smell, but I can't help but try because it's there. Anyhow, the problem distills to this example.</p>\n<div class=\"codehilite\"><pre><span></span><code>Mod :: [].{\n    # Commented out type sig (for now)\n    # f1 : List(U32) -&gt; List(U64)\n    f1 = |l| {\n        l.map(|i| U32.to_u64(i))\n    }\n    f2 = |l| {\n        l.map(|i| U32.to_u128(i))\n    }\n\n    g = |l| {\n        a1 = f1(l)\n        a2 = f2(l)  # -- Error --\n\n        0 # (To give a return val)\n    }\n}\n</code></pre></div>\n<p>With this confusing error message about <code>a2 = f2(l)</code> that appears to show a failed unification between two ostensibly equal types:</p>\n<div class=\"codehilite\"><pre><span></span><code>This argument has the type:\n\n    a where [a.map : a, (U32 -&gt; U64) -&gt; _ret]\n\nBut main.Mod.f2 needs the first argument to be:\n\n    a where [a.map : a, (U32 -&gt; U64) -&gt; _ret]\n</code></pre></div>\n<p>That message isn't telling me what's wrong , but I can kind of see that we are passing the same <code>l</code> and using the same underlying <code>map</code> method, but using it in a different way (giving U128 or U64). As soon as there is the annotation that narrows it to, e.g., a list, the error disappears.</p>\n<p>I am guessing that this is something to do with both/either rank-2 polymorphism (I think it would need existential quantifiers? Universal?) or higher-kinded types (something that holds an <code>a</code> that can map it to a <code>b</code>).</p>\n<p>What surprised me though, is how such a simple example can trigger it. I know rank-2 is off the table, but this means that I can't pass a polymorphic method of a generic module down the call stack and use it with different types, at least without first explicitly narrowing it. The consequence is that any library that uses different instantiations of user provided types (e.g., custom containers) will be limited?</p>\n<p>I guess what I'm wondering is </p>\n<ul>\n<li>Could that error message be made more clear?</li>\n<li>Is this a rank-1 limitation as I have understood it (or something more interesting? I'm curious)</li>\n<li>Would it be possible to have slightly more flexibility by delaying the specialisation of a generic member function included in a where-constraint until its use cases separately? I.e., the first l.map(...) is a different specialisation to the second l.map(...). Specifically, can the general non-receiver type parameters be preserved, rather than pinned on first use?</li>\n</ul>\n<p>And also a thought that structural typing and static dispatch appears at first to be incredibly flexible, until you bounce against the underlying rank-1 HM inference.</p>\n<hr>\n<p>The concrete (if ill-advisable) use-case I have right now is a little utility library for some sqlite queries in a project database. I can define each query relative to 'the receiver whose associated module  defines query_many!', but I cannot use these helpers together without first providing the concrete basic-cli.Sqlite module, because the output type of query_many! varies with the decoder you provide, but the generic query_many! has already specialised to its first use.</p>\n<p>I should really change this to be a module of an application, and have the application be the entry point to the scripts, but I think the questions above still stand.</p>\n<div class=\"codehilite\"><pre><span></span><code>## Planning stage of a reconciler. Determines the flow stages that need to\n## be executed next.\n# plan! : Query(sqlite, path) =&gt; List(a)\n    #   where [\n    # ...\n    #       sqlite.query_many! : { path : path, query : Str, bindings : List({ name : Str, value : [Null, Real(F64), Integer(I64), String(Str), Bytes(List(U8))] }), rows : (cols -&gt; (stmt =&gt; Try(row, derr))) } =&gt; Try(List(row), err),\n    #   ]\nplan! = |q| {\n  # jobs referred to by I64 ids\n  jobs = Query.Analyses.analyses_lacking_jobs_of_stage!(q, { experiment_id: 1, stage: &quot;A&quot;, replica: 0, deps: [] })\n\n  # batches referred to by string names\n  batches = Query.Batches.batches_to_poll!(q, 5) # &lt;-- Errors\n  # Error : same as above essentially (reported types that look the same can&#39;t unify)\n  # but I&#39;m guessing it&#39;s because the second underlying `query_many!` returns and uses\n  # decoders for Str not I64\n}\n\n# If I used this in application code not a library, it would be ok. The problem\n# is that the module handle `q` is used under-the-hood for `query_many!`, returning\n# different types, but is pinned after its first use to only work with I64.\n# If I specify a `sqlite.query_many!` for some *generic* output decoder type (paramaterised\n# by `row`) to a where constraint of plan!, I get an error saying ~\n# It has the type (... decoder: I64 ...) but you are trying to use it as type (... decoder: row ...)\n</code></pre></div>",
+        "id": 619507584,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1787827706
+    },
+    {
+        "content": "<p>I think the error message is just wrong <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 619680164,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787877875
+    },
+    {
+        "content": "<p>it should say that <code>main.Mod.f2</code> needs the <code>map</code> to do <code>U32 -&gt; U128</code> because that function returns <code>U32.to_u128</code>, which means that <code>map</code> function's return type should be <code>U128</code> - but the error message claims it's <code>U64</code></p>",
+        "id": 619680338,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787878006
+    },
+    {
+        "content": "<p>so maybe the error message is printing the same type twice - <span class=\"user-mention\" data-user-id=\"820027\">@Jonathan</span> would you mind opening a GitHub issue for this?</p>",
+        "id": 619680386,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787878041
+    },
+    {
+        "content": "<p>Sure, can do - I think it's wrong too. But isn't the underlying reason for the message because <code>map</code> specialises on first use to something that accepts X, but then the second use of it tries it with Y?</p>",
+        "id": 619736067,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1787905170
+    },
+    {
+        "content": "<p>it's nothing special - just that it's saying \"this type has a <code>map</code> function with shape A\" and also \"that same type has a <code>map</code> function with shape B\" and A and B are incompatible, so it's a type mismatch <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 619784690,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787920144
+    },
+    {
+        "content": "<p>the same type can't possibly have a <code>map</code> function with two different incompatible types, which is what this code is asking for</p>",
+        "id": 619784884,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787920186
+    },
+    {
+        "content": "<p>But when it is annotated as a list, there is no error and it satisfies both. I.e., there is a type that can satisfy both, it just requires map to be polymorphic and have separate instantiations for different type parameters?</p>",
+        "id": 619786782,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1787920717
+    },
+    {
+        "content": "<p>if you add an annotation the type checker accepts it? What's the annotation? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 619787393,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787920890
+    },
+    {
+        "content": "<p>Yeh it's just the one I left commented out at the top of the first code block.</p>",
+        "id": 619787565,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1787920952
+    },
+    {
+        "content": "<p>It pins l to be a list of U32. Then both f1 and f2 can work. But I think they can't when l is \"something with a map\".</p>",
+        "id": 619787767,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1787921008
+    },
+    {
+        "content": "<p>oh I see, hm</p>",
+        "id": 619790426,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787921742
+    },
+    {
+        "content": "<p>ok I think I misunderstood the original error</p>",
+        "id": 619790596,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787921783
+    },
+    {
+        "content": "<p>ok, I may regret this later but I want to try it out <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> </p>\n<p>I'm gonna try out having this infer as:</p>\n<div class=\"codehilite\"><pre><span></span><code>g : a -&gt; U8 where [\n    a.map : a, (U32 -&gt; U64) -&gt; _b,\n    a.map : a, (U32 -&gt; U128) -&gt; _c,\n]\n</code></pre></div>\n<p>so basically, what this is saying is:</p>\n<p>\"<code>a</code> must have a <code>map</code> method which is compatible with <strong>both</strong> of these types\"</p>",
+        "id": 619824989,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787930603
+    },
+    {
+        "content": "<p>in other words, \"it's generic somehow but we don't know exactly how it's generic yet\"</p>",
+        "id": 619825576,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787930758
+    },
+    {
+        "content": "<p>so without this, we don't have principal type inference - because you can (as demonstrated at the top of this thread) add a type annotation which increases flexibility, which should not be possible if we are inferring principal types</p>",
+        "id": 619842472,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787935452
+    },
+    {
+        "content": "<p>so this change means that the above should Just Work</p>",
+        "id": 619842482,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787935458
+    },
+    {
+        "content": "<p>I think it could potentially also lead to nicer error messages, because if you infer multiple conflicting constraints, we can remember where both of the constraints came from, so we can say like \"we have Constraint A from this usage over here, and we have Constraint B from this other usage over here, and one of these is incompatible with how you're using it in this place\"</p>",
+        "id": 619843199,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787935677
+    },
+    {
+        "content": "<p>downsides:</p>\n<ul>\n<li>it becomes possible to write a method constraint in a new way. I believe that in general, these offer less-nice ways to express your constraints than what's currently available; that is, I think there should always be a way to express a valid constraint more concisely than this, so I don't know why anyone would use this on purpose (as opposed to type inference inferring them because it doesn't know a better way to infer them, and then you can make it nicer with a more concise annotation)</li>\n<li>in theory it can lead to type constraints accumulating in un-annotated programs in a way that could make performance worse. I am not worried about this in practice, because it has taken this long to find a single example of <em>two</em> constraints on the same method coming up, so I suspect this will be one of those things where in theory it can be slow, but in practice nobody would use it in a way where it would be a problem in practice. (This is especially true because as soon as type annotations are in the mix, this no longer even comes up.)</li>\n</ul>",
+        "id": 619843700,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787935813
+    },
+    {
+        "content": "<p>there's also arguably a \"learning curve\" downside - but again, I don't think this will come up much in practice, and I wouldn't be surprised if most Roc programmers never even run into this, and are eventually surprised the first time it comes up</p>",
+        "id": 619843921,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787935881
+    },
+    {
+        "content": "<p>Yeh the way it came up was kind of cursed, but then it distilled to something that was actually quite simple. I imagined something that needed to be generic over a container, but I think it's uncommon to do multiple different things with the same generic variable.</p>\n<p>Anyhow, that seems like quite a clean solution and kind of a sneaky end-run around rank-2 I think by not having to say \"this works for all <code>a</code>s\" and instead \"it needs to work for these specific <code>a</code>s\". I'm sure there'll be downstream effects so it'll be interesting to see how it plays out.</p>",
+        "id": 619923455,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1787968457
+    },
+    {
+        "content": "<p>Thanks for taking a look and considering it <span aria-label=\"octopus\" class=\"emoji emoji-1f419\" role=\"img\" title=\"octopus\">:octopus:</span></p>",
+        "id": 619923505,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1787968510
+    },
+    {
+        "content": "<p>thanks for the detailed report! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 619925657,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1787969575
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"820027\">@Jonathan</span> can you try on current <code>main</code>? <a href=\"https://github.com/roc-lang/roc/pull/10984\">This pr</a> implemented the fix I described above, so the original program should work now!</p>",
+        "id": 620053080,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1788055367
+    },
+    {
+        "content": "<p>Will do! It might be a day or so until I'm back at the 'puter though. Quite excited!</p>",
+        "id": 620094270,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1788084858
+    },
+    {
+        "content": "<p>Ok! Seems to work for the simple case with two different uses of map on a generic argument and inferred types, or with the function annotated as (<code>f1 : a, (U32 -&gt; U64) -&gt; b</code> etc.).</p>\n<p>Outside of something more hairy that I haven't yet managed to minimise, I have two problems so far with variations of simple example above:</p>\n<p>&lt;removed here because I made a mistake and it was getting confusing&gt;</p>\n<p>Second problem is you can't annotate the inferred type conjunction manually. The following errors:</p>\n<div class=\"codehilite\"><pre><span></span><code>    # The below type was copied from the LSP hover\n    g : a -&gt; b where [a.map : a, (U32 -&gt; U128) -&gt; b, a.map : a, (U32 -&gt; U64) -&gt; _ret]\n                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\n    g = |l| {\n        a1 = f1(l)\n        a2 = f2(l)\n        a2\n    }\n</code></pre></div>\n<p>The error highlights the second map constraint in g's signature:</p>\n<div class=\"codehilite\"><pre><span></span><code>It has the type:\na, (U32 -&gt; U64) -&gt; _ret where [a.map : a, (U32 -&gt; U128) -&gt; _ret]\nBut you are trying to use it as:\na, (U32 -&gt; U128) -&gt; _ret where [a.map : a, (U32 -&gt; U128) -&gt; _ret2]\n</code></pre></div>",
+        "id": 620593686,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1788254922
+    },
+    {
+        "content": "<p>Sorry Richard, I was editing the prior comment because I thought I'd made a mistake, and indirectly made a new mistake. I've removed it for clarity from before and I'll add it below.</p>\n<ul>\n<li>You can't manually annotate the function with the  separate uses (<code>g</code>) with the same conjunction type as is now inferred by the compiler (see prior message)</li>\n<li>Annotating the separate uses (<code>f1</code> or <code>f2</code>) with the same type as inferred by the compiler leads to the following error</li>\n</ul>\n<div class=\"codehilite\"><pre><span></span><code>    f1 : a -&gt; b where [a.map : a, (U32 -&gt; U64) -&gt; b]\n    f1 = |l| {\n        l.map(|i| U32.to_u64(i))\n    }\n\n    f2 : c -&gt; d where [c.map : c, (U32 -&gt; U128) -&gt; d]\n    f2 = |l| {\n        l.map(|i| U32.to_u128(i))\n    }\n\n    g = |l| {\n        a1 = f1(l)\n        a2 = f2(l)\n        a2\n    }\n</code></pre></div>\n<p>Error</p>\n<div class=\"codehilite\"><pre><span></span><code>The first argument being passed to this function has the wrong type.\n\na2 = f2(l)\n        ^\n\nThe type involved is:\n\n    a where [a.map : a, (U32 -&gt; U64) -&gt; b]\n\nThe difference is inside this type, but it is not visible in this display.\n</code></pre></div>",
+        "id": 620642759,
+        "sender_full_name": "Jonathan",
+        "timestamp": 1788265917
+    }
+]

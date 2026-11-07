@@ -1,0 +1,122 @@
+[
+    {
+        "content": "<p>After upgrading to a newer rust version (<a href=\"https://github.com/roc-lang/roc/pull/6644\">PR#6644</a>) <code>gen_str::str_to_u128</code> is now segfaulting on x64 linux. It doesn't fail on macos x64, there it gets a wrong answer:</p>\n<div class=\"codehilite\"><pre><span></span><code>LLVM test failed\n  left: RocOk(ManuallyDrop { value: 1 })\n right: RocOk(ManuallyDrop { value: 2593737180395252978950973914349568 })\n</code></pre></div>\n<p>These also go wrong on macos x64:</p>\n<div class=\"codehilite\"><pre><span></span><code>SIGSEGV [   1.594s] test_gen::test_gen gen_num::add_checked_u128\nSIGSEGV [   1.560s] test_gen::test_gen gen_num::mul_checked_u128\nSIGSEGV [   1.489s] test_gen::test_gen gen_num::sub_checked_u128\nSIGABRT [   1.294s] test_gen::test_gen gen_str::str_to_i128\n</code></pre></div>\n<p>I've got the <a href=\"/user_uploads/22008/BuK8UuNIMNhB5vE09234Wc-z/str_to_u128.ll\">llvm IR</a> but the <code>roc_builtins.str.to_int.u128</code> function is pretty big.</p>\n<p>The valgrind errors are:</p>\n<ul>\n<li>Use of uninitialised value of size 8</li>\n<li>Invalid read of size 8</li>\n<li>Address 0x1 is not stack'd, malloc'd or (recently) free'd</li>\n<li>Process terminating with default action of signal 11 (SIGSEGV): dumping core</li>\n<li>Access not within mapped region at address 0x1</li>\n</ul>\n<p>I plan on stepping though the macos assembly tomorrow. Any other suggestions/tips?</p>",
+        "id": 433579520,
+        "sender_full_name": "Anton",
+        "timestamp": 1713291048
+    },
+    {
+        "content": "<p>did u128 alignment update already?</p>",
+        "id": 433580290,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1713291375
+    },
+    {
+        "content": "<p>Oh yeah, I think rust was fixing it on frontend first.</p>",
+        "id": 433585301,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713293469
+    },
+    {
+        "content": "<p>With some backend workaround</p>",
+        "id": 433585324,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713293482
+    },
+    {
+        "content": "<p>Then when llvm is fixed update to that</p>",
+        "id": 433585341,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713293491
+    },
+    {
+        "content": "<p>At least if I recall correctly, so that would make sense</p>",
+        "id": 433585367,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713293503
+    },
+    {
+        "content": "<p>Alignment is still the same, I checked with <code>std::mem::align_of::&lt;u128&gt;()</code> <a href=\"https://github.com/rust-lang/rust/issues/54341#issuecomment-2059486433\">it will change with 1.78</a>.</p>",
+        "id": 433759476,
+        "sender_full_name": "Anton",
+        "timestamp": 1713361202
+    },
+    {
+        "content": "<p>Is our internal <code>U128</code> the same size and alignment still?</p>",
+        "id": 433778469,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713363540
+    },
+    {
+        "content": "<p>How can I check that?</p>",
+        "id": 433782582,
+        "sender_full_name": "Anton",
+        "timestamp": 1713364017
+    },
+    {
+        "content": "<p>Rust 1.75 is the first one to segfault on <code>str_to_u128</code> but there is no difference compared to the LLVM IR using rust 1.74</p>",
+        "id": 433799701,
+        "sender_full_name": "Anton",
+        "timestamp": 1713365920
+    },
+    {
+        "content": "<p>gdb is not working well with the dynamic invocation in <code>try_run_lib_function</code>, do we have an easy way to turn that into a standalone binary? I also tried <code>Str.toU128</code> with several platforms but none of them segfaulted.</p>",
+        "id": 433846621,
+        "sender_full_name": "Anton",
+        "timestamp": 1713377375
+    },
+    {
+        "content": "<p>Just including a dbg here fixes the issue <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> </p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[allow(dead_code)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">try_run_lib_function</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">(</span>\n<span class=\"w\">    </span><span class=\"n\">main_fn_name</span>: <span class=\"kp\">&amp;</span><span class=\"kt\">str</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">lib</span>: <span class=\"kp\">&amp;</span><span class=\"nc\">libloading</span>::<span class=\"n\">Library</span><span class=\"p\">,</span>\n<span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nb\">Result</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nb\">String</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">CrashTag</span><span class=\"p\">)</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"fm\">dbg!</span><span class=\"p\">(</span><span class=\"n\">main_fn_name</span><span class=\"p\">);</span>\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">main</span>: <span class=\"nc\">libloading</span>::<span class=\"n\">Symbol</span><span class=\"o\">&lt;</span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"k\">fn</span><span class=\"p\">(</span><span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">RocCallResult</span><span class=\"o\">&lt;</span><span class=\"n\">T</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"o\">&gt;</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">lib</span>\n<span class=\"w\">            </span><span class=\"p\">.</span><span class=\"n\">get</span><span class=\"p\">(</span><span class=\"n\">main_fn_name</span><span class=\"p\">.</span><span class=\"n\">as_bytes</span><span class=\"p\">())</span>\n<span class=\"w\">            </span><span class=\"p\">.</span><span class=\"n\">ok</span><span class=\"p\">()</span>\n<span class=\"w\">            </span><span class=\"p\">.</span><span class=\"n\">ok_or</span><span class=\"p\">(</span><span class=\"fm\">format!</span><span class=\"p\">(</span><span class=\"s\">\"Unable to JIT compile `{main_fn_name}`\"</span><span class=\"p\">))</span>\n<span class=\"w\">            </span><span class=\"p\">.</span><span class=\"n\">expect</span><span class=\"p\">(</span><span class=\"s\">\"errored\"</span><span class=\"p\">);</span>\n\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">main_result</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">MaybeUninit</span>::<span class=\"n\">uninit</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"n\">main</span><span class=\"p\">(</span><span class=\"n\">main_result</span><span class=\"p\">.</span><span class=\"n\">as_mut_ptr</span><span class=\"p\">());</span>\n\n<span class=\"w\">        </span><span class=\"n\">main_result</span><span class=\"p\">.</span><span class=\"n\">assume_init</span><span class=\"p\">().</span><span class=\"n\">into</span><span class=\"p\">()</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 434389134,
+        "sender_full_name": "Anton",
+        "timestamp": 1713541512
+    },
+    {
+        "content": "<blockquote>\n<p>Is our internal <code>U128</code> the same size and alignment still?</p>\n</blockquote>\n<p>How can I check that <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span>?</p>",
+        "id": 434394447,
+        "sender_full_name": "Anton",
+        "timestamp": 1713543182
+    },
+    {
+        "content": "<p>Should be the same way you checked <code>u128</code>. <code>std::mem::align_of</code> and <code>size_of</code>. Just in the <code>U128</code> defined in <code>roc_std</code></p>",
+        "id": 434403782,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713546651
+    },
+    {
+        "content": "<p>They alignment of U128 has not changed but I do think I found the bug:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[test]</span>\n<span class=\"cp\">#[cfg(feature = </span><span class=\"s\">\"gen-llvm\"</span><span class=\"cp\">)]</span>\n<span class=\"k\">fn</span> <span class=\"nf\">str_to_u128</span><span class=\"p\">()</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">assert_evals_to</span><span class=\"o\">!</span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"n\">indoc</span><span class=\"o\">!</span><span class=\"p\">(</span>\n<span class=\"w\">            </span><span class=\"s\">r#\"</span>\n<span class=\"s\">            Str.toU128 \"1\"</span>\n<span class=\"s\">            \"#</span>\n<span class=\"w\">        </span><span class=\"p\">),</span>\n<span class=\"w\">        </span><span class=\"n\">RocResult</span>::<span class=\"n\">ok</span><span class=\"p\">(</span><span class=\"mi\">1</span><span class=\"p\">),</span>\n<span class=\"w\">        </span><span class=\"n\">RocResult</span><span class=\"o\">&lt;</span><span class=\"kt\">u128</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">()</span><span class=\"o\">&gt;</span>\n<span class=\"w\">    </span><span class=\"p\">);</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>I believe <code>RocResult&lt;u128, ()&gt;</code> should be <code>RocResult&lt;roc_std::U128, ()&gt;</code>.<br>\nNow it also makes sense why it failed only in the gen tests and nowhere else.</p>",
+        "id": 434410692,
+        "sender_full_name": "Anton",
+        "timestamp": 1713549812
+    },
+    {
+        "content": "<p>Swapping those out leads to (probably solvable) rust compile errors, but I do think this mismatch is the cause of the segfault.</p>",
+        "id": 434412321,
+        "sender_full_name": "Anton",
+        "timestamp": 1713550484
+    },
+    {
+        "content": "<p>Thanks for the vital nudge <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> <span aria-label=\"heart\" class=\"emoji emoji-2764\" role=\"img\" title=\"heart\">:heart:</span></p>",
+        "id": 434412415,
+        "sender_full_name": "Anton",
+        "timestamp": 1713550533
+    },
+    {
+        "content": "<p>And thanks to <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> for providing the seed of the nudge :) <span aria-label=\"heart\" class=\"emoji emoji-2764\" role=\"img\" title=\"heart\">:heart:</span></p>",
+        "id": 434413304,
+        "sender_full_name": "Anton",
+        "timestamp": 1713550921
+    },
+    {
+        "content": "<p>I guess it was working before by chance with alignment happening to be correct when allocating.</p>",
+        "id": 434414258,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713551355
+    },
+    {
+        "content": "<p>This new release must of changed that cause it isn't guaranteed anywhere.</p>",
+        "id": 434414325,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713551395
+    }
+]

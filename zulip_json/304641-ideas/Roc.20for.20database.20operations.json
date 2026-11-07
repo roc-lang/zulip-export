@@ -1,0 +1,296 @@
+[
+    {
+        "content": "<p>So, I have this weird idea for a uniquely-shaped datastore that won't leave me alone, and it would actually be a pretty good fit for Roc.</p>\n<p>The tl;dr is that it's an Event Sourcing system (\"The log is the DB, everything else is a cache\") where what's in the log are actions. The actions in the log are an action name, a version number of the action implementation, and a JSON blob of parameters. To run the action, you use the name and version to get a WASM blob, and you execute it.</p>\n<p>So actions are a deterministic pure function that take as inputs the current object state and parameters, and return the new object state.</p>\n<p>How hard would it be to do that with Roc, and would it be a good fit? The idea is that actions could be (re)played against a local version of the objects on a server, on a device, etc. (Hence the WASM).</p>\n<p>Easy mode is \"an object is a JSON blob representing a single entity\", harder mode is \"an object is a JSON blob representing a collection of related objects\" and galaxy-brain mode is \"an object is a SQLite database\". So it would be nice if the \"platform\" had \"run this SQL query and give me the results\" tasks.</p>\n<p>Like I said, weird, but the idea isn't leaving me alone until I elucidate it to myself.</p>\n<p>The thing I'm unclear on: would WASM/WASI typically constitute the platform for Roc, or would my app be the platform and the Roc code just happen to be WASM? I <em>think</em> I want the latter, so that eg. SQL queries or actions can be provided as tasks from my app(s), be they Go or Java or Swift, etc.</p>\n<p>I guess I could keep it all within WASM by using WASM-compiled SQLite, but it would be nice if there were a clean easy API to use Roc for plugins via WASM, and just implement the Tasks you wanted to add in as part of the platform, the way you can link in a set of external functions to a WASM execution environment.</p>\n<p>Was that all vague/crazy enough? <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 447899232,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719621572
+    },
+    {
+        "content": "<p>I think it might help you to mock out an app and explore this idea from a users perspective. Like imagine if this thing existed and was all there. You are a user of this new datastore. Write an app or something that uses it.</p>",
+        "id": 447901633,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719623548
+    },
+    {
+        "content": "<blockquote>\n<p>I guess I could keep it all within WASM by using WASM-compiled SQLite</p>\n</blockquote>\n<p>You pay a performance cost moving data across the WASM boundary if you have to encode everything into numbers.</p>",
+        "id": 447902548,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719624310
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/304641-ideas/topic/Roc.20for.20database.20operations/near/447901633\">said</a>:</p>\n<blockquote>\n<p>I think it might help you to mock out an app and explore this idea from a users perspective. Like imagine if this thing existed and was all there. You are a user of this new datastore. Write an app or something that uses it.</p>\n</blockquote>\n<p>It's actually not a terribly convenient datastore to use. It's trying to make the same bargain that Google AppEngine did back in the day: warp your storage needs into this weird shape, and I promise it'll have the characteristics you want later: for AppEngine, horizontal scalability, for this scheme, an object store with automatic local caching where the store can be easily and safely replicated, and the \"write owner\" failed over in a Disaster Recovery situation.</p>",
+        "id": 447902805,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719624493
+    },
+    {
+        "content": "<p>To write, you traverse the network, possibly to the other coast, to ask the current \"write owner\" to enqueue an action: the change is real when it appears in the log. To read, you run a local cache server that follows the log and creates a local version of the data. Or you could subscribe to changes filtered down to a set of objects you care about and keep the cache yourself.</p>",
+        "id": 447902984,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719624654
+    },
+    {
+        "content": "<h1>The Zellyn Object Store (ZellosDB)</h1>\n<p>This is an architecture for a distributed object store, which provides reliable offline actions and seamless synchronisation across a network. </p>\n<p><strong>Zellos Library</strong> - the core component of ZellosDB is the library. This is compiled to native machine code and provides all of the core functionality for the system. It is responsible for managing the object data store (local copies of the log and caches), execution of actions to manipulate objects, synchronising with other nodes in the network e.g. negotiation of “write owner”, uploading new actions to nodes across the network. </p>\n<p><strong>Zellos CLI</strong> - the ZellosDB CLI is used to interact with ZellosDB. It provides key functionality to manage the network, like query for data manually, inspecting available actions, and managing logs. </p>\n<p><strong>Zellos API</strong> - the ZellosDB API is a roc platform, which describes a DSL for writing “actions” to work with objects. Each action is a roc app (plugin) which can manipulate objects in the data store. When an end client queries the ZellosDB object store, they will run an action and (optionally) provide data which can be processed by the roc plugin, and used to manipulate the objects in the store, before returning a result.</p>\n<p><strong>Zellos Server</strong> - the ZellosDB Server is a standalone service which provides primary storage for the object store, and redundancy in the event another server is unavailable. In normal operation each end device in the network will be running actions on a ZellosDB Server. </p>\n<p><strong>Zellos Client</strong> - a ZellosDB Client is an end device or application which is interacting with the distributed object store. It may be a Swift, Kotlin, Go or another application or server which uses the Library to interact with the network. The most common method of using ZellosDB Library is to natively link it with the application. It is also possible for a client to use the CLI or run a Server in another process if required. A Client will store some objects locally, those they need to work with, and can run actions locally. </p>\n<p><strong>Zellos Action</strong> - A ZellosDB action is a Roc application (plugin) which is able to manipulate objects in the store, before returning a result. When loading a new action into the store, it is first compiled to WASM bytecode before being stored in the network. Actions are versioned. When required to be executed, a WASM execution engine running in a server (or possibly an offline client) will run the WASM bytecode to perform the desired actions on the store. Note – while the action is WASM bytecode, it is not expected that these actions will be written in any languages other than Roc.</p>",
+        "id": 447909087,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719629006
+    },
+    {
+        "content": "<p>lol, you have no idea how distracting it is to try to read text littered with the first four letters of my (uncommon) first name in all caps <span aria-label=\"joy\" class=\"emoji emoji-1f602\" role=\"img\" title=\"joy\">:joy:</span></p>",
+        "id": 447909311,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719629170
+    },
+    {
+        "content": "<p>I think the main difference between that description and the fuzzy idea in my mind is probably that I'd been thinking of using something like Kafka for transporting streams of actions around, rather than requiring native code for interacting with the network.</p>",
+        "id": 447909936,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719629479
+    },
+    {
+        "content": "<p>I forgot to mention, I think this is a great fit for roc. Also, I would imagine Zig or Rust would be a good choice to build this in.</p>",
+        "id": 447910128,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719629624
+    },
+    {
+        "content": "<p>I think perhaps an interesting subset/alternative of the idea could be: \"What if we take CRDTs the way the local-first/inkandswitch folks are using them, but _also_ allow small Roc programs that manipulate the data to travel around the network too?\" Is there a way to dynamically update the set of operations you can perform on a CRDT and ship those new actions around? Roc would be ideal for that kind of sandboxed action code. I think the big problem would be that it's very easy to break the CRDT properties with arbitrary code, but it might be interesting to only give the Roc platform CRDT-safe primitives.</p>",
+        "id": 447910222,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719629704
+    },
+    {
+        "content": "<p>Ok, I think something is crystallizing in my mind. It's not (necessarily) that you want Roc compiled to WASM.</p>\n<p>It's that the easy and safe sandboxing ability of Roc platforms mean that in some ways Roc is asking to be a viable alternative to use-cases where WASM was being used for sandboxing. The interesting thing there is that the mode of distribution of WASM is \"compiled WASM blob\", but the mode of distribution for Roc in the same use-case is a text Roc program that a user still needs to compile. (I've heard Richard describe the \"I feel perfectly safe downloading and running this Roc script\" use-case a couple of times.)</p>\n<p>In the script case, there's an assumption of a shared \"safe script execution platform\", and whatever machinery is there to let you \"run\" a Roc script stored as text — presumably, behind the scenes, it's compiling it against a defined platform and then executing it.</p>\n<p>If I imagine using Roc as a language to customize an editor, say, or writing code in a game engine, I think the same implicit platform plus ability to think of the Roc program as text rather than compiled executable would be useful too.</p>",
+        "id": 447911343,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719630260
+    },
+    {
+        "content": "<p>For reference. The roc compiler itself is running in the browser for the web REPL. It compiles roc source code to WASM and then runs that in the browser.</p>",
+        "id": 447911582,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719630408
+    },
+    {
+        "content": "<p>I'm low-key hopeful that working on Zed will push Richard to introduce a modality to Roc where it can be used to write textual editor-customization scripts the way Emacs folks do with Elisp, where the platform and compiler are embedded in the host application and mostly invisible (I guess except for error messages <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span>)</p>",
+        "id": 447911597,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719630422
+    },
+    {
+        "content": "<p>So you could share the Roc plugins around in source code and run locally on end devices. Or compile to WASM end then execute the bytecode.</p>",
+        "id": 447911657,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719630445
+    },
+    {
+        "content": "<p>Fair. So it's 100% feasible to ship compiler + platform as WASM, and then consume text \"scripts\"… nice.</p>",
+        "id": 447911674,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719630455
+    },
+    {
+        "content": "<p>Yeah, or ship the compiler as native. It's not super large -- particularly if you are ok using a dev backend -- like WASM which is pretty mature.</p>",
+        "id": 447911905,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719630524
+    },
+    {
+        "content": "<p>At least in my original conception, the actions are already-compiled WASM programs, so you just need to grab one of the many off-the-shelf WASM execution engines available for your platform/language. So actions could be written in any language that compiles to WASM. Roc just seemed like a nice fit because of the pure function nature of the actions: (current state, parameters) → new state | error.</p>",
+        "id": 447912145,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719630659
+    },
+    {
+        "content": "<p>But I also kinda love the idea of small Roc programs wandering around the network <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 447912178,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719630687
+    },
+    {
+        "content": "<p>I would go with \"small Roc programs <em>flying</em> around the network\" ... we're trying to stick with bird themes <img alt=\":roc:\" class=\"emoji\" src=\"https://zulip-avatars.s3.amazonaws.com/22008/emoji/images/18217.png\" title=\"roc\"></p>",
+        "id": 447912533,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719630925
+    },
+    {
+        "content": "<p>also suitable - \"small Roc programs <em>hunting</em> for objects in the network\"</p>",
+        "id": 447912631,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1719630976
+    },
+    {
+        "content": "<p>I think probably ever since I messed around with MUDs/MOOs back in the day, where \"portals\" between MUDs were a concept, I've wanted objects/programs to be able to wander afar across the network, do things, and then later return with the news…</p>",
+        "id": 447912759,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1719631079
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"619849\">@Zellyn Hunter</span> I literally having been working on this topic for over 1 year</p>",
+        "id": 449021309,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078499
+    },
+    {
+        "content": "<p>More context</p>",
+        "id": 449021349,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078513
+    },
+    {
+        "content": "<p>I am working on <a href=\"http://blowater.app\">blowater.app</a>, it's a slack alternative based on <a href=\"https://nostr.com/\">https://nostr.com/</a></p>",
+        "id": 449021424,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078544
+    },
+    {
+        "content": "<p>nostr is basically a event-sourcing protocol for social media</p>",
+        "id": 449021471,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078561
+    },
+    {
+        "content": "<p>each event is cryptographically signed so that we can verify data validity locally in the client and don't rely on any central set of servers</p>",
+        "id": 449021602,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078598
+    },
+    {
+        "content": "<p>Servers in Nostr are called relays, they basically store the log of all events</p>",
+        "id": 449021650,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078616
+    },
+    {
+        "content": "<p>Currently, we use a JSON request to query the relay, which is a bad way</p>",
+        "id": 449021714,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078643
+    },
+    {
+        "content": "<p>not precise, over fetching</p>",
+        "id": 449021743,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078653
+    },
+    {
+        "content": "<p>an example looks like</p>\n<div class=\"codehilite\"><pre><span></span><code>{&quot;limit&quot;:2,&quot;kinds&quot;:[0], &quot;authors&quot;: [&quot;the id&quot;]},\n</code></pre></div>\n<p>here I am querying 2 events of kind 0 from a certain author</p>",
+        "id": 449022010,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078726
+    },
+    {
+        "content": "<p>I am thinking about embedding a simple language in the relay so that the client can have precise queries.</p>",
+        "id": 449022111,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078764
+    },
+    {
+        "content": "<p>SQL is not the option because it is mutable as hell</p>",
+        "id": 449022170,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078783
+    },
+    {
+        "content": "<p>also, not all relays are implemented in SQL databases</p>",
+        "id": 449022299,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078813
+    },
+    {
+        "content": "<p>Ideally, I want a simple map/reduce kind of semantics</p>",
+        "id": 449022373,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078831
+    },
+    {
+        "content": "<p>I believe Roc will be an amazing choice for it</p>",
+        "id": 449022466,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078848
+    },
+    {
+        "content": "<p>I would like to send Roc source from the client to the server and the server can Just In-time Compile it and run</p>",
+        "id": 449022726,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078909
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span>  <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span>  what are the technical challenges to implement such a system at current stage?</p>",
+        "id": 449023023,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078947
+    },
+    {
+        "content": "<p>This project is not a hobbyst project and many developers and I have real incentives to do so.</p>",
+        "id": 449023344,
+        "sender_full_name": "Albert",
+        "timestamp": 1720078991
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/22008/0pXJCjDgk0_p9rGkBxPVQCTJ/image.png\">image.png</a><br>\ncurrently, the client always over fetch and store all events locally in browser's indexed DB</p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/0pXJCjDgk0_p9rGkBxPVQCTJ/image.png\" title=\"image.png\"><img src=\"/user_uploads/22008/0pXJCjDgk0_p9rGkBxPVQCTJ/image.png\"></a></div>",
+        "id": 449023989,
+        "sender_full_name": "Albert",
+        "timestamp": 1720079089
+    },
+    {
+        "content": "<p>200K events are crazy amount to store locally</p>",
+        "id": 449024138,
+        "sender_full_name": "Albert",
+        "timestamp": 1720079114
+    },
+    {
+        "content": "<p>but that's the only way to make a purely event driven client fast because we don't have the ability to precisely query the server. Have to over fetch.</p>",
+        "id": 449024355,
+        "sender_full_name": "Albert",
+        "timestamp": 1720079153
+    },
+    {
+        "content": "<p>The good side is that even if the server goes down, the client can still work with historical data and the user can browser</p>",
+        "id": 449024619,
+        "sender_full_name": "Albert",
+        "timestamp": 1720079198
+    },
+    {
+        "content": "<p>Effectively, with a local-first approach, we turn the client into a true node/peer in this distributed &amp; decentralized system. The client is just a server with only 1 user's data and the server is just a client without UI</p>",
+        "id": 449024872,
+        "sender_full_name": "Albert",
+        "timestamp": 1720079253
+    },
+    {
+        "content": "<p>fwiw, SpacetimeDB is another database that (only) allows operations that have been registered before, using WASM blobs.</p>",
+        "id": 449069987,
+        "sender_full_name": "Zellyn Hunter",
+        "timestamp": 1720094143
+    },
+    {
+        "content": "<p>Oh yeah, they are the people who build that game</p>",
+        "id": 449118330,
+        "sender_full_name": "Albert",
+        "timestamp": 1720108182
+    },
+    {
+        "content": "<p>I saw it a while back</p>",
+        "id": 449118360,
+        "sender_full_name": "Albert",
+        "timestamp": 1720108190
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"669503\">Albert</span> <a href=\"#narrow/stream/304641-ideas/topic/Roc.20for.20database.20operations/near/449022726\">said</a>:</p>\n<blockquote>\n<p>I would like to send Roc source from the client to the server and the server can Just In-time Compile it and run</p>\n</blockquote>\n<p>I don't know if the compiler would be fast enough for this use case. Maybe it's ok if the queries don't vary much (outside of param values) and you can cache them?</p>",
+        "id": 449151301,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720120537
+    },
+    {
+        "content": "<p>Or yeah, you could send precompiled wasm binaries</p>",
+        "id": 449151495,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720120586
+    },
+    {
+        "content": "<p>One option to explore would be using the roc compiler with the WASM dev backend -- which I think is our most mature dev backend and also fast. Compile the source to WASM bytecode for your queries either ahead of time, or maybe just in time. The website has a version of the roc compiler which does this for the REPL. </p>\n<p>You could start experimenting by taking the REPL and feeding it \"queries\" and measure how fast that is perhaps? </p>\n<blockquote>\n<p>what are the technical challenges to implement such a system at current stage?</p>\n</blockquote>\n<p>Well, roc is still a Work in Progress... so theres plenty of known bugs and performance issues. Things are rapidly evolving (for the better) and the documentation on platform development has yet to be written (because that is still heavily WIP). </p>\n<p>From what I understand, roc could be a great fit (particularly in the long term), but there are a lot of open questions. I suggest you consider building a prototype and explore the technology risks, specifically with the intention of throwing it all away. </p>\n<p>I'm only a little bit selfish, as I would love to see this happen so we can find any critical issues for the plugin use-case while roc is still early in development. </p>\n<p>I've spoken to a few people who have very similar ideas in mind, so if you can do something in the open and are welcome to contributions, it could be beneficial for all. </p>\n<p><span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 449177025,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1720134541
+    }
+]

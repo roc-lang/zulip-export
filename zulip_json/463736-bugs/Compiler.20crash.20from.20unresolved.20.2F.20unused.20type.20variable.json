@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>Hey, I was just playing around with Abilities and found some crash when I have a unused value that is also still a type variable and not resolved to a concrete type:</p>\n<div class=\"codehilite\"><pre><span></span><code>app [main!] { pf: platform &quot;https://github.com/roc-lang/basic-cli/releases/download/0.20.0/X73hGh05nNTkDHU06FHC0YfFaQB1pimX7gncRcao5mU.tar.br&quot; }\n\nimport pf.Stdout\nimport pf.Arg exposing [Arg]\n\nExampleAbility implements\n    unpack : a -&gt; actualValue where a implements ExampleAbility\n\nStringWithAbility := Str implements [ExampleAbility { unpack: readString }]\nreadString : StringWithAbility -&gt; Str\nreadString = |@StringWithAbility txt| txt\n\nreadAbility : anyExampleAbility -&gt; b where anyExampleAbility implements ExampleAbility\nreadAbility = |strg| unpack(strg)\n\nmain! : List Arg =&gt; Result {} _\nmain! = |_args|\n    unpacked = readAbility(@StringWithAbility(&quot;test&quot;))\n    Stdout.line!(&quot;Hello !&quot;)\n</code></pre></div>\n<p>If I hover over <code>unpacked</code> it shows me <code>b</code> as the type. <br>\nThe compiler crashes with</p>\n<div class=\"codehilite\"><pre><span></span><code>thread &#39;main&#39; panicked at crates/compiler/mono/src/borrow.rs:361:34:\ninternal error: entered unreachable code:\n    No borrow signature for LambdaName { name: `#UserApp.readAbility`, niche: Niche(Captures([])) } layout.\n\n    Tip 1: This can happen when you call a function with fewer arguments than it expects.\n    Like `Arg.list!` instead of `Arg.list! {}`.\n    Tip 2: `roc check yourfile.roc` can sometimes give you a helpful error.\n\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n</code></pre></div>\n<p>As soon as I use the <code>unpacked</code> it is resolved to <code>Str</code> and no crash occurs.</p>",
+        "id": 541908425,
+        "sender_full_name": "Yannick",
+        "timestamp": 1759081743
+    },
+    {
+        "content": "<p>Interesting <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 541922014,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759097663
+    },
+    {
+        "content": "<p>My immediate thoughts:</p>\n<ol>\n<li>Abilities type check in some surprising ways. I would argue that your code shouldn't work at all (b should not be able to converted to Str), but abilities have some surprising flexibility related to late binding and likely some missing type checking</li>\n<li>The borrow signature error is likely due to b being an undefined type and that confusing the compiler unlike the concrete type Str.</li>\n</ol>",
+        "id": 541922117,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759097784
+    },
+    {
+        "content": "<p>I think your <code>actualValue</code> needs to be restricted.<br>\n Either, you need to make it <code>Str</code>, or you need to give it an ability to say what you can validly do with an <code>actualValue</code></p>",
+        "id": 541922155,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759097851
+    },
+    {
+        "content": "<p>Think of it like this. If I told you that I am going to give you something, but you have no idea what it would be, what valid actions can you make with what I give you.</p>\n<p>The answer is you can essentially do nothing cause you know nothing about what I am giving you.</p>\n<p>That is the case here with this ability. You are saying that you are return an unknown type variable with no specification. As such, you should not be able to do anything with it. It is actually likely a big that it can become a <code>Str</code> cause there is no guarantee of that.</p>\n<p>The error you should be getting is something like</p>\n<blockquote>\n<p>Type mismatch: Your function requires a <code>Str</code> but you were given a <code>actualValue</code>. <code>actualValue</code> can not be restricted to be a <code>Str</code>.</p>\n</blockquote>",
+        "id": 541922300,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759098073
+    },
+    {
+        "content": "<p>Hopefully this makes some sense</p>",
+        "id": 541922309,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759098080
+    },
+    {
+        "content": "<p>Anyway, definitely at a minimum, the errors here being bad and some things working are each compiler bugs, but they are for the old rust compiler and likely not worth trying to fix at this point.</p>\n<hr>\n<p>We definitely can help you work around issue like this and build a useful program.</p>",
+        "id": 541922361,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759098176
+    },
+    {
+        "content": "<p>Oh, one other point of clarification, because of how binding works for ability type variables. If you type <code>unpacked</code> (or use it in a way that demands a specific type), roc will anchor to that typing. It is kinda like a form of late binding that is special to output types of abilities. This is how <code>Decode</code> is able to work at all. But due to it being a late binding anchor, it has lots of edge cases that can easily be underdefined or fail to type check. (Which is the error case here)</p>",
+        "id": 541923014,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759099086
+    },
+    {
+        "content": "<p>I see, thank you.<br>\nI would have assumed <code>unpacked</code> can know that it is a <code>str</code> and not a <code>actualValue</code> due to it using the <code>StringWithAbiliy</code>s <code>readString</code>.</p>\n<p>Right now it seems typing it works kind of like an <code>asInstanceOf</code> of a <code>any</code> value. E.g. I can do this and it compiles fine (<code>unpacke</code> is seen as num type):</p>\n<div class=\"codehilite\"><pre><span></span><code>main! = |_args|\n    unpacked = readAbility(@StringWithAbility(&quot;test&quot;))\n    other = Num.to_str(unpacked)\n    Stdout.line!(&quot;Hello ${other}!&quot;)\n</code></pre></div>\n<p>For my usecase, let's say I would want to have an ability \"returns the most important value of a record\" (of an opaque type).<br>\n<code>mostImportant: record -&gt; a where record implements MostImportantAbility</code> won't work, same as above.<br>\nHow would I define this ability? Or does this only make sense in that I also give <code>a</code> an ability that at sometime resolves to a concrete type?</p>",
+        "id": 541946323,
+        "sender_full_name": "Yannick",
+        "timestamp": 1759122706
+    },
+    {
+        "content": "<p>Interesting. What is the end goal here?</p>\n<p>Any yeah, that ability will only work if you always type the output when calling it.</p>",
+        "id": 542071187,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759159443
+    },
+    {
+        "content": "<p>I was looking into implementing CRDTs in roc, seemed like an interesting enough use-case to lean more about the language. <br>\nMy idea was to define a <code>Mergeable/CRDT</code> ability. Then this could be implemented for a counter or a record and so on.<br>\nInitially I was looking into an API like this</p>\n<div class=\"codehilite\"><pre><span></span><code>Mergeable implements\n    read : a -&gt; actualValue where a implements Mergeable\n    mergeWithRemote : a, remoteUpdate -&gt; a where a implements Mergeable\n    update : a, localUpdate -&gt; (a, remoteUpdate) where a implements Mergeable\n</code></pre></div>\n<p>But now I am not sure anymore if that approach makes sense <span aria-label=\"slight smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"slight smile\">:slight_smile:</span></p>",
+        "id": 542076528,
+        "sender_full_name": "Yannick",
+        "timestamp": 1759160760
+    }
+]
