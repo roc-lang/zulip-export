@@ -1,0 +1,138 @@
+<html>
+<head><meta charset="utf-8"><title>Extra copies in generated code for a equivalent rewrite · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Extra.20copies.20in.20generated.20code.20for.20a.20equivalent.20rewrite.html">Extra copies in generated code for a equivalent rewrite</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="637092409"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Extra%20copies%20in%20generated%20code%20for%20a%20equivalent%20rewrite/near/637092409" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> zhen <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Extra.20copies.20in.20generated.20code.20for.20a.20equivalent.20rewrite.html#637092409">(Nov 03 2026 at 05:25)</a>:</h4>
+<p>Hi there, I am working on an emulator rn, and trying to optimize the backend for better frame rate.</p>
+<p>In this process, I nuked one intermediate var and did a direct return. However, somehow this worsen the performance(in terms of frame rate). <br>
+I (and a LLM) observed that this should-have-been-equivalent tiny changes resulted extra on-stack allocation in the generated binary.</p>
+<p><img alt="image.png" class="inline-image" data-original-content-type="image/png" data-original-dimensions="1378x294" data-original-src="/user_uploads/22008/FmkgEXXGL02vRVw7s4xrEzyc/image.png" src="/user_uploads/thumbnail/22008/FmkgEXXGL02vRVw7s4xrEzyc/image.png/840x560.webp"></p>
+<p>The compiler I used is the latest nightly released on Nov.2nd, and the platform is X86-64 Linux, with flag <code>--opt=speed --debug</code>, nothing special.</p>
+<p>I have a snippet below, it was written by an LLM based on my codebase as a concise PoC.<br>
+Am I doing smth wrong here?</p>
+<div class="codehilite"><pre><span></span><code>app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0/GddgvsGjiNXrHFW6au5i5dUDbTs8FinQdrgE2Gqmw53t.tar.zst" }
+import pf.OsStr
+import pf.Stdout
+
+# Pad is 800 inline bytes; Bus is 1016 bytes on x86-64 (nine List descriptors).
+Quad : { a : U64, b : U64, c : U64, d : U64 }
+Block : { a : Quad, b : Quad, c : Quad, d : Quad }
+Regs : { a : Block, b : Block, c : Block, d : Block }
+Pad : { a : Regs, b : Block, c : Block, d : Quad }
+Bus := { bytes : List(U8), l1 : List(U8), l2 : List(U8), l3 : List(U8), l4 : List(U8), l5 : List(U8), l6 : List(U8), l7 : List(U8), l8 : List(U8), regs : Pad }
+Machine :: { bus : Bus, now : U64, retained : List(U8) }
+ReadResult(a) : { val : a, state : [Unchanged, Updated(Box(Bus))] }
+
+advance : Machine, U64 -&gt; Try(Machine, [Backwards, OutOfBounds])
+advance = |m, target| {
+    if target &lt; m.now { Err(Backwards) }
+    else if target - m.now &gt; 2 {
+        changed = m.bus.bytes.set(0, m.bus.bytes.get(0)?.plus_wrap(1))?
+        advance({ ..m, now: m.now + 2, bus: { ..m.bus, bytes: changed } }, target)
+    } else { Ok({ ..m, now: target }) }
+}
+
+read16 : Bus, U32 -&gt; Try(ReadResult(U16), [OutOfBounds, ReadError])
+read16 = |bus, addr| {
+    # Keep a non-inline read shape. The exercised addresses are 0..20.
+    if addr &gt;= 32 {
+        changed = bus.bytes.set(0, bus.bytes.get(0)?.plus_wrap(1))?
+        return read16({ ..bus, bytes: changed }, addr - 32)
+    }
+    val = bus.bytes.get(addr.to_u64())?
+    match addr.mod_by(4) {
+        0 =&gt; Ok({ val: val.to_u16(), state: Unchanged })
+        1 =&gt; Ok({ val: val.to_u16(), state: Updated(Box.box({ ..bus, bytes: bus.bytes.set(addr.to_u64(), val.plus_wrap(1))? })) })
+        2 =&gt; Ok({ val: val.to_u16(), state: Unchanged })
+        _ =&gt; Err(ReadError)
+    }
+}
+read32 : Bus, U32 -&gt; Try(ReadResult(U32), [OutOfBounds, ReadError])
+read32 = |bus, addr| {
+    first = read16(bus, addr)?
+    Ok({ val: first.val.to_u32(), state: first.state })
+}
+
+candidate : Machine, [W16, W32], U32 -&gt; Try((Machine, U32), _)
+candidate = |m, width, addr| {
+    advanced = advance(m, m.now.plus_wrap(addr.to_u64()))?
+    intermediate = match width {
+        W16 =&gt; {
+            inner = read16(advanced.bus, addr)?
+            { val: inner.val.to_u32(), state: inner.state }
+        }
+        W32 =&gt; read32(advanced.bus, addr)?
+    }
+# substitute here
+    new_bus = match intermediate.state {
+        Unchanged =&gt; advanced.bus
+        Updated(x) =&gt; Box.unbox(x)
+    }
+    Ok(({ ..advanced, bus: new_bus }, intermediate.val))
+# match intermediate.state {
+#      Unchanged =&gt; Ok((advanced, intermediate.val))
+#       Updated(x) =&gt; Ok(({ ..advanced, bus: Box.unbox(x) }, intermediate.val))
+#    }
+}
+
+view = |m| {
+    bus: { bytes: m.bus.bytes, l1: m.bus.l1, l2: m.bus.l2, l3: m.bus.l3, l4: m.bus.l4,
+        l5: m.bus.l5, l6: m.bus.l6, l7: m.bus.l7, l8: m.bus.l8, regs: m.bus.regs },
+    now: m.now, retained: m.retained,
+}
+result_view = |r| match r { Ok((m, val)) =&gt; Ok((view(m), val)) Err(e) =&gt; Err(e) }
+
+exercise! : Machine, U32 =&gt; Try({}, _)
+exercise! = |m, addr| {
+    if addr == 20 { return Ok({}) }
+    width = if addr.mod_by(2) == 0 W16 else W32
+    a = candidate(m, width, addr)
+    b = candidate(m, width, addr + 1)
+    Stdout.line!(Str.inspect((result_view(a), result_view(b))))?
+    exercise!(m, addr + 1)
+}
+
+main! : List(OsStr) =&gt; Try({}, _)
+main! = |args| {
+    seed = U64.from_str(OsStr.to_str_try(args.get(0)?)?)?
+    q = { a: seed, b: seed.plus_wrap(1), c: seed.plus_wrap(2), d: seed.plus_wrap(3) }
+    block = { a: q, b: q, c: q, d: q }
+    regs = { a: { a: block, b: block, c: block, d: block }, b: block, c: block, d: q }
+    bytes = List.repeat(seed.to_u8_wrap(), 16)
+    m = advance({ bus: { bytes, l1: bytes, l2: bytes, l3: bytes, l4: bytes, l5: bytes, l6: bytes, l7: bytes, l8: bytes, regs }, now: seed, retained: bytes }, seed)?
+    exercise!(m, 0)?
+    for saved in [m.bus.bytes, m.bus.l1, m.bus.l2, m.bus.l3, m.bus.l4, m.bus.l5, m.bus.l6, m.bus.l7, m.bus.l8, m.retained] {
+        if saved.len() != 16 { return Err(SnapshotChanged) }
+        for byte in saved { if byte != seed.to_u8_wrap() { return Err(SnapshotChanged) } }
+    }
+    if m.now != seed or m.bus.regs != regs { return Err(SnapshotChanged) }
+    Stdout.line!(Str.inspect(view(m)))?
+    Ok({})
+}
+</code></pre></div>
+
+
+
+<a name="637119710"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Extra%20copies%20in%20generated%20code%20for%20a%20equivalent%20rewrite/near/637119710" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Luke Boswell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Extra.20copies.20in.20generated.20code.20for.20a.20equivalent.20rewrite.html#637119710">(Nov 03 2026 at 08:21)</a>:</h4>
+<p>Looks like a bug -- I had Opus 5.5 dig in to find the root cause and made this issue <br>
+<a href="https://github.com/roc-lang/roc/issues/12819">https://github.com/roc-lang/roc/issues/12819</a></p>
+
+
+
+<a name="637423014"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Extra%20copies%20in%20generated%20code%20for%20a%20equivalent%20rewrite/near/637423014" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Notification Bot <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Extra.20copies.20in.20generated.20code.20for.20a.20equivalent.20rewrite.html#637423014">(Nov 04 2026 at 07:37)</a>:</h4>
+<p>3 messages were moved from this topic to <a class="stream-topic" data-stream-id="231634" href="/#narrow/channel/231634-beginners/topic/HTML.20templating/with/637423011">#beginners &gt; HTML templating</a> by <span class="user-mention silent" data-user-id="361169">Anton</span>.</p>
+
+
+
+<hr><p>Last updated: Nov 13 2026 at 18:49 UTC</p>
+</html>

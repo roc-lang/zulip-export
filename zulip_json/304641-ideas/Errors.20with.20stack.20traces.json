@@ -1,0 +1,920 @@
+[
+    {
+        "content": "<p>Having worked with functional error handling a bunch in Elm and Scala, I feel confident in saying that it is quite good at discerning <em>what</em> went wrong and adding context at different layers. But functional error handling is fairly poor at discerning <em>where</em> the error happened, and certainly much inferior to the stack trace you get when throwing an exception (regardless of any other deficiencies exceptions have).</p>\n<p>I'm not suggesting that stack traces are the end-all-be-all of error locations, but I do think they would be a big step up of what we have today. I'll write out a bit about what's wrong with the current setup further down, but I'll write my proposal first:</p>\n<h2>Proposal</h2>\n<p>We have talked a bunch about how to manage errors with <code>try</code>, <code>?</code>, <code>??</code>, and <code>map_err</code>, all centered around <code>Result</code> where you can put in anything as an error. But what if the error variant, instead of being <code>Err e</code> was <code>Err (Error e)</code> where <code>Error</code> is a custom type provided by the standard library, which can contain extra information, like a stack trace.</p>\n<p>The reason we need to store the stack trace is because we're going to build it as we pass errors around with the various operators. I'll admit that I'm only confident in what semantics <code>map_err</code> has and the others I just find confusing at the momemt, so I'm going to suggest my own operators here to avoid getting tangled up in existing semantics. But in the real world, they should just be merged into the existing operators.</p>\n<p>Operator 1, aka <code>new_error</code> (just pretend it's an operator and not a keyword):<br>\nThe <code>new_error</code> operator takes any value <code>e</code> and creates an <code>Error e</code> type from it. When the compiler sees the <code>new_error</code> operator, it creates the string of the location of current file and line, e.g. <code>\"MyRocProject/MyCode.roc:234\"</code> and it inserts that as the first element of the stack trace in the <code>Error</code>, which contains the stack trace as just a <code>List String</code>.</p>\n<p>After that comes operator 2, aka <code>propagate_error</code>:<br>\nThe <code>propagate_error</code> operator works like <code>new_error</code>, except it doesn't create a new error but just propagates an existing one. But when the compiler sees this operator, it will still create the next level of the stack trace and append it to the <code>Error</code>.</p>\n<p>Then there's operator 3, <code>map_error_operator</code> (named to not be confused with the existing function):<br>\nAgain it's only special in that it builds the stack trace behind the scenes when used, but otherwise it just maps the contents of the given error as usual.</p>\n<p>In other words, <code>Error</code> can only be constructed and mapped by using operators that build out the stack trace, and the existing <code>map_err</code> function would be removed. Users <em>can</em> still return an existing <code>Error</code> normally which would not build out the stack trace, but I think that could produce a warning when building.</p>\n<h2>Problems in current setup</h2>\n<p>Imagine an error like this, which is nested according to current best practices:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"kt\">ConfigError</span>\n<span class=\"w\">    </span><span class=\"kt\">CouldNotReadConfigError</span>\n<span class=\"w\">        </span><span class=\"kt\">FileReadError</span>\n</code></pre></div>\n<p><code>FileReadError</code> is the original error, which has been wrapped up a few times.</p>\n<p>This structure is a \"jack of all trades, master of none\" error structure. That is:</p>\n<ul>\n<li><code>FileReadError</code> is just the original \"symptom\" of what went wrong, as many errors are only symptoms of the real problem somewhere else anyway.</li>\n<li><code>CouldNotReadConfigError</code> actually tells you what went wrong at the context level that, in this example, has the most information about the error.</li>\n<li><code>ConfigError</code> exists mainly as form of stack trace, to tell you where the error occurred, but it doesn't add any useful information about what went wrong.</li>\n</ul>\n<p>And in the real world you'd have potentially many more levels mixing both context and tracing together. I think it would be preferable for this error to be something like</p>\n<div class=\"codehilite\" data-code-language=\"Perl\"><pre><span></span><code><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">payload</span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">CouldNotReadConfigError</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"n\">FileReadError</span><span class=\"p\">)</span>\n<span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">trace</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">[</span>\n<span class=\"w\">    </span><span class=\"s\">\"MyRocProject/Config.roc:234\"</span>\n<span class=\"w\">    </span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"s\">\"MyRocProject/Setup.roc:123\"</span>\n<span class=\"w\">    </span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"s\">\"MyRocProject/Main.roc:23\"</span>\n<span class=\"w\">  </span><span class=\"p\">]</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>where the contents of <code>payload</code> is what <code>Error</code> is generic over (so <code>Error payload</code> essentially).</p>\n<p>The benefits here are twofold:</p>\n<ul>\n<li>The payload is less noisy than the original error, as it is only responsible for providing error context.</li>\n<li>The stack trace is a much clearer trace than what the old error provided</li>\n</ul>\n<p>There's a few reasons the stack trace is superior to the old trace:</p>\n<ul>\n<li>Error variants need to be named uniquely across the code base to be fully traceable (e.g. <code>ConfigError</code> may be applied in multiple places in the code, and it might not be clear from the trace which one was hit)</li>\n<li>With Roc, propagating errors without wrapping them is easy, so the old kind of tracing can easily be missing information that's needed to fully trace the error.</li>\n<li>Asking people to map their errors everywhere easily leads to very stuttering code a la <code>Config.get!().map_err(ConfigError)</code>. This code is harder to read without any real benefit. Roc afford us easy propagation of errors, but we're not really getting the most of it when the best practice is to map the errors everywhere, even when it doesn't add value to do so.</li>\n</ul>\n<p>All the issues above can also be fixed with developers writing disciplined code, but in that case, it still feels like it needs a lot of effort compared to just getting a stack trace for free, and only mapping your errors when you actually have something useful to add to it.</p>",
+        "id": 491493908,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1735732124
+    },
+    {
+        "content": "<p>I'm not sure about the specifics with the proposed operators but I would like to have errors with traces as well :)</p>",
+        "id": 491502027,
+        "sender_full_name": "Anton",
+        "timestamp": 1735740027
+    },
+    {
+        "content": "<p>One of the reasons this isn't done is because the performance is generally awful.</p>\n<p>The issue is that errors in results are generally not exceptional. They are actually pretty common in many cases. Adding locations is both bloat to the binary and extra allocation with data movement.</p>\n<p>That said, I completely understand the goal here. Location traces can be great. Debugging can be a pain without them.</p>\n<p>This is the one advantage of exceptions in my opinion. They essentially have free error traces. That said, exceptions are also slower in the error cases where errors are often handled by default. They really are meant for the exceptional case where errors are very uncommon.</p>",
+        "id": 491505120,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735742700
+    },
+    {
+        "content": "<p>I generally find that either the error is expected to be handled. At which point any sort of error trace or even wrapping is pretty wasteful. (Might still be worth while to wrap a little, but not great to do it a ton).<br>\nOr the error is truly exceptional and is not expected to be handled. At which point crashing can give you a backtrace and has low cost.</p>",
+        "id": 491505297,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735742852
+    },
+    {
+        "content": "<p>Yet, as shown by error context wrapping in go and rust, clearly some form of nested error that kinda half holds a stack trace will exist in pretty much any language that defaults to using errors instead of exceptions. (My gut feeling is that this is a bad design pattern)</p>\n<p>One main advantage of simply wrapping is that it is way cheaper than strings and exceptions. You get a string in the form of the tag name, but it is nearly free to add.</p>",
+        "id": 491505421,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735742996
+    },
+    {
+        "content": "<p>Could we go with something like <code>RUST_BACKTRACE=1</code>?</p>",
+        "id": 491505615,
+        "sender_full_name": "Anton",
+        "timestamp": 1735743149
+    },
+    {
+        "content": "<p>General question. What is your plan for the trace? Is it ever actionable in code?</p>",
+        "id": 491505617,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735743152
+    },
+    {
+        "content": "<blockquote>\n<p>What is your plan for the trace?</p>\n</blockquote>\n<p>I would want it just to understand the path the code has taken so I can understand and solve the bug more quickly</p>",
+        "id": 491505684,
+        "sender_full_name": "Anton",
+        "timestamp": 1735743232
+    },
+    {
+        "content": "<p>Yeah, so not actionable in code.</p>",
+        "id": 491505881,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735743398
+    },
+    {
+        "content": "<p>Also, looking at the state of anyhow in rust and go error wrapping. They basically are akin to nested tags, but with slightly more free form error strings. Also, anyhow will apparently store a backtrace in the root error if <code>RUST_BACKTRACE=1</code>.</p>",
+        "id": 491505990,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735743497
+    },
+    {
+        "content": "<p>That definitely is an interesting idea. Not sure what it would take to orchestrate, but just grabbing a backtrace (not converting it to string yet)  and holding onto that for printing when the error is printed.</p>",
+        "id": 491506134,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735743609
+    },
+    {
+        "content": "<p>The only way to get an equivalent trace in roc today would be to crash at the error generation sight. Which is actually really easy to do with <code>??</code>.</p>",
+        "id": 491506421,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735743869
+    },
+    {
+        "content": "<p>Which, if you don't plan to handle the error in your app at all sounds totally reasonable</p>",
+        "id": 491506444,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735743892
+    },
+    {
+        "content": "<p>now that we have purity inference, platforms can offer a <code>backtrace!</code> function</p>",
+        "id": 491508568,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735745848
+    },
+    {
+        "content": "<p>which applications could use to log backtraces immediately when desired, separately from error handling</p>",
+        "id": 491508594,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735745868
+    },
+    {
+        "content": "<p>in other words, do something like <code>log_error!(backtrace!(), \"Something really unexpected happened\"</code> and then return <code>Err</code></p>",
+        "id": 491508666,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735745919
+    },
+    {
+        "content": "<p>so decoupling the <em>logging</em> of the backtrace from the <em>handling</em> of the error</p>",
+        "id": 491508685,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735745940
+    },
+    {
+        "content": "<p>If backtrace is a <code>=&gt; Str</code> function, you _could_ even store the backtrace in your Err if you wanted</p>",
+        "id": 491508775,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746012
+    },
+    {
+        "content": "<p>Switching to logging does work, but it also loses some value due to requiring an effectful function chain.</p>",
+        "id": 491508917,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735746146
+    },
+    {
+        "content": "<p>That's a strong point</p>",
+        "id": 491508933,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746167
+    },
+    {
+        "content": "<p>Can't we just have a dbg-like command add a stack-trace for development?</p>",
+        "id": 491508964,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746198
+    },
+    {
+        "content": "<p>Or something of the sort?</p>",
+        "id": 491508968,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746208
+    },
+    {
+        "content": "<p>yeah there's an ongoing open question as to whether there will be demand in practice for logging in the middle of pure functions, or if it's fine to have logging (which is obviously an effect) only allowed in effectful functions</p>",
+        "id": 491509130,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735746355
+    },
+    {
+        "content": "<p>that makes the most sense by default, of course</p>",
+        "id": 491509174,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735746367
+    },
+    {
+        "content": "<p>Yeah, I guess backtraces are still kinda tangential to this. If we exposed logging as a special non-effectful builtin like dbg, a platform could choose to log a backtrace on every error log.</p>",
+        "id": 491509246,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735746480
+    },
+    {
+        "content": "<p>the argument for \"allow logging in pure functions as a special case exception\" is that it's an effect that isn't supposed to affect the rest of the program, and is also theoretically only supposed to be recording what's happening, so if the compiler decides to optimize the pure function away (e.g. evaluate it at compile time) then the fact that the logging gets skipped should also be harmless</p>",
+        "id": 491509319,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735746524
+    },
+    {
+        "content": "<p>I think it's fine with something like dbg that's stripped from release builds</p>",
+        "id": 491509328,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746533
+    },
+    {
+        "content": "<p>I guess the biggest disadvantage of solutions like logging is that they are more verbose...though it could just be <code>my_fn(a, b, c) ? log_err!</code></p>",
+        "id": 491509329,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735746534
+    },
+    {
+        "content": "<p>certainly I expect webservers to do lots of logging (and/or spans/traces/etc)</p>",
+        "id": 491509364,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735746575
+    },
+    {
+        "content": "<p>Yep</p>",
+        "id": 491509371,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735746582
+    },
+    {
+        "content": "<p>I think a keyword like <code>trace</code> would be nice paired with <code>??</code></p>",
+        "id": 491509377,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746587
+    },
+    {
+        "content": "<p>not sure how much that will vary by use case, and how much other use cases want logging</p>",
+        "id": 491509387,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735746596
+    },
+    {
+        "content": "<p>I think it's fine if the handler type is <code>=&gt;</code> for a webserver</p>",
+        "id": 491509436,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746609
+    },
+    {
+        "content": "<p>As long as your core logic is pure</p>",
+        "id": 491509440,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746624
+    },
+    {
+        "content": "<p>That keeps effects on the edges</p>",
+        "id": 491509443,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746631
+    },
+    {
+        "content": "<p>If you don't allow for logging in request handlers, I think your webserver use cases are dead in the water</p>",
+        "id": 491509472,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746664
+    },
+    {
+        "content": "<p>well request handlers are usually full of I/O, so certainly those are effectful <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 491509568,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735746748
+    },
+    {
+        "content": "<p>Exactly</p>",
+        "id": 491509583,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735746765
+    },
+    {
+        "content": "<p>I think it is very important to note that the goal of this idea is to get a backtrace from any function (including a pure function), not just an effectful one. The pure function returns a result and as part of the error, a trace is included. This enables an effectful logger to capture the full contexts that starts at the error root in a pure function.</p>",
+        "id": 491509637,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735746840
+    },
+    {
+        "content": "<p>If it only works for effectful functions it is a lot less useful for debugging and understand the full stack trace when first developing code.</p>",
+        "id": 491509731,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735746912
+    },
+    {
+        "content": "<p>yeah so it seems to me like:</p>\n<ul>\n<li>if we treat logging as special, and permit it inside pure functions even though it's an effect (with the understanding that logging statements inside pure functions may get optimized away and are never guaranteed to run), then having those logging functions be able to include backtraces seems fine</li>\n<li>having a supposedly pure function which returns a backtrace seems super scary to me. A pure function absolutely should never return a different value when given the same arguments, and it feels like we'd be in UB territory (conceptually) in the sense that I can't even begin to imagine all the assumptions having a function like that would break. So I definitely don't think we should do that.</li>\n<li>Having a language keyword that evaluates to \"the source code location where the keyword was used\" would not be a backtrace, but wouldn't break purity. It would be a constant that never changes at runtime. It would still be risky to have in the language (because it would suddenly become true that you can add a newline somewhere and now your program breaks because some code somewhere was relying on source position at runtime for some reason) but it at least wouldn't break purity.</li>\n</ul>",
+        "id": 491510314,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735747377
+    },
+    {
+        "content": "<p>then there's the separate issue of \"I'm just trying to debug the program I'm running right now, I don't care about persistent logging\"</p>",
+        "id": 491510353,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735747426
+    },
+    {
+        "content": "<p>for that use case, one obvious question is \"if we had a really nice debugger, how much demand would remain for backtraces inside pure functions?\"</p>",
+        "id": 491510417,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735747468
+    },
+    {
+        "content": "<p>I'm not sure what the answer would be there</p>",
+        "id": 491510425,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735747480
+    },
+    {
+        "content": "<p>the nice thing about doing effectful logging of backtraces via the platform is that it's already doable today, so there's no blocker to trying it out and seeing what use cases remain in practice when you already have that</p>",
+        "id": 491510546,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1735747581
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/Errors.20with.20stack.20traces/near/491510417\">said</a>:</p>\n<blockquote>\n<p>for that use case, one obvious question is \"if we had a really nice debugger, how much demand would remain for backtraces inside pure functions?\"</p>\n</blockquote>\n<p>I kinda have answer to this. There are no good debuggers that exist on all platforms and are easy to use. As such, there is almost always a demand to easily add a backtrace at least for people who aren't used to debuggers. As someone used to debuggers (albeit mostly stuck in cli with lldb), I still often would rather just get a good backtrace and never have to open a debugger</p>",
+        "id": 491510593,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735747645
+    },
+    {
+        "content": "<p>Yeah, I definitely think we should add a logging effect to basic CLI and basic webserver that can also log a backtrace. That might alleviate a lot of the pain.</p>",
+        "id": 491510708,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735747735
+    },
+    {
+        "content": "<p>The goal is really to create more useful errors. Both in stopping people from trying to come up with make-shift alternatives to stack traces inside their errors, which dilute the error itself, but also in actually giving people the information they need proper.</p>\n<p>Generally I find the types of errors reported with <code>Result</code> break down into three kinds:</p>\n<ol>\n<li>The ones you actually recover from</li>\n<li>The ones you surface to the user, because the error pertains to something they did wrong</li>\n<li>The ones you surface to the user because something completely unexpected went wrong, and e.g. they need to file an error report.</li>\n</ol>\n<p>Before you figure which kind of error you have, I think every error goes through roughly these stages:</p>\n<ul>\n<li>Every <code>Result</code> error starts as a potentially recoverable error</li>\n<li>As you return the error through the stack, you map it and accumulate context</li>\n<li>At some point, you decide whether you will in fact recover from it or not. If you recover, your work is finished.</li>\n<li>If you don't recover, you're reaching a point where the code has concluded its investigation of the error, and there's nothing left but to propagate it out.</li>\n</ul>\n<p>In the ideal world, I think I would want the following:</p>\n<ul>\n<li>When the code has decided that it cannot recover from the error, it will log the complete \"investigation\" that has been done up until that point. That is, both the useful error tags like <code>CouldNotReadConfigError</code>, as well as any context it's received, along with the full stack trace of where the error originated.</li>\n<li>All code handling this error after this point should only propagate it, until there's some code that actually shows it to the user. This <em>could</em> be <code>crash</code>, but I think it's important that <code>crash</code> won't give the stack trace that I want. It only has the stack trace of where the investigation concluded, not where the error originated.</li>\n</ul>",
+        "id": 491513160,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1735750096
+    },
+    {
+        "content": "<p>Is a stack trace actually useful to an end user though?</p>",
+        "id": 491513545,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735750448
+    },
+    {
+        "content": "<p>I'm alright with logging context along the way, rather than at a single point, but it requires more discipline from developers and more tooling to get right, since you need to correlate more logs, rather than having a single log entry that contains everything you need, and you need to remember to log everywhere that might be relevant.</p>",
+        "id": 491513550,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1735750453
+    },
+    {
+        "content": "<p>No, I wouldn't want a stack trace when reporting something end users messed up (e.g. permissions, configuration, etc.). But if the error is for the end user to report to the developer, you definitely want the stack trace available for the user to report. Like \"please open a GitHub issue at #link and include file applogs.log\"</p>",
+        "id": 491513699,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1735750601
+    },
+    {
+        "content": "<p>Yeah, this is one of those surprising annoying problems of results and error returns. You really don't want to pay extra cost on every error, but stack traces are amazing when needed.</p>",
+        "id": 491514381,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735751235
+    },
+    {
+        "content": "<p>And you can't get a full stack trace if you first return through a chain of pure functions.</p>",
+        "id": 491514415,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735751267
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/491513550\">said</a>:</p>\n<blockquote>\n<p>I'm alright with logging context along the way, rather than at a single point, but it requires more discipline from developers and more tooling to get right, since you need to correlate more logs, rather than having a single log entry that contains everything you need, and you need to remember to log everywhere that might be relevant.</p>\n</blockquote>\n<p>Instrumenting code with tracing instead of logging might be a good alternative for this. If an operation fails you'll end up with a single trace of the request/operation in which the error happened.</p>\n<p>Because trace frames, like logs, are added manually, they don't capture as many frames as a stack trace, so that's a downside.</p>\n<p>But an upside is that a trace of an error can contain frames about code branches that were completed before the error happened, which can provide a ton of useful information when debugging. Plus, you can use that trace for other types of debugging as well, such as looking into performance problems.</p>",
+        "id": 491579308,
+        "sender_full_name": "Jasper Woudenberg",
+        "timestamp": 1735807684
+    },
+    {
+        "content": "<p>Yet tracing without some correlated logs (or events) aren't really helpful as well, are they?</p>\n<p>I like what e.g. they are doing here:<br>\n<a href=\"https://effect.website/blog/releases/effect/311/#effectfn\">https://effect.website/blog/releases/effect/311/#effectfn</a><br>\n<a href=\"https://effect.website/blog/releases/effect/312/#effectfn-improvements\">https://effect.website/blog/releases/effect/312/#effectfn-improvements</a><br>\n<a href=\"https://effect.website/docs/observability/tracing/\">https://effect.website/docs/observability/tracing/</a></p>",
+        "id": 491581720,
+        "sender_full_name": "Tobias Steckenborn",
+        "timestamp": 1735809039
+    },
+    {
+        "content": "<p>I wanna bang this drum again, because I think stack traces are still really important. Roc's error handling is pretty similar to Rust in a lot of ways, and it's very easy to find people asking about how they get stack traces in Rust, like <a href=\"https://www.reddit.com/r/rust/comments/16vcazq/what_am_i_missing_with_stacktraces_and_result/\">so</a> and <a href=\"https://www.reddit.com/r/rust/comments/1e978l7/ive_used_and_loved_rust_for_10_years_here_are_the/\">so</a>. <em>Not</em> having stack traces by default is essentially a big deficiency and eats a good chunk of weirdness budget.</p>\n<p>I also still think it nullifies a good deal of the benefit of the Roc's tag unions, because it essentially forces people to wrap their error types a whole bunch to try and recreate stack traces. So even though you <em>can</em> just propagate errors in Roc, you might not really want to, because you lose location information that way. Roc wants to make it easy to map errors, but I think that's partially about fixing this <strong>symptom</strong>, rather than fixing the root problem, because we would be mapping errors way less if we didn't have to manually build up types to mimick stack traces.</p>",
+        "id": 497251891,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738497199
+    },
+    {
+        "content": "<p>So here's a revised proposal for how this might look!</p>\n<p><code>Result</code> looks like this:</p>\n<div class=\"codehilite\"><pre><span></span><code>Result ok err :\n    [\n        Ok ok,\n        Err StackTrace err\n    ]\n</code></pre></div>\n<p>where <code>StackTrace</code> is a nominal type that stores stack trace lines (we'll get back to how it does so later). Those lines would all be the type <code>StackTraceLine</code> a la:</p>\n<div class=\"codehilite\"><pre><span></span><code>StackTraceLine :\n    [\n        MyRocProject__Config U16\n        MyRocProject__Setup U16\n        MyRocProject__Main U16\n        ...\n    ]\n</code></pre></div>\n<p>where there exists a function <code>line_to_string</code> that does this:</p>\n<div class=\"codehilite\"><pre><span></span><code>when line is\n    MyRocProject__Config line -&gt; Str.concat(&quot;MyRocProject/Config.roc:&quot;, Num.to_str line)\n    ...\n</code></pre></div>\n<p><code>StackTraceLine</code> and <code>line_to_string</code> would be generated by the compiler and not something the developer would deal with. It does have a few implications:</p>\n<ul>\n<li>Developers can't construct an <code>Err</code> themselves, because they would need to insert the right stack trace line when doing so.</li>\n<li><code>Err</code> should have a function <code>trace_to_string</code> that converts the full stack trace to a human readable string.</li>\n</ul>\n<p>In other words, we would need a way to construct an <code>Err</code> with a keyword probably. Like <code>fail</code> or (please don't shoot me) <code>throw</code> <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span> </p>\n<p>Taking an <a href=\"https://www.roc-lang.org/tutorial#accumulating-tag-types\">example from the tutorial</a> might then look like:</p>\n<div class=\"codehilite\"><pre><span></span><code>|str|\n    if Str.is_empty(str) then\n        Ok &quot;it was empty&quot;\n    else\n        fail [&quot;it was not empty&quot;]\n</code></pre></div>\n<p>And any time you use <code>?</code> and whatever else we have to handle errors these days, the compiler basically desugars that to the same code as today, except it also inserts the corresponding <code>StackTraceLine</code> into the <code>StackTrace</code>.</p>\n<p>What would <code>StackTrace</code> look like though? Ideally it would be an array on the stack, as that would be the simplest and most performant solution I think. We would have to spill the lines onto the heap at some point of course, but given that a single <code>StackTraceLine</code> would only take up something like 32 bits, there's at least room for a chunk of them on the stack.</p>\n<p>Without arrays though, how might <code>StackTrace</code> look? It might just be</p>\n<div class=\"codehilite\"><pre><span></span><code>{ line1, line2, line3, line4 ... }\n</code></pre></div>\n<p>and keeping track of which line to use with an integer and something like</p>\n<div class=\"codehilite\"><pre><span></span><code>when previousLine is\n    1 -&gt; set_line_2(...)\n    2 -&gt; set_line_3(...)\n    ...\n</code></pre></div>\n<p>Not as nice as an array, but workable at least. Alternatively, I don't know if it's been considered to have <code>List</code> be able to start off on the stack when there are only a few elements in it, and only spilling to the heap as needed?</p>\n<p>And then there's the question of how many errors should be storable before we spill onto the heap. I don't have a good answer to this. On the one hand, a small number might be sufficient, because if you're not handling the error in short order, you're probably going to let it bubble all the way out anyway. On the other hand, a library might have a deep stack of its own before the error reaches the user of the library, and it would be nice not to use the heap before they've had the chance to deal with the error. So I'm not really sure what makes the most sense there.</p>",
+        "id": 497251899,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738497209
+    },
+    {
+        "content": "<p>I think adding this amount of runtime overhead to every error operation is too incompatible with Roc's goals of running fast</p>",
+        "id": 497257347,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738501640
+    },
+    {
+        "content": "<p>for example, this would mean that doing <a href=\"https://www.roc-lang.org/builtins/Num#div_checked\"><code>div_checked</code></a> potentially does a bunch of string copying and dynamic array resizing - that's just wildly out of bounds for an acceptable performance cost compared to today where it's a single branch</p>",
+        "id": 497257459,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738501737
+    },
+    {
+        "content": "<p>of the options we've discussed, this seems like the frontrunner to me:</p>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/491508568\">said</a>:</p>\n<blockquote>\n<p>now that we have purity inference, platforms can offer a <code>backtrace!</code> function</p>\n</blockquote>\n<p>then error tracing libraries like bugsnag can take an effectful \"get backtrace\" function during init, so when they log errors they automatically include stack traces just like they do in e.g. JavaScript. \"Log an error to an external service, including stack trace\" is the most common scenario I've seen for stack traces being useful for debugging after the fact, and we already have full support for that use case today!</p>\n<p>if you're debugging locally, there are other options (e.g. setting a breakpoint and seeing what the trace is at that point)</p>",
+        "id": 497257636,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738501876
+    },
+    {
+        "content": "<p>Note that I specifically addressed those performance concerns with the new proposal. Creating an error shouldn’t allocate strings or lists on the heap, require anything to be resized, etc.</p>",
+        "id": 497257865,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738502090
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> how would it prevent resizing?</p>",
+        "id": 497259617,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738503693
+    },
+    {
+        "content": "<p>sorry, I think I should be more direct about this: regardless of performance, I don't think we should do this.</p>",
+        "id": 497259680,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738503739
+    },
+    {
+        "content": "<p>I don't think <code>Result</code> should store stack trace information, period, and I think the Rust error handling libraries that do similar things are the wrong design</p>",
+        "id": 497259712,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738503783
+    },
+    {
+        "content": "<p>I think there are two scenarios where we want stack traces:</p>\n<ul>\n<li>we want to log it immediately for later analysis, right at the point where an error occurred. I think this can be done in an effectful function just fine.</li>\n<li>we're in the middle of debugging a locally running program. I think this can be done using breakpoints or similar</li>\n</ul>",
+        "id": 497259944,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738504050
+    },
+    {
+        "content": "<p>I agree that stack traces are valuable information, but I disagree with the premise that we should store them eagerly and accumulate them and pass them around, just in case we want them later. I think we explicitly should do the opposite of that, and only retrieve a trace on demand, right at the point where we've determined we want it.</p>",
+        "id": 497260069,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738504157
+    },
+    {
+        "content": "<blockquote>\n<p>Note that I specifically addressed those performance concerns with the new proposal. Creating an error shouldn’t allocate strings or lists on the heap, require anything to be resized, etc.</p>\n</blockquote>\n<p>I work on a system that has to store stack trace on creation of nodes. It just stores the raw reference to the stack trace and is doing pretty minimal work. It is still quite costly. Much more expensive than the old version that was just return errors without nice locations. (like 1.5 to 2x slower and it is not storing that many stack trace references).</p>\n<p>I am really curious to see what mojo ends up doing in this space. They currently only have an error type and not an exception type cause they have not found a performant enough way to do exceptions (though I think they had some ideas). Due to wanting to be a superset of python in the long term, they definitely want exceptions eventually. Currently the solution is to run code in the debugger and make it so that any time an error is generated the debugger adds the stack trace and treats it like an exception (that or manually grabbing the stack trace and adding it to an error explicitly). It is currently pretty painful to work with.</p>",
+        "id": 497284521,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738525177
+    },
+    {
+        "content": "<blockquote>\n<p>I wanna bang this drum again, because I think stack traces are still really important.</p>\n</blockquote>\n<p>Yeah, rust and go often deal with this by repeated wrapping and adding of more and more context. It is definitely not as nice as a stack trace in most cases.</p>",
+        "id": 497284666,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738525283
+    },
+    {
+        "content": "<p>I think it really depends on the application</p>",
+        "id": 497285172,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738525668
+    },
+    {
+        "content": "<p>like in the Roc compiler I want context so I can report them to the user</p>",
+        "id": 497285223,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738525683
+    },
+    {
+        "content": "<p>I wouldn't want to spit out a stack trace even if it were free</p>",
+        "id": 497285264,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738525711
+    },
+    {
+        "content": "<p>in a web server I want my logged error events to have stack traces but I don't think having the stack trace be passed around as a value is in any way useful to me (although it's a security concern if it's inspectable)</p>",
+        "id": 497285379,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738525807
+    },
+    {
+        "content": "<p>I wonder if we can enable getting a stack trace cleanly (even if only for crash messages).</p>\n<p>With debug info and the llvm backend, backtraces should work if grabbed from the host. If running via the interpreter, a host backtrace would be useless.</p>",
+        "id": 497285623,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738526024
+    },
+    {
+        "content": "<p>hm yeah that's true</p>",
+        "id": 497286894,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738527041
+    },
+    {
+        "content": "<p>actually the compiled Roc app could expose a function to the host for getting the current roc backtrace</p>",
+        "id": 497286947,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738527091
+    },
+    {
+        "content": "<p>which the host could call, both for its own use and also as a way to provide it to the app</p>",
+        "id": 497287019,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738527129
+    },
+    {
+        "content": "<p>Yep, though I assume that would add a dependency on libunwind to roc. Which might be ok.</p>",
+        "id": 497287054,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738527169
+    },
+    {
+        "content": "<p>and then that function could silently either ask the interpreter or else walk stack frames</p>",
+        "id": 497287058,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738527175
+    },
+    {
+        "content": "<p>yeah that seems fine</p>",
+        "id": 497287078,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738527194
+    },
+    {
+        "content": "<p>Ok</p>",
+        "id": 497287086,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738527198
+    },
+    {
+        "content": "<p>like we want every host to be able to support backtraces</p>",
+        "id": 497287099,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738527218
+    },
+    {
+        "content": "<p>And then we could also expose that functionality to the app (though only as an effect?)</p>",
+        "id": 497287107,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738527229
+    },
+    {
+        "content": "<p>and right now you kind of have to know the tricks</p>",
+        "id": 497287108,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738527231
+    },
+    {
+        "content": "<p>I think it should be up to the platform to provide that functionality to the application (or not), but we should make it trivial for platforms to offer it</p>",
+        "id": 497287164,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738527264
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497287099\">said</a>:</p>\n<blockquote>\n<p>like we want every host to be able to support backtraces</p>\n</blockquote>\n<p>Even in a fully roc is embedded in a larger host use case, like a game engine?</p>",
+        "id": 497287218,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1738527317
+    },
+    {
+        "content": "<p>I think it's just simpler if all effectful functions come from the platform, no exceptions</p>",
+        "id": 497287223,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738527330
+    },
+    {
+        "content": "<p>fair</p>",
+        "id": 497287247,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738527351
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> sure, like if the roc plugin crashes, you want to be able to know what chain of calls led to the crash</p>",
+        "id": 497287294,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738527366
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497284521\">sagde</a>:</p>\n<blockquote>\n<p>I work on a system that has to store stack trace on creation of nodes. It just stores the raw reference to the stack trace and is doing pretty minimal work. It is still quite costly. Much more expensive than the old version that was just return errors without nice locations. (like 1.5 to 2x slower and it is not storing that many stack trace references).</p>\n</blockquote>\n<p>What is the reference to in this case? I assume it's a heap allocated collection (whether string or something else), so the cost is for building that initial trace, rather than just holding on to it?</p>",
+        "id": 497289287,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738528979
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497259712\">sagde</a>:</p>\n<blockquote>\n<p>I don't think <code>Result</code> should store stack trace information, period, and I think the Rust error handling libraries that do similar things are the wrong design</p>\n</blockquote>\n<p>I'm curious what you see as being wrong about that design? Not that I disagree necessarily, I just want to make sure we're talking about the same things <span aria-label=\"blush\" class=\"emoji emoji-1f60a\" role=\"img\" title=\"blush\">:blush:</span></p>",
+        "id": 497289398,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738529072
+    },
+    {
+        "content": "<blockquote>\n<p>What is the reference to in this case?</p>\n</blockquote>\n<p>A traceback object which should should just be a list of function pointers extracted from the stack. No strings have been created yet. But I assume it has to walk the stack and make a list. I guess you could minorly amortize the cost if you grab it one step at a time on every return, but I think it is fundamentally the same amount of extra cost.</p>",
+        "id": 497289543,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738529202
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Errors.20with.20stack.20traces/near/497289398\">said</a>:</p>\n<blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497259712\">sagde</a>:</p>\n<blockquote>\n<p>I don't think <code>Result</code> should store stack trace information, period, and I think the Rust error handling libraries that do similar things are the wrong design</p>\n</blockquote>\n<p>I'm curious what you see as being wrong about that design? Not that I disagree necessarily, I just want to make sure we're talking about the same things <span aria-label=\"blush\" class=\"emoji emoji-1f60a\" role=\"img\" title=\"blush\">:blush:</span></p>\n</blockquote>\n<p>in no particular order:</p>\n<ul>\n<li>it complicates the type</li>\n<li>it breaks referential transparency (you can call the same function with the same args from 2 different functions and get 2 different answers)</li>\n<li>it's either a security concern (packages being able to see the trace in which they were used) or else the API is even more complicated to prevent that</li>\n<li>it's redundantly storing info that's already available right at the moment you're most likely to want it (right at the moment where the error occurred, because you either want to log it right away or else pause the program right away and explore the state) and then passing it around just in case you also want it later too</li>\n</ul>",
+        "id": 497290853,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738530383
+    },
+    {
+        "content": "<p><code>Result</code> is a simple and flexible type, and including stack trace information seems like massive  scope creep for it with really unclear benefits in comparison to alternative ways of getting stack traces that don't involve <code>Result</code></p>",
+        "id": 497291036,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738530545
+    },
+    {
+        "content": "<p>even if it were free, the idea that a <code>Dict.get</code> saying a key wasn't present in the dictionary triggers an automatic walking of the entire stack frame feels wrong in a visceral way</p>",
+        "id": 497291268,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738530730
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497260069\">sagde</a>:</p>\n<blockquote>\n<p>I agree that stack traces are valuable information, but I disagree with the premise that we should store them eagerly and accumulate them and pass them around, just in case we want them later. I think we explicitly should do the opposite of that, and only retrieve a trace on demand, right at the point where we've determined we want it.</p>\n</blockquote>\n<p>My problem with this approach is that it relies on discipline to get a lot of things right, and you don't really know ahead of time when you're going to need it. Since capturing a trace is not the default, you end up having to decide between paying the performance cost or the debugging cost without knowing what the debugging cost is (because you have to understand every way a piece of code can fail in order to know that cost).</p>\n<p>I would personally much rather lug around a stack trace, and be able to opt out of collecting it in the few places where I know this performance matters.</p>",
+        "id": 497292683,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738531816
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497291268\">sagde</a>:</p>\n<blockquote>\n<p>even if it were free, the idea that a <code>Dict.get</code> saying a key wasn't present in the dictionary triggers an automatic walking of the entire stack frame feels wrong in a visceral way</p>\n</blockquote>\n<p>This seems like you're thinking the <code>Err</code> should walk the entire stack upon creation, which isn't what I'm proposing. Instead I'm proposing that the stack trace is built up as the error is propagated through the stack <em>anyway</em>. In this sense, creating an <code>Err</code> still has no logic attached (no branches, no heap allocations). You only have to deal with this as you start propagating the error.</p>\n<p>Just so I'm sure you're disagreeing with the right thing <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 497293216,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738532177
+    },
+    {
+        "content": "<p>fair, but I don't see how that would work without the possibility of reallocation if that gets too big</p>",
+        "id": 497295610,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738533950
+    },
+    {
+        "content": "<p>I guess the underlying problem is that stack traces attached to <code>Result</code> are an imperfect approximation anyway. What we really want is a way to retrace the exact steps the code took to get to a certain point, and it just happens that <code>Result</code> is <em>usually</em> the place where the breakage becomes visible.</p>\n<p>Having said that, I do worry that Roc's strength of allowing you to do whatever you want with errors is also a great weakness. Because it means you are free to do nothing at all with the error until you are far away from its origin. It's kind of like exceptions in that regard, except you don't get a stack trace either, so you're truly in trouble when you have to debug where it came from. And it's not like making this error easily debuggable is a one-off effort. It requires continuous discipline at every level the error gets passed around.</p>",
+        "id": 497295666,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738533970
+    },
+    {
+        "content": "<p>I think the history of errors in programming is that they are mostly ignored way more often than they should be</p>",
+        "id": 497295734,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738534038
+    },
+    {
+        "content": "<p>I've never seen any system that really fixes this</p>",
+        "id": 497295744,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738534047
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497295610\">sagde</a>:</p>\n<blockquote>\n<p>fair, but I don't see how that would work without the possibility of reallocation if that gets too big</p>\n</blockquote>\n<p>You would need to reallocate at some point. I'm just distinguishing between:</p>\n<ul>\n<li>initial creation (which costs about the same as today, but maybe using slightly more stack space)</li>\n<li>first few propagations (which we can also keep on the stack up to some limit)</li>\n<li>later propagations (where you need to reallocate, but you may already have propagated it out enough times that you're already sending the error all the way out to the user anyway)</li>\n</ul>",
+        "id": 497295860,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738534128
+    },
+    {
+        "content": "<p>exception-throwing systems and <code>null</code>-based systems seem to result in more unintentionally u handled errors than <code>Result</code>/<code>Option</code>/<code>Maybe</code></p>",
+        "id": 497295864,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738534134
+    },
+    {
+        "content": "<p>maybe a better way to frame my thinking on this is:</p>\n<p>\"Okay, so this will break purity, but hear me out...\"<br>\n\"Yikes, this had better be the most incredible upside I've ever heard of to compensate for that downside\"<br>\n\"Well it has a bunch of other tradeoffs\"<br>\n\"Okay then absolutely not\"</p>",
+        "id": 497296036,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738534267
+    },
+    {
+        "content": "<p>like I don't really think it's worth spending more time talking about it, sorry <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 497296064,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738534300
+    },
+    {
+        "content": "<p>I have, if nothing else, won myself the right to feel smug the day people start complaining about not having stack traces <span aria-label=\"stuck out tongue\" class=\"emoji emoji-1f61b\" role=\"img\" title=\"stuck out tongue\">:stuck_out_tongue:</span></p>",
+        "id": 497296309,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738534500
+    },
+    {
+        "content": "<p>hahaha <span aria-label=\"joy\" class=\"emoji emoji-1f602\" role=\"img\" title=\"joy\">:joy:</span></p>",
+        "id": 497296341,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738534519
+    },
+    {
+        "content": "<p>I went to bed feeling weird about this, because I think most arguments against this proposal are not based on the proposal itself, but rather just perceptions of what it is. Maybe that's on me for communicating it poorly, so I want to try again!</p>\n<p>Just to get it out of the way: my proposal does not mess with purity in any way <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> </p>\n<p>As I laid out in the original post, today it is up to users to construct their error types such that they can actually be traced back to their origin. You do this by wrapping layers upon layers of error types, with the associated risks that you forget wrapping some places and/or you reuse names of these error wrapper types. This makes it very easy to have an error that is only partially traceable, because you weren't 100% disciplined about the tracing.</p>\n<p>My proposal takes that work that users need to be doing today themselves, and automates it. It's the same fundamental mechanism, just handled by the language as opposed to the user. And because it doesn't rely on effects, it works just as well for libraries as for applications (where <code>backtrace!</code> needs to be hooked up in a library for example).</p>",
+        "id": 497348749,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738567724
+    },
+    {
+        "content": "<p>Regarding security, the only way a library would be able to read from a stack trace is if you pass it a <code>Result</code> as input (but it's still pure!). This is actually <strong>less</strong> invasive than calling <code>backtrace!</code>, because you can only see where the code has been since it became an <code>Err</code>, whereas <code>backtrace!</code> will give the code the full trace.</p>",
+        "id": 497350868,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738568441
+    },
+    {
+        "content": "<p>One thing that's not really clear to me here though, is whether we would want to encourage people to use <code>backtrace!</code> <em>instead</em> of creating these adhoc tracing structures in their error.</p>",
+        "id": 497351268,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738568575
+    },
+    {
+        "content": "<p>I think that becomes important for the argument of the type complexity at least. Because the argument that the stack trace complicates <code>Err</code> is <em>kind of</em> fair, but also ignores a bunch of other complexity.</p>\n<p>The type signature <code>Err err</code> is obviously simpler than <code>Err StackTrace err</code> of course, but that's also glossing over the complexity of <code>err</code>. Without <code>StackTrace</code> in there, users are asked to build that structure themselves and contain it in <code>err</code> (and most likely do a somewhat poor job with it). Introducing the <code>StackTrace</code> type is not about introducing new complexity. It's about taking complexity away from <code>err</code>, and by extension the user, and automating it.</p>",
+        "id": 497352093,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738568834
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Errors.20with.20stack.20traces/near/497348749\">said</a>:</p>\n<blockquote>\n<p>Just to get it out of the way: my proposal does not mess with purity in any way <span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> </p>\n</blockquote>\n<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Errors.20with.20stack.20traces/near/497251899\">said</a>:</p>\n<blockquote>\n<p>So here's a revised proposal for how this might look!</p>\n<p><code>Result</code> looks like this:</p>\n<div class=\"codehilite\"><pre><span></span><code>Result ok err :\n    [\n        Ok ok,\n        Err StackTrace err\n    ]\n</code></pre></div>\n<p>where <code>StackTrace</code> is a nominal type that stores stack trace lines (we'll get back to how it does so later).</p>\n<p>[...]</p>\n<p>where there exists a function <code>line_to_string</code> that does this:</p>\n<div class=\"codehilite\"><pre><span></span><code>when line is\n    MyRocProject__Config line -&gt; Str.concat(&quot;MyRocProject/Config.roc:&quot;, Num.to_str line)\n    ...\n</code></pre></div>\n<p>[...]</p>\n<ul>\n<li><code>Err</code> should have a function <code>trace_to_string</code> that converts the full stack trace to a human readable string.</li>\n</ul>\n<p>[...]</p>\n<p>And any time you use <code>?</code> and whatever else we have to handle errors these days, the compiler basically desugars that to the same code as today, except it also inserts the corresponding <code>StackTraceLine</code> into the <code>StackTrace</code>.</p>\n</blockquote>\n<p>the parts I just quoted mean:</p>\n<ul>\n<li>I can take a \"pure function\" which returns a <code>Result</code> and call it from two different functions, passing the same arguments</li>\n<li>I can then call <code>trace_to_string</code> on the returned <code>Result</code></li>\n<li>I will end up with two different strings, even though I passed the same arguments, because I called the two functions from two different places in my code base</li>\n<li>pure functions always return the same values when given the same arguments, and now no function that returns <code>Result</code> has this property</li>\n</ul>\n<p>what am I missing? <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 497401214,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738580851
+    },
+    {
+        "content": "<p>oh I guess it's that the trace only starts when you call <code>fail</code> for the first time?</p>\n<p>in that case, you get way less info than with <code>backtrace!()</code> because you don't get to see which calls led to the error in the first place.</p>",
+        "id": 497402561,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581190
+    },
+    {
+        "content": "<p>assuming that's correct, this still has the problem that now reorganizing pure functions can break them</p>",
+        "id": 497402798,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581246
+    },
+    {
+        "content": "<p>like I can take working code, add a comment somewhere, and now the code breaks</p>",
+        "id": 497402862,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581263
+    },
+    {
+        "content": "<p>because pure functions that return <code>Result</code> now incorporate their own source path and line numbers into their own return values</p>",
+        "id": 497403090,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581330
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"557981\">Kasper Møller Andersen</span> <a href=\"#narrow/stream/304641-ideas/topic/Errors.20with.20stack.20traces/near/497352093\">said</a>:</p>\n<blockquote>\n<p>The type signature <code>Err err</code> is obviously simpler than <code>Err StackTrace err</code> of course, but that's also glossing over the complexity of <code>err</code>. Without <code>StackTrace</code> in there, users are asked to build that structure themselves and contain it in <code>err</code> (and most likely do a somewhat poor job with it). Introducing the <code>StackTrace</code> type is not about introducing new complexity. It's about taking complexity away from <code>err</code>, and by extension the user, and automating it.</p>\n</blockquote>\n<p>I'm just not convinced by the fundamental premise that accumulating and passing around stack traces is actually the right way to organize error handling code</p>",
+        "id": 497403598,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581444
+    },
+    {
+        "content": "<p>like if an error happens in my webserver, and I want to log a stack trace to a reporting service, literally what I want is to call <code>bugsnag.error!(\"This should never happen...\")</code> and have it capture a stack trace for me. This is what error logging services do in languages that support getting a stack trace anywhere.</p>",
+        "id": 497404130,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581570
+    },
+    {
+        "content": "<p>I actively do not want to pass the stack trace around anywhere in that scenario</p>",
+        "id": 497404462,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581617
+    },
+    {
+        "content": "<p>I just want bugsnag to put it in my logs and then I want to move on</p>",
+        "id": 497404568,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581632
+    },
+    {
+        "content": "<p>I'm never going to do anything with it again</p>",
+        "id": 497404645,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581641
+    },
+    {
+        "content": "<p>moreover, I'm often not going to return a <code>Result</code></p>",
+        "id": 497405676,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581858
+    },
+    {
+        "content": "<p>I'm going to try to gracefully handle the error for the end user, but I still want to have captured the trace of how I got to the point where gracefully recovering was necessary, so I can fix it next time and not have to recover</p>",
+        "id": 497405972,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738581934
+    },
+    {
+        "content": "<p>in contrast, other times I'm translating from one error type to another because I want to report it to the end user <em>without</em> a stack trace, since a stack trace would not help them</p>",
+        "id": 497406587,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738582085
+    },
+    {
+        "content": "<p>again, in that scenario I want to log that the problem happened, right where it happened (possibly just locally via log levels rather than to an external service, depending on what the program does) and then after that point I'm not going to use the trace ever again</p>",
+        "id": 497406770,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738582137
+    },
+    {
+        "content": "<p>so I think if Roc changed <code>Result</code> in this way, I would be inconvenienced by the type and performance costs and then never use the thing it's encouraging me to do</p>",
+        "id": 497406966,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738582197
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497404130\">said</a>:</p>\n<blockquote>\n<p>like if an error happens in my webserver, and I want to log a stack trace to a reporting service, literally what I want is to call <code>bugsnag.error!(\"This should never happen...\")</code> and have it capture a stack trace for me. This is what error logging services do in languages that support getting a stack trace anywhere.</p>\n</blockquote>\n<p>How would it get the stack trace in this case?</p>",
+        "id": 497409018,
+        "sender_full_name": "Anton",
+        "timestamp": 1738582751
+    },
+    {
+        "content": "<p>by calling <code>backtrace!()</code> - as the application author, I'd pass it in both that function as well as the function to do an http request, and it would store both of them</p>",
+        "id": 497411692,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738583486
+    },
+    {
+        "content": "<p>(on initialization, when I'm providing the API key - not every time)</p>",
+        "id": 497411810,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738583519
+    },
+    {
+        "content": "<p>one possible design:</p>\n<div class=\"codehilite\" data-code-language=\"Ruby\"><pre><span></span><code><span class=\"no\">Bugsnag</span><span class=\"o\">.</span><span class=\"n\">add_backtrace</span><span class=\"w\"> </span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"no\">Request</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"no\">List</span><span class=\"w\"> </span><span class=\"no\">TracedCall</span><span class=\"w\"> </span><span class=\"o\">-&gt;</span><span class=\"w\"> </span><span class=\"no\">Request</span>\n\n<span class=\"no\">Bugsnag</span><span class=\"o\">.</span><span class=\"n\">init</span><span class=\"w\"> </span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"no\">Request</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{})</span><span class=\"w\"> </span><span class=\"o\">-&gt;</span><span class=\"w\"> </span><span class=\"no\">Bugsnag</span>\n</code></pre></div>\n<p>example:</p>\n<div class=\"codehilite\" data-code-language=\"Ruby\"><pre><span></span><code><span class=\"no\">Bugsnag</span><span class=\"o\">.</span><span class=\"n\">init</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">req</span><span class=\"o\">|</span>\n<span class=\"w\">    </span><span class=\"n\">_</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">        </span><span class=\"n\">req</span>\n<span class=\"w\">        </span><span class=\"o\">.</span><span class=\"p\">(</span><span class=\"no\">Bugsnag</span><span class=\"o\">.</span><span class=\"n\">add_backtrace</span><span class=\"p\">(</span><span class=\"n\">backtrace!</span><span class=\"p\">()))</span>\n<span class=\"w\">        </span><span class=\"o\">.</span><span class=\"p\">(</span><span class=\"no\">Bugsnag</span><span class=\"o\">.</span><span class=\"n\">add_api_key</span><span class=\"p\">(</span><span class=\"n\">key</span><span class=\"p\">))</span>\n<span class=\"w\">        </span><span class=\"o\">.</span><span class=\"p\">(</span><span class=\"no\">Http</span><span class=\"o\">.</span><span class=\"n\">send!</span><span class=\"p\">)</span>\n\n<span class=\"w\">    </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"c1\"># if logging fails, do nothing</span>\n<span class=\"p\">)</span>\n</code></pre></div>",
+        "id": 497413124,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738583830
+    },
+    {
+        "content": "<p>nice properties of this design:</p>\n<ul>\n<li>the bugsnag library never actually sees the API key, so it can't be compromised even if the package is compromised (maybe not critical for Bugsnag in particular, but seems like a good pattern for libraries with more sensitive API keys)</li>\n<li>one arg to the init function, that's it.</li>\n<li>backtraces in all error logs (the package can trim off the outermost fn call from the trace)</li>\n</ul>",
+        "id": 497413511,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1738583925
+    },
+    {
+        "content": "<p>Note, even if this doesn't break purity cause it accumulates one function at a time as a result is returned, it still breaks correctness in roc.</p>\n<p>A pure roc function should return the same thing no matter the compilation mode or target. These back traces would depend on inlining, file location, and potentially target (due to different debug info on windows and wasm)</p>",
+        "id": 497484229,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738600769
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497403090\">sagde</a>:</p>\n<blockquote>\n<p>because pure functions that return <code>Result</code> now incorporate their own source path and line numbers into their own return values</p>\n</blockquote>\n<p>It feels weird because Roc doesn't have other meta programming built in I suppose. If it was clearer that this actually takes the entire code base as input, then it would still be considered pure, because any code relying on the output would only \"break\" if the input was changed. Not that I think Roc should have more meta programming, it just still makes sense to call this a pure function to me <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>\n<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497484229\">sagde</a>:</p>\n<blockquote>\n<p>Note, even if this doesn't break purity cause it accumulates one function at a time as a result is returned, it still breaks correctness in roc.</p>\n<p>A pure roc function should return the same thing no matter the compilation mode or target. These back traces would depend on inlining, file location, and potentially target (due to different debug info on windows and wasm)</p>\n</blockquote>\n<p>I don't get how this would break across targets? Wouldn't it work exactly the same as the current error mapping and propagation does with respect to inlining and so on? This wouldn't rely on debuginfo at all in my mind.</p>",
+        "id": 497739238,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738696844
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/304641-ideas/topic/Errors.20with.20stack.20traces/near/497404130\">sagde</a>:</p>\n<blockquote>\n<p>like if an error happens in my webserver, and I want to log a stack trace to a reporting service, literally what I want is to call <code>bugsnag.error!(\"This should never happen...\")</code> and have it capture a stack trace for me. This is what error logging services do in languages that support getting a stack trace anywhere.</p>\n</blockquote>\n<p>I think about it this way:</p>\n<ul>\n<li>At some point I get an error, but it's not always easy to tell if you're at the point where the error \"just happened\". Maybe you called a function from a library that failed, so from your point of view, the error just occurred, but inside the library, the error may have occurred 20 layers away.</li>\n<li>I may not have all the information I need to decide if I want to recover from an error or not right where it happened, and I may need to propagate the error out some layers before this can be decided. I only want to report the error to bugsnag if I determine that it is in fact not an error I can handle.</li>\n</ul>\n<p>In this view, <code>backtrace!</code> and my proposal are complimentary actually. <code>backtrace!</code> tells you how you reached function <code>x</code>, whereas the <code>Result</code> stack trace states what went on inside of <code>x</code>.</p>",
+        "id": 497742282,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738697958
+    },
+    {
+        "content": "<p>I think it would help me to break this down by error type here too.</p>\n<p>The two overall categories of errors are <strong>predictable</strong> (<code>Result</code>) and <strong>unpredictable</strong> (<code>crash</code> essentially).</p>\n<p>When <a href=\"#narrow/channel/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc\">talking about unpredictable errors</a>, I <em>think</em> we concluded that those aren't recoverable in Roc unless the platforms specifically gives the tools needed for that (spawn a new process that is allowed to crash for example).</p>\n<p>Predictable errors on the other hand can be either recoverable or unrecoverable. That depends entirely on the error. And when I say \"recoverable\", I mean the error is entirely within the normal functioning of the system, and all ends up being good.</p>\n<p>I assume the different approaches we're talking about here pertain to predictable unrecoverable errors. But I think I'm missing parts of the larger picture still.</p>",
+        "id": 497750004,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738700677
+    },
+    {
+        "content": "<p>In <a href=\"#narrow/channel/304641-ideas/topic/Dealing.20with.20logic.20errors.20in.20Roc\">the thread about unpredictable errors</a> with <code>crash</code>es and recoveries, I also believe we discussed that the platform would be the stability boundary, and if you had an unrecoverable error (even from a <code>Result</code>), it was better to crash and let the platform handle the error.</p>\n<p>The reason I made this proposal is really to help capture what goes on <em>before</em> you decide to <code>crash</code>. That is, when you get a <code>Result</code>, you will presumably do some analysis and propagate it around a bit before you conclude that it is indeed unrecoverable and you decide to <code>crash</code>. But capturing the stack trace inside the <code>Result</code> from the first <code>Err</code> instance through to calling <code>crash</code>, helps provide a fuller stack trace. Because the stack trace from <code>crash</code> is only the trace from when you finished your analysis, and not from the original error actually occurred.</p>",
+        "id": 497751650,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738701303
+    },
+    {
+        "content": "<p>But maybe I got the wrong impression from that thread, and <code>crash</code> is no longer the preferred option for dealing with unrecoverable errors?</p>",
+        "id": 497751757,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738701350
+    },
+    {
+        "content": "<p>I know there's also a lot of moving parts here and that it's uncharted territory for Roc, so I'm not blaming anyone if it's all down to things having yet to settle <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 497752894,
+        "sender_full_name": "Kasper Møller Andersen",
+        "timestamp": 1738701808
+    },
+    {
+        "content": "<blockquote>\n<blockquote>\n<p>Note, even if this doesn't break purity cause it accumulates one function at a time as a result is returned, it still breaks correctness in roc.</p>\n<p>A pure roc function should return the same thing no matter the compilation mode or target. These back traces would depend on inlining, file location, and potentially target (due to different debug info on windows and wasm)</p>\n</blockquote>\n<p>I don't get how this would break across targets? Wouldn't it work exactly the same as the current error mapping and propagation does with respect to inlining and so on? This wouldn't rely on debuginfo at all in my mind.</p>\n</blockquote>\n<p>Let's not even think across targets. Let's just think solely across optimization levels. An optimized build can inline functions. This changes the stack trace. An optimized build can also remove debug info. That also changes the names in a stack trace.</p>\n<p>Unless an effect occurs, roc will return the exact same result across targets and optimization levels. Adding stack traces to results without some sort of explicit <code>backtrace!</code> effect would break that.</p>",
+        "id": 497764574,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738706359
+    },
+    {
+        "content": "<p>What if there was a syntax that generated a unique tag that the roc toolchain/debugger/etc could easily map back to a specific source location? Something like <code>$MyTagName</code>, with some tooling/library functions that could extract the name and source location it was instantiated from.</p>\n<p>You'd use it like so:</p>\n<div class=\"codehilite\"><pre><span></span><code>File.readUtf8!(my_path) ? $ErrorReadingConfig\n</code></pre></div>\n<p>If that read fails you get back something that'd print as <code>Err($ErrorReadingConfig:1234(FileNotFound))</code>. The actual representation would be a guaranteed-unique tag value, even unique across callsites where the same $tag name is used.</p>\n<p>And you could match on that (relatively) normally, like so:</p>\n<div class=\"codehilite\"><pre><span></span><code>match err {\n  $ErrorReadingConfig(FileNotFound) -&gt; Stdout.line!(&quot;Config file ${config_path} was not found&quot;)\n  # etc\n}\n</code></pre></div>\n<p>That would use a global table to grab the \"canonical\" tag id and match on that (mapping potentially several source locations where $ErrorReadingConfig is constructed, down to a single value suitable for matching).</p>\n<p>You'd have something like <code>Tag.source_location(err)</code>, which would use a similar global table to map back to the filename name line/col number and return that.</p>\n<p>You'd need some utilities that could take roc binary and a string \"backtrace\" like the above, and map that back to source locations. Or perhaps that just gets compiled into the binary.</p>\n<p>That gets you 70% of the way to full backtraces and encourages wrapping errors with useful, match-able context.</p>",
+        "id": 499271576,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739376340
+    },
+    {
+        "content": "<p>What enables this mapping from source location to backtraces? Is it simply recursive with tons of tag wrapping?</p>",
+        "id": 499274725,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739377149
+    },
+    {
+        "content": "<p>With this, the back trace -is- the ‘inspect’ output. You’d have another tool that maps the generated ids parsed from that string back into source locations that are more human readable.</p>",
+        "id": 499275433,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739377325
+    },
+    {
+        "content": "<p>Generally stack traces represent recursion and mutual recursion, but tags don't.</p>",
+        "id": 499276366,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739377572
+    },
+    {
+        "content": "<p>If you make your stacktrace represent recursion or mutual recursion, you are back to allocating a ton for an error that likely will just get thrown away and handled.</p>\n<p>On top of that, you still lose information if some chunk of code doesn't opt into this form of error. I know one important call put above is that you may want a stack trace from a library, but this would be opt-in at a perf cost, so libraries probably wouldn't opt in.</p>\n<p>I'm not sure this would turn out well in practice, but maybe.</p>",
+        "id": 499277167,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739377791
+    },
+    {
+        "content": "<p>Yeah, you’d have to be careful with recursive cases. I’d probably just not add tags there.</p>",
+        "id": 499277404,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739377841
+    },
+    {
+        "content": "<p>The perf cost should be very low, if the backtrace isn’t inspected.</p>",
+        "id": 499277763,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739377939
+    },
+    {
+        "content": "<p>Even for flat tags, you likely would devour stack space. Assuming no recursion, but a large branching tree of functions, the top level main has to allocate stack space for a nested tag that can represent any possible call chain</p>",
+        "id": 499277774,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739377944
+    },
+    {
+        "content": "<p>And the next function down the same but with one less wrapping and same again</p>",
+        "id": 499277830,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739377961
+    },
+    {
+        "content": "<p>So you would get gigantic error result payloads</p>",
+        "id": 499277866,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739377973
+    },
+    {
+        "content": "<p>Hence why this would be judicious and manually added</p>",
+        "id": 499277888,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739377980
+    },
+    {
+        "content": "<p>Don’t want that to happen automatically for all calls, just semantically important ones</p>",
+        "id": 499277954,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739378002
+    },
+    {
+        "content": "<p>This solves the problem of getting “just enough” source location info back to understand errors from production.</p>",
+        "id": 499278459,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739378129
+    },
+    {
+        "content": "<p>And it’s less annoying than manually choosing unique tag names</p>",
+        "id": 499278702,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739378195
+    },
+    {
+        "content": "<p>Possibly. Still block any library introspection (without author opt in), but is definitely something.</p>",
+        "id": 499281545,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739378975
+    }
+]

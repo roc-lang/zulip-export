@@ -1,0 +1,284 @@
+[
+    {
+        "content": "<p>I started thinking about how we could make <code>roc glue</code> for Ruby.<br>\nIt would build on some recent experience at work of making an FFI between Ruby and Haskell.<br>\nJust want to post some of my thoughts here so that people can comment.</p>",
+        "id": 401754174,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1699879176
+    },
+    {
+        "content": "<p>Ruby is implemented in C, and they provide a whole library of C functions for FFI that expose some of the internals of the interpreter. For example there's one called <code>rb_ary_new</code> that creates a new Array and <code>rb_ary_push</code> that pushes a value into it. There are also things like <code>rb_define_module</code>, <code>rb_define_class</code>, <code>rb_define_method</code>, etc.<br>\nWhen your extension is loaded into the Ruby runtime, it runs an initialisation function where you define all of your modules and classes.</p>",
+        "id": 401754206,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1699879188
+    },
+    {
+        "content": "<p>What I realised immediately is that before we can even generate any glue, we first need to implement things like <code>List</code> and <code>Str</code> from the Roc standard library, similar to <code>crates/roc_std</code> in the repo. Probably a Ruby <code>Roc</code> module containing <code>Roc::List</code>, <code>Roc::Dict</code> and so on.<br>\nI started playing around with some C code for that. I'm not sure where to put it in the directory structure but I guess we can figure that out.</p>",
+        "id": 401754220,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1699879195
+    },
+    {
+        "content": "<p>One design decision is how to deal with generics when the host language is dynamically typed.<br>\nI see two possible approaches:</p>\n<ol>\n<li>Generate monomorphised classes like <code>ListI64</code> and <code>ListStr</code> depending on what your app needs.</li>\n<li>The <code>List</code> could contain some metadata about the type of its elements and how to convert them to and from Ruby.</li>\n</ol>",
+        "id": 401754228,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1699879200
+    },
+    {
+        "content": "<p>So (1) does most of the hard work at glue generation time and (2) does more at runtime.<br>\nBut the idea of monomorphic classes in Ruby feels very alien. I'm not sure the experience would be good.<br>\n(2) feels more Rubyish to me.</p>",
+        "id": 401755025,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1699879473
+    },
+    {
+        "content": "<p>Should this go in the Roc repo or my own repo?</p>",
+        "id": 401776574,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1699886241
+    },
+    {
+        "content": "<p>Good question, it doesn't feel connected enough to the repo to be in there but at the same time it may also get out of sync pretty fast if you put it in its own repo.</p>",
+        "id": 401778963,
+        "sender_full_name": "Anton",
+        "timestamp": 1699886921
+    },
+    {
+        "content": "<p>I've been doing the Node and TypeScript stuff in a separate repo, but I'd say go with whichever you prefer!</p>",
+        "id": 401787262,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699889205
+    },
+    {
+        "content": "<p>Ok. Is your TypeScript repo public?</p>",
+        "id": 401787868,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1699889376
+    },
+    {
+        "content": "<p>part of the reason I'm doing it in a separate repo is because there's an npm package that goes with it, which might not apply in your case</p>",
+        "id": 401787870,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699889377
+    },
+    {
+        "content": "<p>yeah <a href=\"http://github.com/vendrinc/roc-esbuild\">http://github.com/vendrinc/roc-esbuild</a></p>",
+        "id": 401788047,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699889408
+    },
+    {
+        "content": "<p>I haven't started doing the C glue yet though, not beyond Str</p>",
+        "id": 401788123,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699889424
+    },
+    {
+        "content": "<p>Oh I see</p>",
+        "id": 401788156,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1699889432
+    },
+    {
+        "content": "<p>So it's JSON based?</p>",
+        "id": 401788201,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1699889442
+    },
+    {
+        "content": "<p>we're doing the JSON intermediary right now, and I'm in the middle of generating TypeScript type definitions</p>",
+        "id": 401788267,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699889458
+    },
+    {
+        "content": "<p>yeah it just does roc string to node string in C, and then both sides use that to send json back and forth</p>",
+        "id": 401788398,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699889488
+    },
+    {
+        "content": "<p>An update on this:</p>\n<p>I started looking into how to model Roc data structures in Ruby.<br>\nRuby values are represented as a tagged union of 28 possible C data structures.<br>\nThe most suitable one for us is <code>RTypedData</code>. It's actually intended for C extensions to expose their own C data structures to Ruby, so that's perfect for us.</p>\n<p><a href=\"https://github.com/ruby/ruby/blob/master/include/ruby/internal/core/rtypeddata.h#L350-L371\"><code>RTypedData</code></a> contains a few fields</p>\n<ul>\n<li>An <code>RBasic</code> header that's shared by all Ruby objects</li>\n<li>A <code>void*</code> pointer to your custom C type</li>\n<li>A pointer to a shared singleton <code>rb_data_type_struct</code> that describes your custom data type</li>\n</ul>\n<p>The <a href=\"https://github.com/ruby/ruby/blob/master/include/ruby/internal/core/rtypeddata.h#L200-L310\"><code>rb_data_type_struct</code></a> contains</p>\n<ul>\n<li>A name string (for stack traces, debug, <code>.inspect</code>, etc.)</li>\n<li>4 function pointer callbacks for the garbage collector: <code>dsize</code> (total memory usage), <code>dmark</code>, <code>dfree</code>, <code>dcompact</code></li>\n<li>Some flags you can use for whatever you want</li>\n<li>An optional pointer to the parent class of your custom class, if you want to define that</li>\n</ul>",
+        "id": 403919156,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700813465
+    },
+    {
+        "content": "<p>I'll talk through some of the challenges I've identified.</p>",
+        "id": 403919816,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700813827
+    },
+    {
+        "content": "<p>Firstly: For Rust glue, we were able to create native Rust structures that have exactly the same byte-level representation as our Roc data structures. That means you can transform Rust to Roc and vice-versa just by type casting.<br>\nThat's just not possible in Ruby. The language doesn't have the capability to describe arbitrary byte layouts without adding a bunch of overhead.</p>",
+        "id": 403919897,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700813876
+    },
+    {
+        "content": "<p>(This will likely also be true of Python, JavaScript, etc.)</p>",
+        "id": 403920034,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700813939
+    },
+    {
+        "content": "<p>So that raises the question of how you represent something like <code>List Str</code>.<br>\nIt's easy enough to make a Ruby module called <code>Roc</code> that contains a class <code>Roc::List</code>, which uses the <code>RTypedData</code> representation. Its pointer can point at a real Roc List that we are going to pass to a Roc app, or that we just received as a result from a Roc app.</p>",
+        "id": 403920496,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700814151
+    },
+    {
+        "content": "<p>And we can also have a class <code>Roc::Str</code> that again uses the <code>RTypedData</code> representation but its pointer points at a real Roc <code>Str</code>.</p>",
+        "id": 403920634,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700814223
+    },
+    {
+        "content": "<p>But there's just an extra layer of wrapping and unwrapping that we don't have with Rust.<br>\nBecause if you want to access one of the strings in the list like <code>my_list[3]</code>, you have to first wrap it in the <code>RTypedData</code> to make it a Ruby value.<br>\nAnd vice-versa when you want to push a string into the list. You have to unwrap it to turn it into a real Roc <code>Str</code> before you can put it into the <code>List</code>.</p>",
+        "id": 403921141,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700814425
+    },
+    {
+        "content": "<p>This isn't a real issue in Rust because the <code>Str</code> is the same size in Rust and Roc. We don't have to add or remove extra fields, we basically just cast pointers.</p>",
+        "id": 403921364,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700814518
+    },
+    {
+        "content": "<p>For memory management, I think it probably makes sense to use the Ruby allocator, which is a wrapper around <code>malloc</code>. If you have a Rails app and you want to rewrite parts of it in Roc, you most likely want to use the same allocator rather than a separate one, to keep things simple.</p>",
+        "id": 403923009,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700815249
+    },
+    {
+        "content": "<p>Using that allocator doesn't automatically mean the objects are garbage-collected. That's a separate thing. So when the Roc program allocates values internally, Ruby GC doesn't need to know. But we do need to give info to the GC about Roc objects that are <em>returned</em> to Ruby. The Ruby code will do some stuff with those objects, then leave them for the GC to clean up later.</p>",
+        "id": 403923476,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700815430
+    },
+    {
+        "content": "<p>When the GC does come along to clean up later, we need to be able to somehow free all of our Roc allocations.<br>\nWe have to provide a <code>dfree</code> function for every value type that Ruby could have a reference to. The <code>List Str</code> version of that function will have to traverse all the strings, free them, and then free the list itself.</p>",
+        "id": 403923724,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700815533
+    },
+    {
+        "content": "<p>This is the same thing we do in the refcount decrement functions that we generate in the Roc binary. So it would be nice if I could just call <code>decrement</code> from Ruby/C. But currently there doesn't seem to be any way for us to call the refcount functions from the platform! So it has to be re-implemented in the glue code and standard library... I think.</p>",
+        "id": 403924018,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700815667
+    },
+    {
+        "content": "<p>By the way, does this come up in the Rust glue and Rust <code>roc_std</code> crate? Do we have a <code>Drop</code> that knows how to traverse all the elements of a <code>List</code> and drop them all?</p>",
+        "id": 403924201,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700815742
+    },
+    {
+        "content": "<p>At this point I've decided that I need to break this up into smaller steps!<br>\nAnd the first step is to create a C++ equivalent of our Rust <code>roc_std</code> crate.<br>\nRuby extensions can be built from C++ as well as C. And C++ has generics, so it's much easier to describe things like <code>List Str</code>. Maybe we can translate it to C at some point, but it seems easier to start with C++.<br>\nI'm assuming we can also use C++ to extend other dynamic language runtimes like CPython, Node.js, etc.</p>",
+        "id": 403925108,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700816127
+    },
+    {
+        "content": "<p><a href=\"https://github.com/brian-carroll/roc-std-cpp\">https://github.com/brian-carroll/roc-std-cpp</a></p>",
+        "id": 403925148,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700816151
+    },
+    {
+        "content": "<p>After we have C++ versions of the Roc data structures, we'll be in a position to write C++ wrappers around them that the Ruby runtime will understand (based on <code>RTypedData</code> as described above).</p>",
+        "id": 403926042,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700816506
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"431893\">Brian Carroll</span> <a href=\"#narrow/stream/316715-contributing/topic/Ruby.20glue/near/403924018\">said</a>:</p>\n<blockquote>\n<p>This is the same thing we do in the refcount decrement functions that we generate in the Roc binary. So it would be nice if I could just call <code>decrement</code> from Ruby/C. But currently there doesn't seem to be any way for us to call the refcount functions from the platform! So it has to be re-implemented in the glue code and standard library... I think.</p>\n</blockquote>\n<p>I think it would be really good to expose at least some of these (maybe all). For example, boxed data and closures are both common examples where exposing the refcounting function would be super useful.</p>",
+        "id": 403993234,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700842428
+    },
+    {
+        "content": "<p>Yeah it would be really useful</p>",
+        "id": 403993691,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700842680
+    },
+    {
+        "content": "<p>In fact, I think it would be very helpful for creating glue for new languages in general to enable roc to expose more functions instead of requiring everything to be reimplemented in glue. Of course they also can be reimplemented, but some are very complex to reimplement (cough, cough RocDict). Maybe add a flag for generated specific types of extra wrappers. We also, could conditionally generate it based on exposed types.</p>\n<p>In general exposing some standard library functions and refcounting functions would be super useful. It would be less optimized than reimplementing in the host, but I think correctness and ease of implementation is much more important currently. Maybe we could just enable defining a bunch of function in the platform that all get exposed that generate wrappers (though maybe that would be too inconvenient manually write all exposed functions in roc).</p>",
+        "id": 403994700,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700843146
+    },
+    {
+        "content": "<p>Hmm there's a tradeoff between convenience and bloat though.<br>\nSay your platform requires <code>mainForHost</code> to return a <code>Dict</code>. If the roc compiler then automatically exposes the entire <code>Dict</code> module with all of its functions, that's a lot of dead code and I'm not sure if we have a good way to eliminate it.</p>",
+        "id": 403995752,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700843713
+    },
+    {
+        "content": "<p>Right now I feel like the refcounting functions are more important than the std lib functions. Because you can always write platform-side Roc code.</p>",
+        "id": 403996328,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700844016
+    },
+    {
+        "content": "<p>For sure, maybe it should be specific requests from the platform. That said, if the application depends on the code anyway, it is just extra symbols and not dead code (also, I guess if it is automatic, I was thinking about just exposing the essentials not everything).</p>",
+        "id": 403996349,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700844033
+    },
+    {
+        "content": "<p>And yeah, refcounting is more complex and important in general, though you technically can also deal with it once we enabling exposing many functions to the platform. Just make a function that returns 2 of the same object or takes 2 and returns one. That is refcount Inc and Dec.</p>",
+        "id": 403996441,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700844090
+    },
+    {
+        "content": "<blockquote>\n<p>once we enabling exposing many functions to the platform</p>\n</blockquote>\n<p>Yeah this would solve a lot of stuff, good point</p>",
+        "id": 403996563,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700844142
+    },
+    {
+        "content": "<p>Seems hard to define something that's automatic but also just the essentials. Hard to get agreement on what the essentials are, in a way that makes sense for different platforms.</p>",
+        "id": 403996805,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700844291
+    },
+    {
+        "content": "<p>What is the blocker for exposing many functions to the platform?</p>",
+        "id": 403996897,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1700844359
+    },
+    {
+        "content": "<p>I think it just never got implemented and no one has dug into it. <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> would know more.</p>",
+        "id": 403997013,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700844431
+    },
+    {
+        "content": "<p>Also, currently you can technically expose multiple but it has to be done via a record of closures and that has other drawbacks.</p>",
+        "id": 403997060,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700844470
+    },
+    {
+        "content": "<p>I think if we exposed the refcounting functions we're already generating in the Roc application, and we did it in a way where they're each in their own section, then a linker step that cleans up dead sections could eliminate those, right?</p>",
+        "id": 406585248,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701968485
+    },
+    {
+        "content": "<p>that would be the best for code sharing and minimizing binary bloat</p>",
+        "id": 406585272,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701968491
+    },
+    {
+        "content": "<p>as Folkert and I learned when working on effect interpreters, one of the challenges with this is naming - as in, specifically what name do you choose for the refcounting function that's exposed to the host?</p>\n<p>the name needs to be:</p>\n<ul>\n<li>unique</li>\n<li>human-readable enough that the host author can correctly know what calling it will do (e.g. we can't just call them <code>refcount1</code>, <code>refcount2</code>, etc. because then if you have a complicated record coming across from the platform to the host, how do you know which part of the record it's referring to?)</li>\n<li>deterministic from the type (this turns out to be tricky to do quickly, since the integer IDs we have internally for monomorphized types can vary depending on what order modules happen to get worked on in parallel)</li>\n</ul>",
+        "id": 406591030,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1701970626
+    }
+]

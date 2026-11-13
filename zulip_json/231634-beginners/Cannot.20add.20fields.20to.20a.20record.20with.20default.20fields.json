@@ -1,0 +1,128 @@
+[
+    {
+        "content": "<p>The following code fails:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>a : { foo ?: U64, bar ?: U64 }\na = { foo: 123 }\n\nb : { foo ?: U64, bar ?: U64, baz ?: U64, qux ?: U64 }\nb = { foo: a.?foo, bar: a.?bar, baz: 456 }\n\nexpect b == { foo: 123, baz: 456 }\n</code></pre></div>\n<p>The error is:</p>\n<div class=\"codehilite\"><pre><span></span><code>── ✗ type mismatch ──────────────────────────────────────────────────────────────────────────────────────── test.roc:5:5\n\nThis expression is used in an unexpected way.\n\nb = { foo: a.?foo, bar: a.?bar, baz: 456 }\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\nIt has the type:\n\n    { bar ?: Try(U64, [MissingField]), baz ?: U64, foo ?: Try(U64, [MissingField]), qux ?: U64 }\n\nBut the annotation says it should be:\n\n    { bar ?: U64, baz ?: U64, foo ?: U64, qux ?: U64 }\n\nRoc application crashed with this message:\n\n    runtime error\n\n\n── ✗ fail ───────────────────────────────────────────────────────────────────────────────────────────────── test.roc:7:1\n\nexpect b == { foo: 123, baz: 456 }\n^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\nRan 1 tests in 5.6 ms.:\n    0 passed\n    1 failed\n    0 compiler errors\n</code></pre></div>\n<p>The only way I found to make this work is to handle all 4 possible combinations of presence/absence for <code>a.foo</code> and <code>a.bar</code>:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>b = {\n    match a.?foo {\n        Ok(foo) =&gt; match a.?bar {\n            Ok(bar) =&gt; { foo, bar, baz: 456 }\n            Err(MissingField) =&gt; { foo, baz: 456 }\n        }\n        Err(MissingField) =&gt; match a.?bar {\n            Ok(bar) =&gt; { bar, baz: 456 }\n            Err(MissingField) =&gt; { baz: 456 }\n        }\n    }\n}\n</code></pre></div>\n<p>Obviously this is not ideal, to say the least.</p>\n<p>Is there a better way to get this to work?</p>",
+        "id": 624514359,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789527136
+    },
+    {
+        "content": "<p>Here are some options I tried, none of which worked:</p>\n<ul>\n<li><code>b = { ..a, baz: 456 }</code> → cannot add new fields to a record with the record update syntax</li>\n<li><code>b = { foo: a.foo, bar: a.bar, baz: 456 }</code> → accessing an optional field as if it's always present</li>\n<li><code>b = { foo ?: a.foo, bar ?: a.bar, baz: 456 }</code> → syntax error</li>\n</ul>",
+        "id": 624514767,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789527368
+    },
+    {
+        "content": "<p>I feel like <code>b = { foo: a.?foo, bar: a.?bar, baz: 456 }</code> should work, should I file an issue or am I missing something?</p>\n<p>To me, <code>{x: r.?y}</code> implies that both <code>x</code> and <code>y</code> are optional, right?</p>",
+        "id": 624515952,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789527841
+    },
+    {
+        "content": "<p>I have a similar problem trying to set an optional field to missing:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>a : { foo ?: U64, bar ?: U64 }\na = { foo: 123, bar: 456 }\n\nb : { foo ?: U64, bar ?: U64 }\nb = { ..a, foo: Err(MissingField) }\n\nexpect b == { bar: 456 }\n</code></pre></div>\n<p><strong>Edit</strong>: actually this works: <code>{ ..a, foo: _ }</code> (but it doesn't solve the problem of adding a field)</p>",
+        "id": 624519250,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789529479
+    },
+    {
+        "content": "<p>for the original one, am I correct that the goal is to say \"omit this field if this other record has that field omitted, and if the other record has that field set, then make this field be set to that value\"?</p>",
+        "id": 624778003,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1789594779
+    },
+    {
+        "content": "<p>Exactly</p>",
+        "id": 624789715,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789600221
+    },
+    {
+        "content": "<p>I can do this with a <code>match</code>, but there's a couple combinatorial explosion if you add more optional fields.</p>",
+        "id": 624789811,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789600282
+    },
+    {
+        "content": "<p>hm, interesting...I never really considered supporting that case <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 624800808,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1789604544
+    },
+    {
+        "content": "<p>can you say more about what this is being used for?</p>",
+        "id": 624800871,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1789604591
+    },
+    {
+        "content": "<p>Sure! In the <a href=\"https://github.com/exercism/roc/pull/223/changes/ef3c672abcee1a9c52627103cb937075244213dc#diff-278a07ed542315ae54c11ce25d790dd4632d1293785a55db883b8c4e955abcad\">new <code>zipper</code> exercise</a>, I have defined this <code>Tree</code> type:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>Tree := { value : U64, left ?: Tree, right ?: Tree }.{...}\n</code></pre></div>\n<p>It's quite convenient to build a binary tree using this type, for example:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>default_tree : Zipper.Tree\ndefault_tree = { value: 1, left: { value: 2, right: { value: 3 } }, right: { value: 4 } }\n</code></pre></div>\n<p>The exercise is about building <a href=\"https://en.wikipedia.org/wiki/Zipper_(data_structure)\">a zipper</a> for this binary tree structure. The user is free to implement it as they wish, but it must pass tests like this one:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>expect {\n    zipper = default_tree.to_zipper()\n    result = zipper.left()?.right()?.up()?.set_value(5).to_tree()\n    result == { value: 1, left: { value: 5, right: { value: 3 } }, right: { value: 4 } }\n}\n</code></pre></div>\n<p>In my example solution (<code>Example.roc</code>), I wanted to use the following <code>Zipper</code> type:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>Zipper :: {\n    focus : Tree,\n    crumbs : List(Crumb),\n}.{\n    Crumb : [\n        Left({ value : U64, right ?: Tree }),\n        Right({ value : U64, left ?: Tree }),\n    ]\n\n    left : Zipper -&gt; Try(Zipper, [ChildDidNotExist])\n    left = |zipper| {\n        left_child = zipper.focus.?left ? |MissingField| ChildDidNotExist\n        crumbs = zipper.crumbs.append(Left({ value: zipper.focus.value, right: zipper.focus.?right }))\n        Ok({ focus: left_child, crumbs })\n    }\n    ...\n}\n</code></pre></div>\n<p>The <code>left</code> function builds a new <code>Zipper</code> with the focus on the left child of the given <code>Zipper</code>'s focused node.</p>\n<p>However, the compiler thinks that the type of <code>{ value: zipper.focus.value, right: zipper.focus.?right }</code> is <code>{ value: Tree, right: Try(Tree, [MissingField]) }</code> instead of <code>{ value: Tree, right ?: Tree }</code>.</p>\n<p>One solution might be to always assume that a field of type <code>Try(..., [MissingField])</code> is actually an optional field.</p>\n<p>Alternatively, perhaps we could allow <code>{ value: zipper.focus.value, right ?: zipper.focus.?right }</code> to make it explicit.</p>\n<p><strong>Edit</strong>: to clarify the alternative solution:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>a : { foo: U64, bar ?: U64 }\n\n# the following would be equivalent:\na = { foo: 123, bar ?: Err(MissingField) }\na = { foo: 123 }\n\n# the following would also be equivalent:\na = { foo: 123, bar ?: Ok(456) }\na = { foo: 123, bar: 456 }\n\n# we could write:\nb : { baz: U64, bar ?: U64 }\nb = { baz: 789, bar ?: a.?bar }\n</code></pre></div>",
+        "id": 624813819,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789611515
+    },
+    {
+        "content": "<p>Oh I forgot, the zipper story continues: to work around the previous issue, I had to change the <code>Crumb</code> type to this:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>    Crumb : [\n        Left({ value : U64, right : Try(Tree, [MissingField]) }),\n        Right({ value : U64, left : Try(Tree, [MissingField]) }),\n    ]\n</code></pre></div>\n<p>This allows the previous <code>left</code> function to compile. <code>Crumb</code> is internal, so not a big deal. However, the <code>up</code> function is still problematic: it needs to build a new <code>Zipper</code> focused on the parent node of the currently focused node. I wanted to implement it like this:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>up : Zipper -&gt; Try(Zipper, [FocusWasOnRoot])\nup = |zipper| {\n    match zipper.crumbs {\n        [] =&gt; Err(FocusWasOnRoot)\n        [.. as rest, last] =&gt; {\n            focus : Tree\n            focus = match last {\n                Left(parent) =&gt; { value: parent.value, left: zipper.focus, right: parent.?right }\n                Right(parent) =&gt; { value: parent.value, left: parent.?left, right: zipper.focus }\n            }\n            Ok({ focus, crumbs: rest })\n        }\n    }\n}\n</code></pre></div>\n<p>However, the compiler doesn't see this as a <code>Tree</code>: <code>{ value: parent.value, left: zipper.focus, right: parent.?right }</code>. Indeed, it sees this as type <code>{ value : U64, left : Tree, right : Try(Tree, [MissingField]) }</code>.<br>\nThe solutions proposed above would also work here.</p>\n<p>Instead, the current implementation is this abomination (I'm not sure it can be simplified):</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>up : Zipper -&gt; Try(Zipper, [FocusWasOnRoot])\nup = |zipper| {\n    match zipper.crumbs {\n        [] =&gt; Err(FocusWasOnRoot)\n        [.. as rest, last] =&gt; {\n            focus : Tree\n            focus = match last {\n                Left(parent) =&gt; {\n                    match parent.right {\n                        Ok(parent_right) =&gt; { value: parent.value, left: zipper.focus, right: parent_right }\n                        Err(MissingField) =&gt; { value: parent.value, left: zipper.focus }\n                    }\n                }\n                Right(parent) =&gt; {\n                    match parent.left {\n                        Ok(parent_left) =&gt; { value: parent.value, left: parent_left, right: zipper.focus }\n                        Err(MissingField) =&gt; { value: parent.value, right: zipper.focus }\n                    }\n                }\n            }\n            Ok({ focus, crumbs: rest })\n        }\n    }\n}\n</code></pre></div>",
+        "id": 624815047,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789612334
+    },
+    {
+        "content": "<p>Side-note, it's kind of odd to have the <code>?</code> before <code>:</code> but after <code>.</code>, I would find <code>:?</code> more consistent. But that's a totally independent point.</p>",
+        "id": 624816539,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789613067
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"734214\">Aurélien Geron</span> <a href=\"#narrow/channel/231634-beginners/topic/Cannot.20add.20fields.20to.20a.20record.20with.20default.20fields/near/624816539\">said</a>:</p>\n<blockquote>\n<p>Side-note, it's kind of odd to have the <code>?</code> before <code>:</code> but after <code>.</code>, I would find <code>:?</code> more consistent. But that's a totally independent point.</p>\n</blockquote>\n<p>Do you think we should change it now before it impacts too many people?</p>",
+        "id": 624816790,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1789613145
+    },
+    {
+        "content": "<p>Yes. I've made the mistake of typing <code>:?</code> a few times, so I think many people will also struggle. I don't think there's any ambiguity so both could be supported for some time, and <code>roc fmt</code> would turn <code>?:</code> into <code>:?</code></p>",
+        "id": 624817008,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789613234
+    },
+    {
+        "content": "<p>Ok, I've just found a nicer workaround by defining <code>Crumb: [Left(Tree), Right(Tree)]</code>, but I really hope this doesn't convince you to keep the status quo, because copying an optional field into a new record feels like something that should be possible.</p>",
+        "id": 624820346,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789615100
+    },
+    {
+        "content": "<p>oh I'm not saying we shouldn't support it, just that I don't want to open a design can of worms right now when trying to focus on bugs and performance for 0.1.0 <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 624821380,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1789615665
+    },
+    {
+        "content": "<p>so if it's not blocking, I'd rather revisit later</p>",
+        "id": 624821384,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1789615671
+    },
+    {
+        "content": "<p>i also found <code>:?</code> more intuitive when originally working on this, but i think Richard preferred <code>?:</code> because it’s a more common operator in other languages! (the elvis operator i think it is called)</p>",
+        "id": 624823647,
+        "sender_full_name": "Jared Ramirez",
+        "timestamp": 1789617021
+    },
+    {
+        "content": "<p>I'm fine with the parser recognizing both, giving a warning for <code>:?</code>, and having <code>roc fmt</code> silently swap it to the other one <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 624824498,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1789617441
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"341568\">Jared Ramirez</span> <a href=\"#narrow/channel/231634-beginners/topic/Cannot.20add.20fields.20to.20a.20record.20with.20default.20fields/near/624823647\">said</a>:</p>\n<blockquote>\n<p>i also found <code>:?</code> more intuitive when originally working on this, but i think Richard preferred <code>?:</code> because it’s a more common operator in other languages! (the elvis operator i think it is called)</p>\n</blockquote>\n<p>Wow, I never realized how common <code>?:</code> is. Apparently it's used in Kotlin, Groovy, PHP, ColdFusion, and there's even a C/C++ extension supported by GCC and Clang. It corresponds to Roc's <code>??</code> operator.</p>",
+        "id": 624911820,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1789640897
+    },
+    {
+        "content": "<p>also TypeScript (at the type level, not the value level)</p>",
+        "id": 624998515,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1789656727
+    }
+]

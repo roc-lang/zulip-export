@@ -1,0 +1,122 @@
+[
+    {
+        "content": "<p>this is a partially-formed idea, so I'd like to talk about it at a high level and see what others think!</p>\n<p>I was thinking about how if I'm embedding a Roc program inside another code base (e.g. what we'll be doing in Vendr, introducing Roc to the existing TypeScript backend using a custom TS platform that lets the TS code base call Roc functions), and what the workflow would be like with the current <code>roc glue</code> and <code>roc build</code> designs.</p>\n<p>for example, right now I think it's:</p>\n<ul>\n<li>most of the time I run <code>roc build</code> on my application, and since my platform is coming from a path on my local filesystem, it will get rebuilt every time</li>\n<li>if I specifically happen to be changing the types my platform exposes to the host, I additionally need to run <code>roc glue</code> every time that happens, or else I'll get UB</li>\n</ul>\n<p>what if instead we made it so that the glue spec was specified in the <code>platform</code> module, and every time the platform gets rebuilt (either from the application rebuilding it or from running <code>roc build</code> on the platform module), glue generation gets re-run automatically?</p>",
+        "id": 350084694,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528336
+    },
+    {
+        "content": "<p>at first I thought \"oh that would be slower\" but then I thought about it some more and it seems like it might be the same speed or faster in practice <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 350084715,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528359
+    },
+    {
+        "content": "<p>because glue generation already requires monomorphizing the entire platform; the only thing it's doing differently from <code>roc build</code> is skipping the code gen step</p>",
+        "id": 350084745,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528386
+    },
+    {
+        "content": "<p>but once monomorphization is done, glue gen and code gen can be done concurrently</p>",
+        "id": 350084826,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528443
+    },
+    {
+        "content": "<p>which would probably mean that in practice, glue wouldn't actually be any slower unless every core is tied up I guess - which could happen on a CI machine, for example, but on a CI machine you'd want to run glue+build anyway, so in that scenario you get a savings from not having to do parse, canonicalize, typecheck, monomorphize twice (once for <code>roc build</code> and then  again for ` roc glue) - or, in a world where we have incremental builds, having to wait for the cache check an extra time</p>",
+        "id": 350084950,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528561
+    },
+    {
+        "content": "<p>so the only scenario that would get slower is the specific case where you'd want to build the platform but <em>not</em> re-run <code>glue</code></p>",
+        "id": 350085007,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528592
+    },
+    {
+        "content": "<p>but caching during builds would completely address that; we'd already want to detect when there were no changes that could affect <code>glue</code> since the previous build, and therefore not bother to run it</p>",
+        "id": 350085062,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528672
+    },
+    {
+        "content": "<p>and that check could run in parallel to code gen, so again probably not actually slowing down the end-to-end runtime in practice</p>",
+        "id": 350085142,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528696
+    },
+    {
+        "content": "<p>so one specific idea would be to specify the glue using the usual <code>packages</code> syntax <code>packages { pf: ..., glue: \"https://...\" }</code> and then add something like <code>generates glue</code> to the platform header</p>",
+        "id": 350085291,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528796
+    },
+    {
+        "content": "<p>this way, the platform knows what glue is supposed to be used to generate it, and when you run <code>roc build</code> you always get up-to-date glue as well as an up-to-date binary</p>",
+        "id": 350085358,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528831
+    },
+    {
+        "content": "<p>so the \"I was getting segfaults for two hours because forgot I needed to manually run <code>glue</code>\" bad experience can't happen</p>",
+        "id": 350085374,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528852
+    },
+    {
+        "content": "<p>thoughts?</p>",
+        "id": 350085377,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1681528855
+    },
+    {
+        "content": "<p>This sounds really neat. Would there ever be a need to have glue generated for multiple architectures? How might that work?</p>",
+        "id": 350090004,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1681533498
+    },
+    {
+        "content": "<p>Glue already supports multiple architectures</p>",
+        "id": 350092795,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1681536422
+    },
+    {
+        "content": "<p>We pass the type layout for each architecture into the glue gen scripts and they can generate whatever is needed in the platform's programming language. We use cfg attributes in rust.</p>",
+        "id": 350092896,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1681536520
+    },
+    {
+        "content": "<p>So this seems like a really strange merging to me. Fundamentally, <code>roc glue</code> will mostly be used by platform authors, not by regular roc developers. Obviously there will be custom platforms and overlap, but as roc matures and more base platforms are built, that should become a less common use case.</p>",
+        "id": 350093014,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1681536649
+    },
+    {
+        "content": "<p>Not against it. Just don't think it will be that common. Also, we have a goal trying to ensure build is fast and this goes directly against it.</p>",
+        "id": 350093054,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1681536720
+    },
+    {
+        "content": "<p>So i guess i see the specific use case, but if you have another build system that is calling <code>roc build</code>, why not just make that build system also call <code>roc glue</code>.</p>",
+        "id": 350093131,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1681536772
+    },
+    {
+        "content": "<p>Especially since whenever you need to run <code>roc glue</code> you likely will also need to change something on the systems side of the platform. You probably can't just safely call <code>roc glue</code></p>",
+        "id": 350093327,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1681536935
+    },
+    {
+        "content": "<p>Fundamentally whenever you need to run <code>roc glue</code>, you are changing the contract between roc and the host language.</p>",
+        "id": 350093414,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1681537017
+    }
+]

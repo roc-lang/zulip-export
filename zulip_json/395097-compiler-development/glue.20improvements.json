@@ -1,0 +1,422 @@
+[
+    {
+        "content": "<p>I've been working on some glue improvements, specifically having it generate glue for the user-defined effects in <code>hosted</code> modules - I have a <a href=\"https://github.com/roc-lang/roc/pull/5664\">draft PR</a> for this, but it's giving:</p>\n<blockquote>\n<p>thread 'main' panicked at 'unspecialized lambda sets left over during resolution: LambdaSet([] + (&lt;475&gt;FlexAble(fmt, [<code>Encode.EncoderFormatting</code>]):<code>Encode.record</code>:1), ^&lt;473&gt;), UlsOfVar(VecMap { keys: [], values: [] })', crates/compiler/mono/src/layout.rs:1980:17</p>\n</blockquote>\n<p>this is for <code>$ cargo run -- glue crates/glue/src/RustGlue.roc glue-out examples/cli/cli-platform/main.roc</code> on that branch</p>",
+        "id": 375626375,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689454961
+    },
+    {
+        "content": "<p>I'm assuming this is because of a combination of <a href=\"https://github.com/roc-lang/roc/pull/5664/files#diff-37a9508d25ec08eeb70c40673f91ec9c507c8ed20039e45aebc9df6e87c156afR2417\">this change</a> and <a href=\"https://github.com/roc-lang/roc/pull/5664/files#diff-2c26c9585cb6db3d160cecbce28235589955317dc58c5c30e6306630a87501f7R393\">this line</a> (I added the <code>.chain</code>)</p>",
+        "id": 375626525,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689455054
+    },
+    {
+        "content": "<p>those <code>variables</code> have an interaction with lambda sets <a href=\"https://github.com/roc-lang/roc/blob/15788159b27769452c9d894bc3118f0f911f1358/crates/glue/src/load.rs#L412\">a bit later on</a></p>",
+        "id": 375626580,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689455099
+    },
+    {
+        "content": "<p>but I'm guessing maybe they need to be registered in some other way?</p>",
+        "id": 375626603,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689455108
+    },
+    {
+        "content": "<p>Is this coming from when you try to generate the glue for a host-exposed lambda set? If so, this should be fine - it just means the lambda set is polymorphic, like the other polymorphic HELSs. I would probably add a flag to the layout generator to drop those unspecialized lambda sets for glue generation (or always drop them, but if that road is taken, let's add a debug flag that checks against this, since the assert is intended to catch bugs in specialization)</p>",
+        "id": 375639956,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689464035
+    },
+    {
+        "content": "<p>oh hm, I hadn't even thought about where it was coming from</p>",
+        "id": 375641028,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689464852
+    },
+    {
+        "content": "<p>I just tried it on <code>platform-cli</code> in <code>examples/</code> - I didn't even look at what it was trying to operate on</p>",
+        "id": 375641047,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689464874
+    },
+    {
+        "content": "<p>but everything in <code>hosted</code> should need to be monomorphic, right?</p>",
+        "id": 375641118,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689464899
+    },
+    {
+        "content": "<p>(I don't think we have a check for that yet though)</p>",
+        "id": 375641126,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689464906
+    },
+    {
+        "content": "<p>and if so, then shouldn't the lambda sets no longer be polymorphic?</p>",
+        "id": 375641141,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689464925
+    },
+    {
+        "content": "<p>they should be monomorphic in the surface types, but the lambda sets can almost never be monomorphic</p>",
+        "id": 375641154,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689464938
+    },
+    {
+        "content": "<p>gotcha</p>",
+        "id": 375641169,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689464948
+    },
+    {
+        "content": "<p>hence the need for the host-exposed lambda set wrapper functions</p>",
+        "id": 375641170,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689464950
+    },
+    {
+        "content": "<p>one case is if the host-exposed main is something like</p>\n<div class=\"codehilite\"><pre><span></span><code>mainForHost : {} -&gt; (Int -&gt; Int)\n</code></pre></div>\n<p>The lambda set of the <code>Int -&gt; Int</code> is (very likely) only provided per-app, we don't know what lambda set to reference there when generating the glue</p>",
+        "id": 375641300,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689465060
+    },
+    {
+        "content": "<p>Folkert's numbering scheme should generate the right lambda set wrapper</p>",
+        "id": 375641318,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689465076
+    },
+    {
+        "content": "<p>we just need to tell the layout generator that it's okay for them to be unresolved as polymorphic for the purposes of glue</p>",
+        "id": 375641330,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689465101
+    },
+    {
+        "content": "<p>hmmm ok, if I drop it (just disable that <code>debug_assert!</code> for now), I hit <a href=\"https://github.com/roc-lang/roc/blob/15788159b27769452c9d894bc3118f0f911f1358/crates/glue/src/types.rs#L1586\">this <code>unreachable!</code></a> due to the builtin (!) Alias in question having a <code>name</code> of <code>Decode.0</code> and a repr of <code>LayoutRepr::Struct([])</code> <span aria-label=\"face with raised eyebrow\" class=\"emoji emoji-1f928\" role=\"img\" title=\"face with raised eyebrow\">:face_with_raised_eyebrow:</span></p>",
+        "id": 375641832,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689465484
+    },
+    {
+        "content": "<p>that is <code>Decode.DecodeError</code>. seems like that pattern match should be expanded?</p>",
+        "id": 375642074,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689465632
+    },
+    {
+        "content": "<p>hm, I don't follow <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 375645028,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689467333
+    },
+    {
+        "content": "<p>oh as in like:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"n\">LayoutRepr</span>::<span class=\"n\">Struct</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"o\">..</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"k\">if</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">name</span><span class=\"w\"> </span><span class=\"o\">==</span><span class=\"w\"> </span><span class=\"n\">Symbol</span>::<span class=\"n\">DECODE_DECODE_ERROR</span><span class=\"w\"> </span><span class=\"o\">=&gt;</span><span class=\"w\"> </span><span class=\"p\">{</span>\n</code></pre></div>",
+        "id": 375645104,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689467380
+    },
+    {
+        "content": "<p>ha, looks like we do have <em>some</em> amount of checking for this <span aria-label=\"joy\" class=\"emoji emoji-1f602\" role=\"img\" title=\"joy\">:joy:</span> </p>\n<blockquote>\n<p>thread 'main' panicked at 'not yet implemented: TODO give a nice error message for a non-concrete type being passed to the host', crates/glue/src/types.rs:1386:13</p>\n</blockquote>",
+        "id": 375645972,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689467798
+    },
+    {
+        "content": "<p>guess it's time to improve that error message!</p>",
+        "id": 375647023,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689468352
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span>  I think probably the best way to go about that is to add an extra check after we've just solved all the types for a <code>hosted</code> module, while we still have all the <code>decls</code> in scope: traverse each of them, and if there are any unbound type variables in them, change the <code>Decl</code>'s type to <code>Erroneous</code> and report it</p>",
+        "id": 375650260,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689469813
+    },
+    {
+        "content": "<p>hm, ok I added a text fixture with a couple of effects: <a href=\"https://github.com/roc-lang/roc/blob/acb1a5ac04077c4abdffb203bb79b8c8ccd393f6/crates/glue/tests/fixtures/basic-effects/Effect.roc\">https://github.com/roc-lang/roc/blob/acb1a5ac04077c4abdffb203bb79b8c8ccd393f6/crates/glue/tests/fixtures/basic-effects/Effect.roc</a></p>\n<p>now I'm running into this, though:</p>\n<p><a href=\"https://github.com/roc-lang/roc/blob/15788159b27769452c9d894bc3118f0f911f1358/crates/compiler/mono/src/layout.rs#L2394\">https://github.com/roc-lang/roc/blob/15788159b27769452c9d894bc3118f0f911f1358/crates/compiler/mono/src/layout.rs#L2394</a></p>",
+        "id": 375651813,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689470644
+    },
+    {
+        "content": "<p>interestingly, it's only for the <code>getLine : Effect Str</code> though</p>",
+        "id": 375651966,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689470742
+    },
+    {
+        "content": "<p>if I delete that one, <code>putLine : Str -&gt; Effect {}</code> works</p>",
+        "id": 375651979,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689470752
+    },
+    {
+        "content": "<p>I would have guessed that it would be for the one with the actual function type, but I guess it's the wrapper?</p>",
+        "id": 375652278,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689470895
+    },
+    {
+        "content": "<p>what is the backtrace? I guess that could happen if you’re asking to generate a RawFunctionLayout for a host exposed lambda sets</p>",
+        "id": 375660509,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689476272
+    },
+    {
+        "content": "<p>update: <code>putLine : Str -&gt; Effect {}</code> <del>works</del> completes, but generates the wrong type <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 375826693,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689536161
+    },
+    {
+        "content": "<p>this is interesting...the <code>Content</code> of the type when I write it down is:</p>\n<blockquote>\n<p>[crates/compiler/load_internal/src/file.rs:2436] symbol = <code>Effect.putLine</code><br>\n[crates/compiler/load_internal/src/file.rs:2473] f = \"Func([&lt;1792&gt;Apply(<code>Str.Str</code>, []),], &lt;261=1801&gt;LambdaSet([<code>Effect.putLine</code> , ], ^&lt;1800&gt;), &lt;1793&gt;Opaque(<code>Effect.Effect</code>, [257, 256], &lt;259&gt;Func([&lt;1&gt;EmptyRecord,], &lt;249=69&gt;LambdaSet([<code>Effect.IdentId(20)</code> &lt;244&gt;Apply(<code>Str.Str</code>, []) , ], ^&lt;1796&gt;), &lt;257&gt;EmptyRecord)))\"</p>\n</blockquote>",
+        "id": 375826779,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689536186
+    },
+    {
+        "content": "<p>that looks correct, because the signature in <code>Effect.roc</code> is:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">putLine</span><span class=\"w\"> </span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">Str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Effect</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n</code></pre></div>",
+        "id": 375826822,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689536219
+    },
+    {
+        "content": "<p>however, the generated glue is:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"w\">    </span><span class=\"n\">HostedFn</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"n\">name</span>: <span class=\"s\">\"putLine\"</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"n\">arg_types</span>: <span class=\"kp\">&amp;</span><span class=\"p\">[],</span>\n<span class=\"w\">        </span><span class=\"n\">ret_type</span>: <span class=\"nc\">R1</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n</code></pre></div>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"cp\">#[derive(Clone, Debug, PartialEq, PartialOrd, )]</span>\n<span class=\"cp\">#[repr(C)]</span>\n<span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">struct</span> <span class=\"nc\">R1</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">rest</span>: <span class=\"nc\">roc_std</span>::<span class=\"n\">RocList</span><span class=\"o\">&lt;</span><span class=\"kt\">u8</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"n\">result</span>: <span class=\"nc\">roc_std</span>::<span class=\"n\">RocResult</span><span class=\"o\">&lt;</span><span class=\"kt\">f64</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">()</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n</code></pre></div>",
+        "id": 375826971,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689536295
+    },
+    {
+        "content": "<p>so it thinks it's a thunk whose return value is what we generate for <code>Decode</code> on a <a href=\"https://github.com/roc-lang/roc/blob/06dbe06971d83d2dfe2c0061ab7f157a67229ed7/crates/compiler/derive/src/decoding/record.rs#L257C26-L257C26\">record</a> or <a href=\"https://github.com/roc-lang/roc/blob/06dbe06971d83d2dfe2c0061ab7f157a67229ed7/crates/compiler/derive/src/decoding/tuple.rs#L259\">tuple</a></p>",
+        "id": 375827108,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689536363
+    },
+    {
+        "content": "<p>ok, the plot thickens:</p>\n<ul>\n<li>when I look up the <code>Content</code> in <code>solved_subs</code>, it's the above <code>Func</code> as expected</li>\n<li>when I look up the same <code>Variable</code> (and <code>Symbol</code>) later on in <code>env.subs</code> in <code>glue</code>, it's a <code>Record</code> instead of a <code>Func</code> <span aria-label=\"face with raised eyebrow\" class=\"emoji emoji-1f928\" role=\"img\" title=\"face with raised eyebrow\">:face_with_raised_eyebrow:</span></li>\n</ul>",
+        "id": 375840138,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689543519
+    },
+    {
+        "content": "<p>so one guess at what's happening:</p>\n<ul>\n<li>the <code>Symbol</code> that's being recorded is global, so it's correct</li>\n<li>the <code>Variable</code> that's being recorded is relative to the <code>Effect</code> module (and that module's <code>Subs</code>), whereas when I go to look it up later in <code>env.subs</code>, it's a different <code>Subs</code> (the one for the root module being used in <code>glue</code>), so the <code>Variable</code> is just referring to something totally different</li>\n</ul>",
+        "id": 375840244,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689543599
+    },
+    {
+        "content": "<p>if that is indeed what's happening, I guess a potential solution is to store the <code>Symbol</code> only and see if I can look up the appropriate <code>Variable</code> to use in the root module later?</p>",
+        "id": 375840406,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689543717
+    },
+    {
+        "content": "<p>hm, but I don't have an easy way in glue to go from <code>Symbol</code> to <code>Variable</code> in the root module <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 375840492,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689543777
+    },
+    {
+        "content": "<p>like we have <code>exposed_vars_by_symbol: Vec&lt;(Symbol, Variable)&gt;</code> but these aren't exposed (at least not to the end user)</p>",
+        "id": 375841099,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544198
+    },
+    {
+        "content": "<p>but it must be possible to look these up somehow, because mono has to do it in order to generate the externs for linking</p>",
+        "id": 375841223,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544270
+    },
+    {
+        "content": "<p>like those need both the symbol and the appropriate <code>Variable</code> (or at least the solved type) at some point</p>",
+        "id": 375841236,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544287
+    },
+    {
+        "content": "<p>anyone know how that works and how we might do the same thing for glue?</p>",
+        "id": 375841250,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544300
+    },
+    {
+        "content": "<p>why is the solved_subs different from the env.subs in glue?</p>",
+        "id": 375841387,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689544399
+    },
+    {
+        "content": "<p>it's <code>solved_subs</code> for the <code>hosted</code> module</p>",
+        "id": 375841405,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544411
+    },
+    {
+        "content": "<p>actually wait, is that true? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 375841425,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544427
+    },
+    {
+        "content": "<p>or is <code>solved_subs</code> always for the root module</p>",
+        "id": 375841432,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544434
+    },
+    {
+        "content": "<p>yeah no it's for the <code>hosted</code> module</p>",
+        "id": 375841526,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544480
+    },
+    {
+        "content": "<p>each module gets its own subs (and eventually a solved subs), so it depends where it's being referenced</p>",
+        "id": 375841527,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689544481
+    },
+    {
+        "content": "<p>I'm printing it out for <code>Msg::SolvedTypes</code></p>",
+        "id": 375841532,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544491
+    },
+    {
+        "content": "<p>so yeah it's the per-module one</p>",
+        "id": 375841544,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544496
+    },
+    {
+        "content": "<p>got it. why is glue not using that subs too then? I would assume you want to generate glue from the hosted module?</p>",
+        "id": 375841573,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689544522
+    },
+    {
+        "content": "<p>yeah so the algorithm I'm using right now (which has the aforementioned issue) is:</p>\n<ul>\n<li>during module header parsing, when we encounter a <code>hosted</code> module, we add its <code>ModuleId</code> to <code>state.hosted_ids</code> for later (this part is fine)</li>\n<li>then, when get a <code>Msg::SolvedTypes</code> for that module, we add all of the symbols in its <code>decls</code> to <code>state.hosted_vars_by_symbol: MutMap&lt;Symbol, Variable&gt;</code> - this is where we add the correct <code>Symbol</code>, but the <code>Variable</code> we have access to at this point is for the <code>hosted</code> module's <code>Subs</code> and not the root module's <code>Subs</code></li>\n<li>that <code>state.hosted_vars_by_symbol</code> makes it into <code>LoadedModule</code>, which <code>glue</code> then uses - but although it has the correct <code>Symbol</code>s, it has the wrong <code>Variable</code>s</li>\n</ul>",
+        "id": 375841801,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544700
+    },
+    {
+        "content": "<p>i see. I would add another subs, let’s call it H for now, alongside this hosted_vars_by_symbol object, and export the module’s variable from the module subs into H, and then work on H in glue</p>",
+        "id": 375841987,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689544830
+    },
+    {
+        "content": "<p>cool, I like it! <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 375842017,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689544857
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/blob/3a934ba8d61c627de4d946768b3824ecf6f4e713/crates/compiler/types/src/subs.rs#L4592\">https://github.com/roc-lang/roc/blob/3a934ba8d61c627de4d946768b3824ecf6f4e713/crates/compiler/types/src/subs.rs#L4592</a></p>",
+        "id": 375842059,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689544884
+    },
+    {
+        "content": "<p>yeah but when would I call that? <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 375842559,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689545171
+    },
+    {
+        "content": "<p>can you do it during the time you add the mapping into state.hosted_vars_by_symbol?</p>",
+        "id": 375842704,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689545282
+    },
+    {
+        "content": "<p>I think that would cause a race condition because <code>root_subs: Option&lt;Subs&gt;</code> might not be set yet</p>",
+        "id": 375842896,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689545391
+    },
+    {
+        "content": "<p>but actually it turns out <code>module_cache</code> has <code>solved_subs</code> for each module</p>",
+        "id": 375842985,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689545424
+    },
+    {
+        "content": "<p>yeah</p>",
+        "id": 375843378,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689545644
+    },
+    {
+        "content": "<p>ok I think things will go best if I use <code>export_variable_to</code> - do I understand correctly that the returned <code>CopiedImport</code>'s <code>variable</code> field is the new <code>Variable</code> in the other <code>Subs</code>'s variable space?</p>",
+        "id": 375843744,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689545872
+    },
+    {
+        "content": "<p>yes</p>",
+        "id": 375844154,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689546103
+    },
+    {
+        "content": "<p>oh, it's on <code>StorageSubs</code> - I haven't worked with that before, what's the difference between it and <code>Subs</code>?</p>",
+        "id": 375844271,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689546163
+    },
+    {
+        "content": "<p>they are basically the same, StorageSubs is a wrapper of Subs IIRC. it just has some extra methods bc it’s intended for cross-module storage</p>",
+        "id": 375844941,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1689546594
+    },
+    {
+        "content": "<p>ok, <code>module_cache.typechecked</code> entries get removed from the cache too soon for my purposes</p>",
+        "id": 375848367,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689548704
+    },
+    {
+        "content": "<p>one potentially interesting option I just thought of: if <code>root_subs: Option&lt;Subs&gt;</code> is <code>None</code> when I want to add the hosted variables to it, just initialize it to empty and copy in the variables</p>",
+        "id": 375848513,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689548787
+    },
+    {
+        "content": "<p>then later, when starting to work on the root module, use that as the starting point if it's set</p>",
+        "id": 375848540,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689548811
+    },
+    {
+        "content": "<p>that way, whichever one gets to it first doesn't matter</p>",
+        "id": 375848553,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689548820
+    },
+    {
+        "content": "<p>at that point might as well drop the <code>Option</code> I suppose, and always initialize it</p>",
+        "id": 375851451,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689550616
+    },
+    {
+        "content": "<p>ok, got all that working, but now <a href=\"https://github.com/roc-lang/roc/blob/3a934ba8d61c627de4d946768b3824ecf6f4e713/crates/glue/src/types.rs#L1301\">this</a> is blowing up because it has a return type of a FlexVar somehow <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 375864188,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689557219
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>Adding function type ret_type_id for RocFunction_1540...\n[crates/glue/src/types.rs:1323] &amp;ret_layout = InLayout(VOID)\n[crates/glue/src/types.rs:1324] types.get_type(lambda_set_type_id) = Unsized\n[crates/glue/src/types.rs:1360] subs.get_content_without_compacting(var) = FlexVar(\n    None,\n)\nthread &#39;main&#39; panicked at &#39;not yet implemented: TODO give a nice error message for a non-concrete type being passed to the host&#39;, crates/glue/src/types.rs:1365:13\n</code></pre></div>",
+        "id": 375864228,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1689557237
+    }
+]

@@ -1,0 +1,206 @@
+[
+    {
+        "content": "<p>I'm building a parser for parsing simple arithmetic expressions. Unfortunately,  I'm stuck, as my program just stack overflows when running it. At this point, I think I need pointers.</p>\n<p>Here's my parser. Note: It's just a toy for my upcoming talk, so the quality might not be the best.</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>module [digit]\n\nParser a := List U8 -&gt; ParseResult a\nParseResult a : Result { value : a, rest : List U8 } Str\n\nrun : Parser a, Str -&gt; Result (a, Str) Str\nrun = |@Parser(parser), input|\n    when input |&gt; Str.to_utf8 |&gt; parser is\n        Ok({ value, rest }) -&gt; Ok((value, Str.from_utf8(rest) ?? \"\"))\n        Err(err) -&gt; Err(err)\n\nmap : Parser a, (a -&gt; b) -&gt; Parser b\nmap = |@Parser(parser), f|\n    @Parser(\n        |input|\n            parser(input) |&gt; Result.map_ok(|{ value, rest }| { value: f(value), rest }),\n    )\n\nexpect run(map(digit, |n| n + 1), \"123\") == Ok(('2', \"23\"))\n\nlazy : ({} -&gt; Parser a) -&gt; Parser a\nlazy = |thunk|\n    @Parser(\n        |input|\n            @Parser(parser) = thunk({})\n            parser(input),\n    )\n\nzero_or_more : Parser a -&gt; Parser (List a)\nzero_or_more = |@Parser(parser)|\n    @Parser(\n        |input|\n            helper = |acc, remaining|\n                when parser(remaining) is\n                    Ok({ value, rest }) -&gt; helper(List.append(acc, value), rest)\n                    Err(_) -&gt; Ok({ value: acc, rest: remaining })\n            helper([], input),\n    )\n\nexpect run(zero_or_more(digit), \"123\") == Ok((['1', '2', '3'], \"\"))\nexpect run(zero_or_more(digit), \"abc\") == Ok(([], \"abc\"))\n\none_or_more : Parser a -&gt; Parser (List a)\none_or_more = |parser|\n    parser\n    |&gt; andThen(zero_or_more(parser))\n    |&gt; map(|(head, tail)| List.prepend(tail, head))\n\nexpect run(one_or_more(digit), \"123\") == Ok((['1', '2', '3'], \"\"))\nexpect run(one_or_more(digit), \"abc\") == Err(\"expected '9', got 'a'\")\n\norElse : Parser a, Parser a -&gt; Parser a\norElse = |@Parser(parserA), @Parser(parserB)|\n    @Parser(\n        |input|\n            when parserA(input) is\n                Ok(result) -&gt; Ok(result)\n                Err(_) -&gt; parserB(input),\n    )\n\nexpect run(orElse(digit, symbol('a')), \"123\") == Ok(('1', \"23\"))\nexpect run(orElse(digit, symbol('a')), \"abc\") == Ok(('a', \"bc\"))\nexpect run(orElse(digit, symbol('a')), \"\") == Err(\"expected 'a', got EOF\")\n\nandThen : Parser a, Parser b -&gt; Parser (a, b)\nandThen = |@Parser(parserA), @Parser(parserB)|\n    @Parser(\n        |input|\n            { value: valueA, rest: restA } = parserA(input)?\n            { value: valueB, rest: restB } = parserB(restA)?\n            Ok({ value: (valueA, valueB), rest: restB }),\n    )\n\nexpect run(digit |&gt; andThen(digit), \"123\") == Ok((('1', '2'), \"3\"))\n\nandDropLeft : Parser a, Parser b -&gt; Parser b\nandDropLeft = |parserA, parserB|\n    parserA |&gt; andThen(parserB) |&gt; map(|(_, b)| b)\n\nandDropRight : Parser a, Parser b -&gt; Parser a\nandDropRight = |parserA, parserB|\n    parserA |&gt; andThen(parserB) |&gt; map(|(a, _)| a)\n\ndigit : Parser U8\ndigit =\n    parsers = List.map(['1', '2', '3', '4', '5', '6', '7', '8', '9'], symbol)\n    List.walk(parsers, symbol('0'), orElse)\n\nexpect run(digit, \"123\") == Ok(('1', \"23\"))\nexpect run(digit, \"abc\") == Err(\"expected '9', got 'a'\")\nexpect run(digit, \"\") == Err(\"expected '9', got EOF\")\n\nnatural : Parser U64\nnatural =\n    one_or_more(digit)\n    |&gt; map(|digits| List.walk(digits, 0, |acc, n| acc * 10 + Num.to_u64(n - '0')))\n\nexpect run(natural, \"123\") == Ok((123, \"\"))\nexpect run(natural, \"1abc\") == Ok((1, \"abc\"))\n\nsymbol : U8 -&gt; Parser U8\nsymbol = |c|\n    @Parser(\n        |input|\n            when input is\n                [d, .. as rest] if c == d -&gt;\n                    Ok({ value: c, rest })\n\n                [d, ..] -&gt;\n                    exp = Str.from_utf8([c]) ?? \"\"\n                    act = Str.from_utf8([d]) ?? \"\"\n                    Err(\"expected '${exp}', got '${act}'\")\n\n                [] -&gt;\n                    exp = Str.from_utf8([c]) ?? \"\"\n                    Err(\"expected '${exp}', got EOF\"),\n    )\n\nexpect run(symbol('a'), \"abc\") == Ok(('a', \"bc\"))\nexpect run(symbol('a'), \"bbc\") == Err(\"expected 'a', got 'b'\")\nexpect run(symbol('a'), \"\") == Err(\"expected 'a', got EOF\")\n\nexpr : Parser U64\nexpr =\n    term\n    |&gt; andDropRight(symbol('+'))\n    |&gt; andThen(lazy(|_| expr))\n    |&gt; map(|(x, y)| x + y)\n    |&gt; orElse(term)\n\nterm : Parser U64\nterm =\n    factor\n    |&gt; andDropRight(symbol('*'))\n    |&gt; andThen(lazy(|_| term))\n    |&gt; map(|(x, y)| x * y)\n    |&gt; orElse(factor)\n\nfactor : Parser U64\nfactor = natural\n\nexpect run(expr, \"1\") == Ok((3, \"\"))\n</code></pre></div>\n<p>When running it, it immediately errors out with a stack overflow:</p>\n<div class=\"codehilite\"><pre><span></span><code>thread &#39;&lt;unknown&gt;&#39; has overflowed its stack\nfatal runtime error: stack overflow\nAbort trap: 6\n</code></pre></div>\n<p>I assumed this was due to the recursive nature of <code>expr</code> and <code>term</code>, but after adding a <code>lazy</code> combinator the problem persists. I've been looking at this code for hours now and I really can't figure it out. Either I've made some logical mistake in the code or I simply don't understand the problem.</p>\n<p>Any help would be much appreciated!</p>",
+        "id": 501389940,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740328485
+    },
+    {
+        "content": "<p>I tried rewriting my combinators like so:</p>\n<div class=\"codehilite\"><pre><span></span><code>expr : Parser U64\nexpr =\n    term\n    |&gt; andThen(zero_or_more(symbol(&#39;+&#39;) |&gt; andDropLeft(term)))\n    |&gt; map(|(x, xs)| List.walk(xs, x, |sum, y| sum + y))\n\nterm : Parser U64\nterm =\n    factor\n    |&gt; andThen(zero_or_more(symbol(&#39;*&#39;) |&gt; andDropLeft(factor)))\n    |&gt; map(|(x, xs)| List.walk(xs, x, |product, y| product * y))\n\nfactor : Parser U64\nfactor = natural |&gt; orElse(symbol(&#39;(&#39;) |&gt; andDropLeft(expr) |&gt; andDropRight(symbol(&#39;)&#39;)))\n</code></pre></div>\n<p>Unfortunately, the result is the same, so I'm out of ideas at this point. <span aria-label=\"man shrugging\" class=\"emoji emoji-1f937-200d-2642\" role=\"img\" title=\"man shrugging\">:man_shrugging:</span></p>",
+        "id": 501393875,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740331565
+    },
+    {
+        "content": "<p>Anyone?</p>",
+        "id": 501449581,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740375142
+    },
+    {
+        "content": "<p>I'll take a look, need to rebuild the rust compiler</p>",
+        "id": 501450368,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740375725
+    },
+    {
+        "content": "<p>Thanks, <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span>. Really appreciate it.</p>",
+        "id": 501450438,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740375786
+    },
+    {
+        "content": "<p>Oh, this isn't your app stack overflowing, this is roc compiler unification looping infinitely</p>",
+        "id": 501451364,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740376103
+    },
+    {
+        "content": "<p>Oh, really? So it’s a compiler bug? I’m actually glad to hear that as I spent hours trying to figure out what I did wrong yesterday.</p>\n<p>How likely is it that this can be fixed short term? I’m having a presentation about Roc and parser combinators on Thursday and starting to get a bit stressed out as I don’t have working code yet. <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>\n<p>If not fixed, can I work around it?</p>",
+        "id": 501452188,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740376363
+    },
+    {
+        "content": "<blockquote>\n<p>How likely is it that this can be fixed short term?</p>\n</blockquote>\n<p>I think the chances are pretty slim. I think this is a bug with recursive lambaset unification and closure captures. Likely needs some sort of boxed break point otherwise will capture an inifinitely large dataset.</p>",
+        "id": 501452404,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740376434
+    },
+    {
+        "content": "<blockquote>\n<p>If not fixed, can I work around it?</p>\n</blockquote>\n<p>I would assume there is a workaround, the question is what would it be.</p>",
+        "id": 501452503,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740376455
+    },
+    {
+        "content": "<p>Sadly due to lambasets, roc's function unification is brittle. Parser combinators (recursive opaque functions with captures) are about the most likely thing to break due to lambaset bugs.</p>",
+        "id": 501452582,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740376503
+    },
+    {
+        "content": "<p>lambaset bugs are a major part of the reason we are rewriting the compiler in general.</p>",
+        "id": 501452730,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740376582
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> just curious if you have any ideas for a workaround. I know you worked with parser combinators in roc a good bit.</p>",
+        "id": 501452802,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740376631
+    },
+    {
+        "content": "<p>Got it. Damn it. I assume the new compiler is still work in progress as well?</p>",
+        "id": 501452811,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740376637
+    },
+    {
+        "content": "<p>Yeah, it is like a few weeks old. It doesn't compile anything yet.</p>",
+        "id": 501452837,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740376662
+    },
+    {
+        "content": "<p>The overflow happens when I  call <code>expr</code> from within <code>factor</code>. I could drop support for parametrised expressions, but it would take away from what I’m trying to explain.</p>\n<p>Let’s see if Luke or someone else can think of a workaround, otherwise I’ll have to rewrite this in Elm…</p>\n<p>Thanks for help debugging this. <span aria-label=\"smile\" class=\"emoji emoji-1f642\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 501453357,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740376926
+    },
+    {
+        "content": "<p>Oh, one thing I remember that might help. When defining a new parser, wrap it in a new lamba and <code>@Parser</code>. So instead of</p>\n<div class=\"codehilite\" data-code-language=\"Ruby\"><pre><span></span><code><span class=\"n\">factor</span><span class=\"w\"> </span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"no\">Parser</span><span class=\"w\"> </span><span class=\"no\">U64</span>\n<span class=\"n\">factor</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">natural</span>\n</code></pre></div>\n<p>Do:</p>\n<div class=\"codehilite\" data-code-language=\"Ruby\"><pre><span></span><code><span class=\"n\">factor</span><span class=\"w\"> </span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"no\">Parser</span><span class=\"w\"> </span><span class=\"no\">U64</span>\n<span class=\"n\">factor</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"vi\">@Parser</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"n\">x</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"n\">natural</span><span class=\"p\">(</span><span class=\"n\">x</span><span class=\"p\">))</span>\n</code></pre></div>\n<p>Same with <code>expr</code> and other parsers. That has fixed similar issues before.</p>",
+        "id": 501453744,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740377152
+    },
+    {
+        "content": "<p>I’ll try that. I also found <a href=\"https://github.com/roc-lang/roc/issues/7381\">https://github.com/roc-lang/roc/issues/7381</a> which seems relevant.</p>",
+        "id": 501453841,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740377200
+    },
+    {
+        "content": "<p>quite possibly</p>",
+        "id": 501454017,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740377300
+    },
+    {
+        "content": "<p>Could be a bug with how we create joinpoints in mutually tail recursive code.</p>",
+        "id": 501454043,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740377322
+    },
+    {
+        "content": "<p>I've got a few minutes now I'll poke at it and see if I can find anything.</p>",
+        "id": 501466885,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1740382823
+    },
+    {
+        "content": "<p>Did it work up until a point?</p>",
+        "id": 501467216,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1740382934
+    },
+    {
+        "content": "<p>I think it is just the last test an <code>expr</code> that breaks things</p>",
+        "id": 501467360,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740382994
+    },
+    {
+        "content": "<p>Yes. The current version which is this:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>module []\n\nParser a := List U8 -&gt; ParseResult a\nParseResult a : Result { value : a, rest : List U8 } Str\n\nrun : Parser a, Str -&gt; Result (a, Str) Str\nrun = |@Parser(parser), input|\n    when input |&gt; Str.to_utf8 |&gt; parser is\n        Ok({ value, rest }) -&gt; Ok((value, Str.from_utf8(rest) ?? \"\"))\n        Err(err) -&gt; Err(err)\n\nmap : Parser a, (a -&gt; b) -&gt; Parser b\nmap = |@Parser(parser), f|\n    @Parser(\n        |input|\n            parser(input) |&gt; Result.map_ok(|{ value, rest }| { value: f(value), rest }),\n    )\n\nexpect run(map(digit, |n| n + 1), \"123\") == Ok(('2', \"23\"))\n\nlazy : ({} -&gt; Parser a) -&gt; Parser a\nlazy = |thunk|\n    @Parser(\n        |input|\n            @Parser(parser) = thunk({})\n            parser(input),\n    )\n\nzero_or_more : Parser a -&gt; Parser (List a)\nzero_or_more = |@Parser(parser)|\n    @Parser(\n        |input|\n            helper = |acc, remaining|\n                when parser(remaining) is\n                    Ok({ value, rest }) -&gt;\n                        # TODO: Not sure if this is needed. All parsers consume input.\n                        if rest == remaining then\n                            Ok({ value: acc, rest: remaining })\n                        else\n                            helper(List.append(acc, value), rest)\n\n                    Err(_) -&gt; Ok({ value: acc, rest: remaining })\n            helper([], input),\n    )\n\nexpect run(zero_or_more(digit), \"123\") == Ok((['1', '2', '3'], \"\"))\nexpect run(zero_or_more(digit), \"abc\") == Ok(([], \"abc\"))\n\none_or_more : Parser a -&gt; Parser (List a)\none_or_more = |parser|\n    parser\n    |&gt; andThen(zero_or_more(parser))\n    |&gt; map(|(head, tail)| List.prepend(tail, head))\n\nexpect run(one_or_more(digit), \"123\") == Ok((['1', '2', '3'], \"\"))\nexpect run(one_or_more(digit), \"abc\") == Err(\"expected '9', got 'a'\")\n\norElse : Parser a, Parser a -&gt; Parser a\norElse = |@Parser(parserA), @Parser(parserB)|\n    @Parser(\n        |input|\n            when parserA(input) is\n                Ok(result) -&gt; Ok(result)\n                Err(_) -&gt; parserB(input),\n    )\n\nexpect run(orElse(digit, symbol('a')), \"123\") == Ok(('1', \"23\"))\nexpect run(orElse(digit, symbol('a')), \"abc\") == Ok(('a', \"bc\"))\nexpect run(orElse(digit, symbol('a')), \"\") == Err(\"expected 'a', got EOF\")\n\nandThen : Parser a, Parser b -&gt; Parser (a, b)\nandThen = |@Parser(parserA), @Parser(parserB)|\n    @Parser(\n        |input|\n            { value: valueA, rest: restA } = parserA(input)?\n            { value: valueB, rest: restB } = parserB(restA)?\n            Ok({ value: (valueA, valueB), rest: restB }),\n    )\n\nexpect run(digit |&gt; andThen(digit), \"123\") == Ok((('1', '2'), \"3\"))\n\nandDropLeft : Parser a, Parser b -&gt; Parser b\nandDropLeft = |parserA, parserB|\n    parserA |&gt; andThen(parserB) |&gt; map(|(_, b)| b)\n\nandDropRight : Parser a, Parser b -&gt; Parser a\nandDropRight = |parserA, parserB|\n    parserA |&gt; andThen(parserB) |&gt; map(|(a, _)| a)\n\ndigit : Parser U8\ndigit =\n    parsers = List.map(['1', '2', '3', '4', '5', '6', '7', '8', '9'], symbol)\n    List.walk(parsers, symbol('0'), orElse)\n\nexpect run(digit, \"123\") == Ok(('1', \"23\"))\nexpect run(digit, \"abc\") == Err(\"expected '9', got 'a'\")\nexpect run(digit, \"\") == Err(\"expected '9', got EOF\")\n\nnatural : Parser U64\nnatural =\n    one_or_more(digit)\n    |&gt; map(|digits| List.walk(digits, 0, |acc, n| acc * 10 + Num.to_u64(n - '0')))\n\nexpect run(natural, \"123\") == Ok((123, \"\"))\nexpect run(natural, \"1abc\") == Ok((1, \"abc\"))\n\nsymbol : U8 -&gt; Parser U8\nsymbol = |c|\n    @Parser(\n        |input|\n            when input is\n                [d, .. as rest] if c == d -&gt;\n                    Ok({ value: c, rest })\n\n                [d, ..] -&gt;\n                    exp = Str.from_utf8([c]) ?? \"\"\n                    act = Str.from_utf8([d]) ?? \"\"\n                    Err(\"expected '${exp}', got '${act}'\")\n\n                [] -&gt;\n                    exp = Str.from_utf8([c]) ?? \"\"\n                    Err(\"expected '${exp}', got EOF\"),\n    )\n\nexpect run(symbol('a'), \"abc\") == Ok(('a', \"bc\"))\nexpect run(symbol('a'), \"bbc\") == Err(\"expected 'a', got 'b'\")\nexpect run(symbol('a'), \"\") == Err(\"expected 'a', got EOF\")\n\nexpr : Parser U64\nexpr =\n    term\n    |&gt; andThen(zero_or_more(symbol('+') |&gt; andDropLeft(term)))\n    |&gt; map(|(x, xs)| List.walk(xs, x, |sum, y| sum + y))\n\nterm : Parser U64\nterm =\n    factor\n    |&gt; andThen(zero_or_more(symbol('*') |&gt; andDropLeft(factor)))\n    |&gt; map(|(x, xs)| List.walk(xs, x, |product, y| product * y))\n\nfactor : Parser U64\nfactor =\n    natural\n    |&gt; orElse(\n        symbol('(')\n        |&gt; andDropLeft(expr)\n        |&gt; andDropRight(symbol(')')),\n    )\n\nexpect run(expr, \"1+2\") == Ok((3, \"\"))\n</code></pre></div>\n<p>works as long as I kill the <code>orElse</code> branch in <code>factor</code>.</p>",
+        "id": 501467447,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740383030
+    },
+    {
+        "content": "<p>So it's the fact that I call <code>expr</code> from <code>factor</code>.</p>",
+        "id": 501467606,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740383072
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"Ruby\"><pre><span></span><code><span class=\"w\">        </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"n\">andDropLeft</span><span class=\"p\">(</span>\n<span class=\"w\">            </span><span class=\"vi\">@Parser</span><span class=\"p\">(</span>\n<span class=\"w\">                </span><span class=\"o\">|</span><span class=\"n\">input</span><span class=\"o\">|</span>\n<span class=\"w\">                    </span><span class=\"vi\">@Parser</span><span class=\"p\">(</span><span class=\"n\">fn</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">expr</span>\n<span class=\"w\">                    </span><span class=\"n\">fn</span><span class=\"p\">(</span><span class=\"n\">input</span><span class=\"p\">),</span>\n<span class=\"w\">            </span><span class=\"p\">),</span>\n<span class=\"w\">        </span><span class=\"p\">)</span>\n</code></pre></div>",
+        "id": 501467982,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740383197
+    },
+    {
+        "content": "<p>I think that fixes it</p>",
+        "id": 501468005,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740383205
+    },
+    {
+        "content": "<p>Can also apply it at the definition site of <code>expr</code>:</p>\n<div class=\"codehilite\" data-code-language=\"Ruby\"><pre><span></span><code><span class=\"n\">expr</span><span class=\"w\"> </span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"no\">Parser</span><span class=\"w\"> </span><span class=\"no\">U64</span>\n<span class=\"n\">expr</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">    </span><span class=\"vi\">@Parser</span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"o\">|</span><span class=\"n\">input</span><span class=\"o\">|</span>\n<span class=\"w\">            </span><span class=\"vi\">@Parser</span><span class=\"p\">(</span><span class=\"n\">fn</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">                </span><span class=\"n\">term</span>\n<span class=\"w\">                </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"n\">andThen</span><span class=\"p\">(</span><span class=\"n\">zero_or_more</span><span class=\"p\">(</span><span class=\"n\">symbol</span><span class=\"p\">(</span><span class=\"s1\">'+'</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"n\">andDropLeft</span><span class=\"p\">(</span><span class=\"n\">term</span><span class=\"p\">)))</span>\n<span class=\"w\">                </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"n\">map</span><span class=\"p\">(</span><span class=\"o\">|</span><span class=\"p\">(</span><span class=\"n\">x</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">xs</span><span class=\"p\">)</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"no\">List</span><span class=\"o\">.</span><span class=\"n\">walk</span><span class=\"p\">(</span><span class=\"n\">xs</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">x</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"n\">sum</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"o\">|</span><span class=\"w\"> </span><span class=\"n\">sum</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"n\">y</span><span class=\"p\">))</span>\n<span class=\"w\">            </span><span class=\"n\">fn</span><span class=\"p\">(</span><span class=\"n\">input</span><span class=\"p\">),</span>\n<span class=\"w\">    </span><span class=\"p\">)</span>\n</code></pre></div>",
+        "id": 501468268,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740383308
+    },
+    {
+        "content": "<p>Fixed it for me</p>",
+        "id": 501468299,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1740383322
+    },
+    {
+        "content": "<p>That does indeed fix it! I assume my version <strong>should</strong> work, right? So I can use that in the slide for teaching purposes but then use this \"workaround\" for the sake of making it work.</p>",
+        "id": 501468675,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740383463
+    },
+    {
+        "content": "<p>Yes</p>",
+        "id": 501468886,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740383525
+    },
+    {
+        "content": "<p>To my understanding, this splits up the lambaset into two different lambasets that both unify happily. If lambasets weren't broken, this all should happily unify into a single lambdaset.</p>",
+        "id": 501469102,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740383609
+    },
+    {
+        "content": "<p>This is pretty neat. I like how you've put this together <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 501469162,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1740383631
+    },
+    {
+        "content": "<p>Sorry it hasn't worked as smoothly.</p>",
+        "id": 501469255,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1740383653
+    },
+    {
+        "content": "<p>Thanks! It's been a learning experience for me as well. <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> My goal is to show how you can create a handful of small combinators and combine them into something that correctly parses mathematical expressions such as <code>1 + 2 * 3 * (1 + 5)</code>.</p>\n<p>While my parser isn't optimised at all, I think it does a good job in showing off how powerful parser combinators are.</p>",
+        "id": 501469634,
+        "sender_full_name": "Kevin Hovsäter",
+        "timestamp": 1740383771
+    }
+]

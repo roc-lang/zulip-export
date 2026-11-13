@@ -1,0 +1,332 @@
+[
+    {
+        "content": "<p>Hi! I'm learning Roc and have gotten stuck on an issue where <code>roc dev</code> freezes while running my code. The issue occurs when running a database query using <code>roc-pg</code> while mapping over a list. The code builds and <code>roc check</code> passes.</p>\n<p>It's probably due to a misunderstanding on my part as I'm new, so I'd appreciate help in understanding this better.</p>\n<p>Here are three examples building up to the issue:</p>\n<div class=\"codehilite\"><pre><span></span><code>    # Works as expected. Output:\n    #   pg: 9000\n    record &lt;- Pg.Client.withConnect\n            {\n                host: &quot;localhost&quot;,\n                port: 5432,\n                user: &quot;postgres&quot;,\n                database: &quot;postgres&quot;,\n                auth: Password &quot;hunter2&quot;,\n            }\n            (\\client -&gt;\n                Pg.Cmd.new &quot;SELECT 9000 AS foo&quot;\n                |&gt; Pg.Cmd.expect1\n                    (\n                        Pg.Result.succeed {\n                            foo: &lt;- Pg.Result.str &quot;foo&quot; |&gt; Pg.Result.apply,\n                        }\n                    )\n                |&gt; Pg.Client.command client)\n        |&gt; Task.await\n    Stdout.line! &quot;pg: $(record.foo)&quot;\n</code></pre></div>\n<p>This makes me believe I'm using <code>roc-pg</code> correctly.</p>\n<div class=\"codehilite\"><pre><span></span><code>    # Works as expected. Output:\n    #   foo: 0\n    #   foo: 1\n    List.range { start: At 0, end: At 1 }\n        |&gt; Task.forEach! \\n -&gt;\n            Stdout.line! &quot;foo: $(Num.toStr n)&quot;\n</code></pre></div>\n<p>This makes me believe I'm using <code>Task.forEach</code> correctly.</p>\n<div class=\"codehilite\"><pre><span></span><code>    # Freezes when running `roc dev`. `.roc-wrapped` uses 199 % CPU (the equivalent of maxing out two cores).\n    # Expected output:\n    #   foo: 0\n    #   pg: 9000\n    #   foo: 1\n    #   pg: 9000\n    List.range { start: At 0, end: At 1 }\n    |&gt; Task.forEach \\n -&gt;\n        Stdout.line! &quot;foo: $(Num.toStr n)&quot;\n        r &lt;- Pg.Client.withConnect\n                {\n                    host: &quot;localhost&quot;,\n                    port: 5432,\n                    user: &quot;postgres&quot;,\n                    database: &quot;postgres&quot;,\n                    auth: Password &quot;hunter2&quot;,\n                }\n                (\\client -&gt;\n                    Pg.Cmd.new &quot;SELECT 9000 AS foo&quot;\n                    |&gt; Pg.Cmd.expect1\n                        (\n                            Pg.Result.succeed {\n                                foo: &lt;- Pg.Result.str &quot;foo&quot; |&gt; Pg.Result.apply,\n                            }\n                        )\n                    |&gt; Pg.Client.command client)\n            |&gt; Task.await\n        Stdout.line! &quot;pg: $(r.foo)&quot;\n</code></pre></div>\n<p>I've tried expressing the last example in different ways to understand why <code>roc dev</code> freezes, but haven't been able to figure it out. Can anyone help me understand this better?</p>\n<p>Here's the full program: <a href=\"https://pastecode.io/s/n8mfzskt\">https://pastecode.io/s/n8mfzskt</a></p>\n<p>macOS aarch64<br>\nRoc built from latest current source, commit: 7e1a82f048f8ac77b07c7f03ffd30bb13f92edba</p>",
+        "id": 439539113,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716198671
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"489294\">@Agus Zubiaga</span> created roc-pg and might have an idea? <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 439621188,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716226786
+    },
+    {
+        "content": "<p>Profiling the executable to check where it is spending it's time can also be helpful.<br>\nIn the first presentation of our <a href=\"https://drive.google.com/drive/folders/1OrgVPE6qGx34MT8oP2aNsop1oAs3_EVl?usp=share_link\">Dec 2023 meetup</a> Brendan explains how you can profile Roc code.</p>",
+        "id": 439622243,
+        "sender_full_name": "Anton",
+        "timestamp": 1716227140
+    },
+    {
+        "content": "<p>I’ll try this later when I’m home, but running <code>roc check</code> might help find the issue. There are some times where <code>dev</code> hangs instead of reporting an error.</p>",
+        "id": 439622746,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716227325
+    },
+    {
+        "content": "<blockquote>\n<p>The code builds and <code>roc check</code> passes.</p>\n</blockquote>\n<p><code>roc check</code> was good</p>",
+        "id": 439623021,
+        "sender_full_name": "Anton",
+        "timestamp": 1716227423
+    },
+    {
+        "content": "<p>Oh, I missed that</p>",
+        "id": 439623214,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716227493
+    },
+    {
+        "content": "<p>I wonder if this is somehow related to creating connections in a loop. That should work, but you can also create the connection once and use <code>Task.forEach</code> inside.</p>",
+        "id": 439623446,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716227586
+    },
+    {
+        "content": "<p>Ok, it's the compiler that's hanging, not the binary. It seems that the interaction with <code>Task.forEach</code> causes the hang. It works as expected if I extract its body into a function and call it from <code>main</code>:</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    run! 0\n    run! 1\n\nrun = \\n -&gt;\n    Stdout.line! &quot;foo: $(Num.toStr n)&quot;\n\n    r &lt;- Pg.Client.withConnect\n            # ... the rest\n</code></pre></div>",
+        "id": 439630046,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716229978
+    },
+    {
+        "content": "<p>If we use <code>Task.loop</code> instead of <code>Task.forEach</code>, it works fine also:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">main</span><span class=\"w\"> </span><span class=\"o\">=</span>\n<span class=\"w\">    </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">loop</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">List</span><span class=\"p\">.</span><span class=\"nx\">range</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">start</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">At</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">end</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">At</span><span class=\"w\"> </span><span class=\"mi\">1</span><span class=\"w\"> </span><span class=\"p\">})</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">rem</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">        </span><span class=\"k\">when</span><span class=\"w\"> </span><span class=\"nx\">rem</span><span class=\"w\"> </span><span class=\"o\">is</span>\n<span class=\"w\">            </span><span class=\"p\">[]</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">                </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">ok</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">Done</span><span class=\"w\"> </span><span class=\"p\">{})</span>\n\n<span class=\"w\">            </span><span class=\"p\">[</span><span class=\"nx\">n</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"p\">..</span><span class=\"w\"> </span><span class=\"nx\">as</span><span class=\"w\"> </span><span class=\"nx\">rest</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">                </span><span class=\"nx\">run</span><span class=\"w\"> </span><span class=\"nx\">n</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">map</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Step</span><span class=\"w\"> </span><span class=\"nx\">rest</span>\n\n<span class=\"nv\">run</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">n</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nx\">Stdout</span><span class=\"p\">.</span><span class=\"nx\">line</span><span class=\"o\">!</span><span class=\"w\"> </span><span class=\"s\">\"foo: $(Num.toStr n)\"</span>\n\n<span class=\"w\">    </span><span class=\"nx\">r</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">Pg</span><span class=\"p\">.</span><span class=\"nx\">Client</span><span class=\"p\">.</span><span class=\"nx\">withConnect</span>\n<span class=\"w\">            </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"nv\">host</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"s\">\"localhost\"</span><span class=\"p\">,</span>\n<span class=\"w\">                </span><span class=\"nv\">port</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"mi\">5432</span><span class=\"p\">,</span>\n<span class=\"w\">                </span><span class=\"nv\">user</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"s\">\"postgres\"</span><span class=\"p\">,</span>\n<span class=\"w\">                </span><span class=\"nv\">database</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"s\">\"postgres\"</span><span class=\"p\">,</span>\n<span class=\"w\">                </span><span class=\"nv\">auth</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Password</span><span class=\"w\"> </span><span class=\"s\">\"hunter2\"</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"p\">}</span>\n<span class=\"w\">            </span><span class=\"p\">(</span><span class=\"err\">\\</span><span class=\"nx\">client</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">                </span><span class=\"nx\">Pg</span><span class=\"p\">.</span><span class=\"nx\">Cmd</span><span class=\"p\">.</span><span class=\"nx\">new</span><span class=\"w\"> </span><span class=\"s\">\"SELECT 9000 AS foo\"</span>\n<span class=\"w\">                </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Pg</span><span class=\"p\">.</span><span class=\"nx\">Cmd</span><span class=\"p\">.</span><span class=\"nx\">expect1</span>\n<span class=\"w\">                    </span><span class=\"p\">(</span>\n<span class=\"w\">                        </span><span class=\"nx\">Pg</span><span class=\"p\">.</span><span class=\"nx\">Result</span><span class=\"p\">.</span><span class=\"nx\">succeed</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                            </span><span class=\"nv\">foo</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">Pg</span><span class=\"p\">.</span><span class=\"nx\">Result</span><span class=\"p\">.</span><span class=\"nx\">str</span><span class=\"w\"> </span><span class=\"s\">\"foo\"</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Pg</span><span class=\"p\">.</span><span class=\"nx\">Result</span><span class=\"p\">.</span><span class=\"nx\">apply</span><span class=\"p\">,</span>\n<span class=\"w\">                        </span><span class=\"p\">}</span>\n<span class=\"w\">                    </span><span class=\"p\">)</span>\n<span class=\"w\">                </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Pg</span><span class=\"p\">.</span><span class=\"nx\">Client</span><span class=\"p\">.</span><span class=\"nx\">command</span><span class=\"w\"> </span><span class=\"nx\">client</span><span class=\"p\">)</span>\n<span class=\"w\">        </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">await</span>\n\n<span class=\"w\">    </span><span class=\"nx\">Stdout</span><span class=\"p\">.</span><span class=\"nx\">line</span><span class=\"o\">!</span><span class=\"w\"> </span><span class=\"s\">\"pg: $(r.foo)\"</span>\n</code></pre></div>",
+        "id": 439630936,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716230305
+    },
+    {
+        "content": "<p>So there seems to be something about <code>Task.forEach</code> specifically that makes the compiler hang</p>",
+        "id": 439631041,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716230354
+    },
+    {
+        "content": "<p>Thank you! Besides <code>Task.forEach</code> the issue may also occur with <code>Task.seq</code> as that's one of the other alternatives I tried before asking. I don't have a reproduction of that right now though.</p>",
+        "id": 439631414,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716230504
+    },
+    {
+        "content": "<p>interesting! can we get it down to a minimal repro, possibly not involving roc-pg?</p>",
+        "id": 439631415,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716230505
+    },
+    {
+        "content": "<p>I have tried to reproduce it without <code>roc-pg</code> but was unable (not to say it's not possible!) I can tinker with it bit more to see if I can nail it down.</p>",
+        "id": 439631623,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716230572
+    },
+    {
+        "content": "<p>appreciate it!</p>",
+        "id": 439631933,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716230671
+    },
+    {
+        "content": "<p>compiler bugs can be super hard to fix without a minimal repro because even a small application results in a ton of in-memory information to scan through looking for problems <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 439632111,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716230713
+    },
+    {
+        "content": "<p>Indeed, I can relate!</p>",
+        "id": 439632151,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716230730
+    },
+    {
+        "content": "<p>I'm trying to repro with just <code>Tcp</code>, but it seems to work fine unfortunately</p>",
+        "id": 439657048,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716230868
+    },
+    {
+        "content": "<p>or fortunately <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 439657141,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716230886
+    },
+    {
+        "content": "<p>try moving something into a separate module?</p>",
+        "id": 439657354,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716230965
+    },
+    {
+        "content": "<p>there's a known bug related to things working until you introduce a separate module</p>",
+        "id": 439657399,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716230984
+    },
+    {
+        "content": "<p>I wonder if it may be because the \"effect\" comes from a separate package</p>",
+        "id": 439657407,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716230987
+    },
+    {
+        "content": "<p>Yes, I guess that's the same line of thinking</p>",
+        "id": 439657476,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716231002
+    },
+    {
+        "content": "<p>It seems to work fine on a different module. I'll try package.</p>",
+        "id": 439658449,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716231273
+    },
+    {
+        "content": "<p>That works too <span aria-label=\"confused\" class=\"emoji emoji-1f615\" role=\"img\" title=\"confused\">:confused:</span></p>",
+        "id": 439658806,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716231391
+    },
+    {
+        "content": "<p>Works: <code>File.writeUtf8</code>,<code>Sleep.millis</code>, <code>Http.send</code></p>",
+        "id": 439659375,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716231584
+    },
+    {
+        "content": "<p><code>roc-pg</code> does a lot of Task chaining and looping internally. It might not be that the compiler is hanging, but that it's actually making super slow progress.</p>",
+        "id": 439661208,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716232260
+    },
+    {
+        "content": "<p>OK, I'm letting it run now with <code>roc dev --max-threads 16</code></p>",
+        "id": 439661761,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716232425
+    },
+    {
+        "content": "<p>The fact it doesn't happen with <code>Task.loop</code> gives me hope it's fixable</p>",
+        "id": 439661896,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716232471
+    },
+    {
+        "content": "<p>FYI: it does not seem to utilize more cores despite the flag (199 % CPU util). RAM usage is increasing steadily: 25 GB now</p>",
+        "id": 439662075,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716232529
+    },
+    {
+        "content": "<p>RAM utilization peaked at 26 GB and it's not increasing (staying 24-26 GB) despite plenty more being available</p>",
+        "id": 439662254,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716232578
+    },
+    {
+        "content": "<p>Is the compiler really using that much RAM?</p>",
+        "id": 439662352,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1716232608
+    },
+    {
+        "content": "<p><code>btop</code> claims it is. the process name is <code>.roc-wrapped</code></p>",
+        "id": 439662393,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716232628
+    },
+    {
+        "content": "<p>Decreasing slowly now, 15 GB, 10 GB ...</p>",
+        "id": 439662423,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716232642
+    },
+    {
+        "content": "<p>is this a new record for most pathological compiler explosion discovered? <span aria-label=\"laughing\" class=\"emoji emoji-1f606\" role=\"img\" title=\"laughing\">:laughing:</span></p>",
+        "id": 439662741,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716232739
+    },
+    {
+        "content": "<p><code>roc-pg</code> keeps delivering those <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 439662858,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716232769
+    },
+    {
+        "content": "<p>better to find them now than when they block things in production!</p>",
+        "id": 439663250,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1716232898
+    },
+    {
+        "content": "<p>It's been hovering around 3.4-4.1 GB for a while now. The process has been doing 199 % CPU util since start. The machine is an Apple Macbook Pro M1 Max with 64 GB of RAM.</p>",
+        "id": 439663276,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716232909
+    },
+    {
+        "content": "<p>I bet it'd be easier on the compiler if I didn't use combinators for decoding, but yeah, it's good to find these now</p>",
+        "id": 439663307,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716232921
+    },
+    {
+        "content": "<p>Huh, could the process be reading/writing from disk a lot? I'm not sure if it's this process, but a lot of disk IO is happening</p>",
+        "id": 439663599,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716233027
+    },
+    {
+        "content": "<p>I wonder if it's outputting a ton of LLVM IR</p>",
+        "id": 439663724,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716233065
+    },
+    {
+        "content": "<p>I know Ayaz fixed a case like that when I first presented roc-pg</p>",
+        "id": 439663767,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716233083
+    },
+    {
+        "content": "<p>The process <code>kernel_task</code> just wrote over 10 GB to disk in 30s or so</p>",
+        "id": 439663771,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716233085
+    },
+    {
+        "content": "<p>aaand another 15 GB</p>",
+        "id": 439663819,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716233106
+    },
+    {
+        "content": "<p>Total since the process started <code>kernel_task</code> has written 103 GB to disk</p>",
+        "id": 439664070,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716233193
+    },
+    {
+        "content": "<p>Poor SSD <span aria-label=\"joy\" class=\"emoji emoji-1f602\" role=\"img\" title=\"joy\">:joy:</span></p>",
+        "id": 439664195,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716233240
+    },
+    {
+        "content": "<p>but... you get type-safe queries</p>",
+        "id": 439664240,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716233258
+    },
+    {
+        "content": "<p>#worthit</p>",
+        "id": 439664289,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716233278
+    },
+    {
+        "content": "<p>OK, it finished!</p>\n<p><code>fish: Job 1, 'roc dev --max-threads 16' terminated by signal SIGKILL (Forced quit)</code></p>\n<p>I did not force kill it, so I'm guessing the OS did</p>",
+        "id": 439664393,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716233309
+    },
+    {
+        "content": "<p>What an adventure <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 439664526,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716233367
+    },
+    {
+        "content": "<p>FYI: I'm low on disk space (&lt;100 GB left) so it's possible that it ran out of space if the writes were temporary (or maybe it's just a coincidence that the numbers kind of add up)</p>",
+        "id": 439665152,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716233544
+    },
+    {
+        "content": "<p>This is my smallest reproduction:</p>\n<div class=\"codehilite\"><pre><span></span><code>    List.range { start: At 0, end: At 1 }\n    |&gt; Task.forEach \\n -&gt;\n        Pg.Client.withConnect\n            {\n                host: &quot;localhost&quot;,\n                port: 5432,\n                user: &quot;postgres&quot;,\n                database: &quot;postgres&quot;,\n                auth: Password &quot;hunter2&quot;,\n            }\n            \\_ -&gt; Task.ok {}\n</code></pre></div>",
+        "id": 439668152,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716234736
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"489294\">@Agus Zubiaga</span> I've tried several other effects but cannot reproduce without <code>roc-pg</code>. It seems the query itself does not matter, so that's good! I'll hop off for tonight, but do reach out if I can help in any way. I'll probably be testing this more tomorrow! Thanks for creating <code>roc-pg</code>, I'm really grateful that it exists! It's what got me over the hump to explore Roc seriously <span aria-label=\"+1\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"+1\">:+1:</span></p>",
+        "id": 439670162,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716235312
+    },
+    {
+        "content": "<p>Thanks! That reduction in scope is significant</p>",
+        "id": 439670929,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716235595
+    },
+    {
+        "content": "<p>This program passes <code>roc check</code> but panics during compilation:</p>\n<div class=\"codehilite\" data-code-language=\"Haskell\"><pre><span></span><code><span class=\"nf\">app</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"n\">main</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"n\">pf</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"n\">platform</span><span class=\"w\"> </span><span class=\"s\">\"https://github.com/roc-lang/basic-cli/releases/download/0.10.0/vNe6s9hWzoTZtFmNkvEICPErI9ptji_ySjicO6CkucY.tar.br\"</span><span class=\"p\">,</span>\n<span class=\"w\">    </span><span class=\"n\">pg</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"s\">\"https://github.com/agu-z/roc-pg/releases/download/0.1.0/nb1q6kN1pu1xvv45w2tE7JjbQ60hOyR1NMxxhRMCVFc.tar.br\"</span><span class=\"p\">,</span>\n<span class=\"p\">}</span>\n\n<span class=\"kr\">import</span><span class=\"w\"> </span><span class=\"nn\">pf.Task</span><span class=\"w\"> </span><span class=\"n\">exposing</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">Task</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">await</span><span class=\"p\">]</span>\n<span class=\"kr\">import</span><span class=\"w\"> </span><span class=\"nn\">pf.Stdout</span>\n<span class=\"kr\">import</span><span class=\"w\"> </span><span class=\"nn\">pg.Pg.Cmd</span>\n<span class=\"kr\">import</span><span class=\"w\"> </span><span class=\"nn\">pg.Pg.Client</span>\n<span class=\"kr\">import</span><span class=\"w\"> </span><span class=\"nn\">pg.Pg.Result</span>\n\n<span class=\"nf\">main</span><span class=\"w\"> </span><span class=\"ow\">=</span>\n<span class=\"w\">    </span><span class=\"kr\">_</span><span class=\"w\"> </span><span class=\"ow\">=</span><span class=\"w\"> </span><span class=\"n\">queryA</span><span class=\"o\">!</span>\n<span class=\"w\">    </span><span class=\"kr\">_</span><span class=\"w\"> </span><span class=\"ow\">=</span><span class=\"w\"> </span><span class=\"n\">queryB</span><span class=\"o\">!</span>\n<span class=\"w\">    </span><span class=\"kt\">Stdout</span><span class=\"o\">.</span><span class=\"n\">line</span><span class=\"o\">!</span><span class=\"w\"> </span><span class=\"s\">\"Done\"</span>\n\n<span class=\"nf\">queryA</span><span class=\"w\"> </span><span class=\"ow\">=</span>\n<span class=\"w\">    </span><span class=\"kt\">Pg</span><span class=\"o\">.</span><span class=\"kt\">Client</span><span class=\"o\">.</span><span class=\"n\">withConnect</span>\n<span class=\"w\">        </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">host</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"s\">\"localhost\"</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">port</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"mi\">5432</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">user</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"s\">\"postgres\"</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">database</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"s\">\"postgres\"</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">auth</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"kt\">Password</span><span class=\"w\"> </span><span class=\"s\">\"hunter2\"</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"nf\">\\</span><span class=\"n\">client</span><span class=\"w\"> </span><span class=\"ow\">-&gt;</span>\n<span class=\"w\">            </span><span class=\"kt\">Pg</span><span class=\"o\">.</span><span class=\"kt\">Cmd</span><span class=\"o\">.</span><span class=\"n\">new</span><span class=\"w\"> </span><span class=\"s\">\"SELECT 9000 As foo\"</span>\n<span class=\"w\">            </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"o\">.</span><span class=\"kt\">Cmd</span><span class=\"o\">.</span><span class=\"n\">expect1</span>\n<span class=\"w\">                </span><span class=\"p\">(</span>\n<span class=\"w\">                    </span><span class=\"kt\">Pg</span><span class=\"o\">.</span><span class=\"kt\">Result</span><span class=\"o\">.</span><span class=\"n\">succeed</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                        </span><span class=\"n\">foo</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"ow\">&lt;-</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"o\">.</span><span class=\"kt\">Result</span><span class=\"o\">.</span><span class=\"n\">i64</span><span class=\"w\"> </span><span class=\"s\">\"foo\"</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"o\">.</span><span class=\"kt\">Result</span><span class=\"o\">.</span><span class=\"n\">apply</span><span class=\"p\">,</span>\n<span class=\"w\">                    </span><span class=\"p\">}</span>\n<span class=\"w\">                </span><span class=\"p\">)</span>\n<span class=\"w\">            </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"o\">.</span><span class=\"kt\">Client</span><span class=\"o\">.</span><span class=\"n\">command</span><span class=\"w\"> </span><span class=\"n\">client</span>\n\n<span class=\"nf\">queryB</span><span class=\"w\"> </span><span class=\"ow\">=</span>\n<span class=\"w\">    </span><span class=\"kt\">Pg</span><span class=\"o\">.</span><span class=\"kt\">Client</span><span class=\"o\">.</span><span class=\"n\">withConnect</span>\n<span class=\"w\">        </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">host</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"s\">\"localhost\"</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">port</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"mi\">5432</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">user</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"s\">\"postgres\"</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">database</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"s\">\"postgres\"</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">auth</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"kt\">Password</span><span class=\"w\"> </span><span class=\"s\">\"hunter2\"</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"nf\">\\</span><span class=\"kr\">_</span><span class=\"w\"> </span><span class=\"ow\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"o\">.</span><span class=\"n\">ok</span><span class=\"w\"> </span><span class=\"p\">{}</span>\n</code></pre></div>\n<p>The compilation panic comes from <code>queryB</code> and it happens when the query is <code>\\_ -&gt; Task.ok {}</code> instead of an actual query. Uncomment <code>_ = queryB!</code> and the code compiles and runs.</p>\n<p>Here's the panic with backtrace:</p>\n<div class=\"codehilite\"><pre><span></span><code>$ RUST_BACKTRACE=1 roc dev pg3.roc\nthread &#39;main&#39; panicked at crates/compiler/gen_llvm/src/llvm/build.rs:5764:19:\nError in alias analysis: error in module ModName(&quot;UserApp&quot;), function definition FuncName(&quot;.\\x00\\x00\\x00\\x11\\x00\\x00\\x00=}\\xef\\t\\x02\\xf9\\x17\\xef&quot;), definition of value binding ValueId(5): could not find func in module ModName(&quot;UserApp&quot;) with name FuncName(&quot;=\\x00\\x00\\x00\\x06\\x00\\x00\\x00\\x1b\\x82%\\x07f\\x82R\\xe4&quot;)\nstack backtrace:\n   0: rust_begin_unwind\n             at /rustc/07dca489ac2d933c78d3c5158e3f43beefeb02ce/library/std/src/panicking.rs:645:5\n   1: core::panicking::panic_fmt\n             at /rustc/07dca489ac2d933c78d3c5158e3f43beefeb02ce/library/core/src/panicking.rs:72:14\n   2: roc_gen_llvm::llvm::build::build_procedures_help\n   3: roc_gen_llvm::llvm::build::build_procedures\n   4: roc_build::program::gen_from_mono_module\n   5: roc_build::program::build_loaded_file\n   6: roc_build::program::build_file\n   7: roc_cli::build\n   8: roc::main\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\n</code></pre></div>\n<p>macOS aarch64<br>\nroc build from source, commit 33075285b7298dcd76772c8763368b1ca167101c</p>\n<p><span class=\"user-mention\" data-user-id=\"489294\">@Agus Zubiaga</span> I think it might be a separate issue, but I'll post it here for completeness as my previous minimal reproduction used the same kind of \"empty query\". I hope this is helpful; please let me know if you prefer that I don't ping about this issue <span aria-label=\"ok\" class=\"emoji emoji-1f44c\" role=\"img\" title=\"ok\">:ok:</span></p>",
+        "id": 440110393,
+        "sender_full_name": "Niclas Ahden",
+        "timestamp": 1716389208
+    },
+    {
+        "content": "<p>Yeah, unfortunately, “error in alias analysis” is caused by a longstanding compiler bug that’s not specific to <code>roc-pg</code> usage.</p>",
+        "id": 440114507,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1716390216
+    }
+]

@@ -1,0 +1,1532 @@
+[
+    {
+        "content": "<p>I wanted to spin up a discussion on fuzzing the new compiler specifically.</p>",
+        "id": 498271128,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738911028
+    },
+    {
+        "content": "<p>It sounds like for a while, we will be using afl++ as our fuzzer and eventually we will get to swap to the zig integrated fuzzer (but probably not until at least 0.15.0).</p>",
+        "id": 498271196,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738911081
+    },
+    {
+        "content": "<p>I'm trying to figure out what tooling will make fuzzing as seamless as possible. I know that it can be quite painful to manage corpus's and enable anyone to fuzz.</p>",
+        "id": 498271262,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738911123
+    },
+    {
+        "content": "<p>I think it is really useful to keep around at least a minimized corpus to help exploration, but we probably want to keep that out of the repo to avoid eating up tons of space with random garbage files. So I'm thinking that we may just need to cache the corpus for CI.</p>",
+        "id": 498271384,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738911200
+    },
+    {
+        "content": "<p>Generally speaking, for each fuzzer, we need an input corpus (just basic starter examples). We can optionally add a dictionary (like a bunch of roc keywords and symbols or ast node names depending on the layer being fuzzed). It is probably good to take found crashes/regressions and add them to the input corpus such that they can be used as unit tests. I'm thinking that by default, CI would just run through the input corpus once to ensure there are no regressions.</p>\n<p>Also, there is a chance that we can overlap the fuzzing input corpus with snapshot tests. Like we might be able to preprocess all the snapshot tests to turn them into the input corpus for the various fuzzers.</p>",
+        "id": 498271723,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738911417
+    },
+    {
+        "content": "<p>This is all just open preliminary thinking, but overall, I fell that we will likely want some scripts to manage AFL such that fuzzing is easy for anyone to run.</p>",
+        "id": 498271779,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738911450
+    },
+    {
+        "content": "<p>Currently fuzzing has a few different dependencies (like llvm). I think with the release of 0.14.0 there may be less required dependencies, but not completely sure. So we probably will want to use nix to manage the dependencies.</p>",
+        "id": 498271873,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738911495
+    },
+    {
+        "content": "<p>Almost certainly the first really useful fuzzer will be the parser to formatter loop.</p>",
+        "id": 498271921,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738911531
+    },
+    {
+        "content": "<p>Anyway, I'm totally open to any and all ideas. I'm sure <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> has some thoughts.</p>\n<p>Oh also, when fuzzing, definitely should use the gpa with leak checks enabled.</p>",
+        "id": 498272072,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738911606
+    },
+    {
+        "content": "<p>I think fuzzing would want to at least guarantee we have none of these:</p>\n<ul>\n<li>crashes</li>\n<li>early exits</li>\n<li>memory leaks</li>\n<li><code>Problem.CompilerProblem</code></li>\n</ul>",
+        "id": 498272326,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1738911755
+    },
+    {
+        "content": "<p>Yeah, for many cases, we can only check those limited things. For some cases, like parse -&gt; format -&gt; parse -&gt; format, we can check for equivalent formatted outputs both times.</p>",
+        "id": 498272723,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738911992
+    },
+    {
+        "content": "<p>Also, if we add any verifiers to IR (like the old compIler has check mono ir), we can use that as well. I'm hoping we add a number of these verifiers.</p>",
+        "id": 498272773,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738912026
+    },
+    {
+        "content": "<p>Oh, an if fuzzing is good enough at exploring (which it may not be), we could theoretically give it access to essentially a repl and have it fuzz the interpreter vs the llvm backend</p>",
+        "id": 498276089,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738913766
+    },
+    {
+        "content": "<p>I would also like to do things like run the compiled code, grab the output and also run the interpreter and assert the output is the same</p>",
+        "id": 498416910,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1738958377
+    },
+    {
+        "content": "<p>Yeah, that is what I was suggesting with my last comment. Probably would run the interpreter first. If the code is valid in the interpreter, run the backend (should always pass). Then run the code and assert equivalent output.</p>",
+        "id": 498424114,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738961282
+    },
+    {
+        "content": "<p>When fuzzing my  languages (a json replacement, a one-liner expression language, a html templating language),  by making sure to turn off  <code>std.mem.eqlBytes_allowed</code> (Zig 0.14.0-dev, named <code>std.mem.backend_can_use_eql_bytes</code> in 0.13.0), I got amazing performance from the fuzzer even without any corpus or dictionary.</p>\n<p>Once my tokenizer(s) had been tested enough, I then worked on a simple valid-syntax generator in order to make sure the fuzzer would generate only valid HTML ASTs when flipping bytes, in order to reliably target the parser.</p>\n<p>Here's what that looks like: <a href=\"https://github.com/kristoff-it/superhtml/blob/main/src/fuzz/astgen.zig\">https://github.com/kristoff-it/superhtml/blob/main/src/fuzz/astgen.zig</a></p>\n<p>So the fuzzer writes <code>ccuc</code> and the executable turns that into:</p>\n<div class=\"codehilite\" data-code-language=\"HTML\"><pre><span></span><code><span class=\"p\">&lt;</span><span class=\"nt\">div</span><span class=\"p\">&gt;</span>\n   <span class=\"p\">&lt;</span><span class=\"nt\">div</span><span class=\"p\">&gt;&lt;/</span><span class=\"nt\">div</span><span class=\"p\">&gt;</span>\n<span class=\"p\">&lt;/</span><span class=\"nt\">div</span><span class=\"p\">&gt;</span>\n<span class=\"p\">&lt;</span><span class=\"nt\">div</span><span class=\"p\">&gt;&lt;/</span><span class=\"nt\">div</span><span class=\"p\">&gt;</span>\n</code></pre></div>\n<p>For a full blown programming language getting a valid source code generator up and running is a bit more involved, but Matthew Lugg has been working on one for Zig, you might take inspiration from his work once you want to start fuzzing deeper layers of the compiler.</p>",
+        "id": 498443450,
+        "sender_full_name": "Loris Cro",
+        "timestamp": 1738970870
+    },
+    {
+        "content": "<p>Awesome to know!</p>",
+        "id": 498444527,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738971517
+    },
+    {
+        "content": "<p>Why does tokenization have <code>StringBegin</code> but not <code>StringEnd</code>? Seems strange to generate: <code>[StringBegin, OpenCurly, Expr, CloseCurly, String]</code>. Also, Is there a reason we don't encode the <code>$</code> in tokeniziation? Why is it <code>OpenCurly</code> and not <code>DollarCurly</code> or similar?</p>\n<p>Context: trying to write a fuzzer for tokenization that tokenizes, prints in a bare bones form, then tokenizers again and asserts they are the same.</p>\n<p>Intermediate looks something like:</p>\n<div class=\"codehilite\" data-code-language=\"Ruby\"><pre><span></span><code><span class=\"n\">zzz</span><span class=\"w\"> </span><span class=\"o\">[</span><span class=\"n\">zzzz!</span><span class=\"o\">]</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"ss\">zzz</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"n\">zzzzzzzz</span><span class=\"w\"> </span><span class=\"s2\">\"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\"</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"n\">zzzzzz</span><span class=\"w\"> </span><span class=\"n\">zzz</span><span class=\"o\">.</span><span class=\"n\">Zzzzzz</span>\n<span class=\"n\">zzzz!</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"o\">|</span><span class=\"n\">_zzzz</span><span class=\"o\">|</span>\n<span class=\"w\">    </span><span class=\"n\">z</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"s2\">\"~~~~~\"</span>\n<span class=\"w\">    </span><span class=\"no\">Zzzzzz</span><span class=\"o\">.</span><span class=\"n\">zzzz!</span><span class=\"p\">(</span><span class=\"s2\">\"~~~~~~~${z}\"\")</span>\n</code></pre></div>",
+        "id": 499665494,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739520097
+    },
+    {
+        "content": "<p>cc <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span></p>",
+        "id": 499665522,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739520106
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> yes, that does need to be changed a bit before it's unambiguous</p>\n<p>The _intent_ is to generate a sequence of <code>StringBegin, &lt;interpolation&gt;, StringPart, &lt;interpolation&gt;, StringPart</code> (for example)</p>\n<p>The ambiguity right now is the OpenCurly/CloseCurly delimiters need to be specific to interpolations - otherwise that's ambiguous with having a string followed by a curly brace (for whatever reason).</p>\n<p>In terms of not having StringEnd, that's not needed for disambiguation (at least, as long as I fix up the interpolation thing above). You can have StringBegin, &lt;interpolation&gt;, StringPart, StringBegin - and that's unambiguously a string with an interpolation, followed by a second string without.</p>",
+        "id": 499779213,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739549645
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"453336\">Joshua Warner</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20spike/near/499779213\">said</a>:</p>\n<blockquote>\n<p>The _intent_ is to generate a sequence of <code>StringBegin, &lt;interpolation&gt;, StringPart, &lt;interpolation&gt;, StringPart</code> (for example)</p>\n</blockquote>\n<p>I guess I found the first bug (though not via fuzzing, was found well setting up fuzzing)</p>\n<p>It curently generates <code>StringBegin, &lt;interpolation&gt;, StringPart, &lt;interpolation&gt;, String</code></p>",
+        "id": 499792491,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739553999
+    },
+    {
+        "content": "<p>have a fix on my branch</p>",
+        "id": 499795928,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739555110
+    },
+    {
+        "content": "<p>Ok, first real fuzz bug of the new compiler:<br>\n<a href=\"/user_uploads/22008/6OJoYo0A3vU1ZbptjZmVMvX1/id000000sig06src000000time423execs751opquickpos224\">id:000000,sig:06,src:000000,time:423,execs:751,op:quick,pos:224</a></p>\n<div class=\"codehilite\"><pre><span></span><code>thread 36762112 panic: index out of bounds: index 226, len 225\n/Users/bren077s/Projects/roc/src/check/parse/tokenize.zig:406:58: 0x1023efff3 in decodeUnicode (repro-tokenize)\n        const utf8_char = std.unicode.utf8Decode(self.buf[self.pos .. self.pos + len]) catch {\n                                                         ^\n/Users/bren077s/Projects/roc/src/check/parse/tokenize.zig:1050:59: 0x1023ef4ef in tokenize (repro-tokenize)\n                    const info = self.cursor.decodeUnicode(b);\n                                                          ^\n</code></pre></div>\n<p>Looks to be a buffer overflow due to assuming we have enough characters for a full unicode character</p>",
+        "id": 499814278,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739561933
+    },
+    {
+        "content": "<p>Yep, I have some pending tokenizer updates that I'm waiting on Anthony's PR to land prior to posting</p>",
+        "id": 499815524,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739562510
+    },
+    {
+        "content": "<p>Good find on the unicode thing (that one's new to me)!</p>",
+        "id": 499815554,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739562522
+    },
+    {
+        "content": "<p>Ah, and a second unicode bug the call to <code>decodeUnicode</code> on line 754 will always fail. It's position is 1 past the current position of the byte buffer. Cause it is <code>.</code> followed by unicode instead of just unicode.</p>",
+        "id": 499818361,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739563706
+    },
+    {
+        "content": "<p>Also, PR for tokenizer fuzzer: <a href=\"https://github.com/roc-lang/roc/pull/7607\">https://github.com/roc-lang/roc/pull/7607</a></p>\n<p>Fuzzer essentially instantly finds bugs, but that is fine for merging. The merge will just make sure the fuzzers keep compiling and don't bitrot. And we can use it to slowly burn down bugs.</p>",
+        "id": 499819925,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739564234
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20fuzzing/near/499814278\">said</a>:</p>\n<blockquote>\n<p><code>self.buf[self.pos .. self.pos + len</code></p>\n</blockquote>\n<p><code>self.buf[self.pos..][0..len]</code> <a href=\"https://ziglang.org/download/0.11.0/release-notes.html#Slicing-By-Length\">slicing by length</a></p>",
+        "id": 499828388,
+        "sender_full_name": "Andrew Kelley",
+        "timestamp": 1739566650
+    },
+    {
+        "content": "<p>Ok, folded a few fixes into the PR</p>",
+        "id": 499839197,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739570659
+    },
+    {
+        "content": "<p>Still crashes really quick (likely the mock module I am generating from the tokens does not quite match what the tokenizer expects)</p>",
+        "id": 499839293,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739570690
+    },
+    {
+        "content": "<p>Looks like your having a lot of fun Brendan <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 499841546,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1739571650
+    },
+    {
+        "content": "<p>I mean it is kinda fun seeing weird tokenizer edge cases that fail fuzzing. That said, my print and then retokenize definitely has some bugs (that or the tokenizer has some assumptions and lost state info, maybe both)</p>",
+        "id": 499842190,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739571917
+    },
+    {
+        "content": "<p>What command should I be running to kick off fuzzing?</p>",
+        "id": 499881300,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739594813
+    },
+    {
+        "content": "<div class=\"codehilite\"><pre><span></span><code>joshw@Joshuas-MacBook-Air-3 ~/s/g/r/roc (parser-zig-rewrite)&gt; zig build -Dllvm -Dfuzz\njoshw@Joshuas-MacBook-Air-3 ~/s/g/r/roc (parser-zig-rewrite)&gt; ./zig-out/bin/fuzz-cli\n[-] FATAL: forkserver is already up, but an instrumented dlopen() library loaded afterwards. You must AFL_PRELOAD such libraries to be able to fuzz them or LD_PRELOAD to run outside of afl-fuzz.\nTo ignore this set AFL_IGNORE_PROBLEMS=1 but this will lead to ambiguous coverage data.\nIn addition, you can set AFL_IGNORE_PROBLEMS_COVERAGE=1 to ignore the additional coverage instead (use with caution!).\nfish: Job 1, &#39;./zig-out/bin/fuzz-cli&#39; terminated by signal SIGABRT (Abort)\n</code></pre></div>",
+        "id": 499881342,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739594861
+    },
+    {
+        "content": "<p><code>./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz/tokenize-corpus/ -o /tmp/tokenize-out/ zig-out/bin/fuzz-tokenize </code></p>",
+        "id": 499881451,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739594953
+    },
+    {
+        "content": "<p>also, you don't need <code>-Dllvm</code>, but you do need a system install version of llvm for afl++ to compile. Sadly, I was unable to get afl++ to compile with static llvm (might have to loop back to that at another point)</p>",
+        "id": 499881537,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739595026
+    },
+    {
+        "content": "<p>Oh also, even without afl and all that hassle, you can <code>zig build test -Dfuzz</code> and it will build a <code>repro-tokenize</code> file.  That file can take data from stdin, or a file arg and use it to reproduce directly. It also prints out a lot more info</p>",
+        "id": 499882069,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739595581
+    },
+    {
+        "content": "<p>Hmm, having a little trouble adapting this to Anthony's changes.</p>\n<p><code>zig build test</code> works, but not <code>zig build fuzz-tokenize</code>.</p>\n<p>Does this make sense to you?</p>\n<div class=\"codehilite\"><pre><span></span><code>fuzz-tokenize\n└─ install generated to repro-tokenize\n   └─ zig build-exe repro-tokenize Debug native 1 errors\ntokenize.zig:3:27: error: import of file outside module path: &#39;../../collections/utils.zig&#39;\nconst exitOnOom = @import(&quot;../../collections/utils.zig&quot;).exitOnOom;\n                          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~\nreferenced by:\n    tokenize: tokenize.zig:981:53\n    zig_fuzz_test_inner: /Users/joshw/src/github.com/roc-lang/roc/src/fuzz/tokenize.zig:500:14\n    remaining reference traces hidden; use &#39;-freference-trace&#39; to see all reference traces\n</code></pre></div>",
+        "id": 499882456,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739595902
+    },
+    {
+        "content": "<p>Ah, yeah. It's this todo: <a href=\"https://github.com/roc-lang/roc/blob/33a2c663e00c9309624978913a4f9ade3e66113f/build.zig#L111-L113\">https://github.com/roc-lang/roc/blob/33a2c663e00c9309624978913a4f9ade3e66113f/build.zig#L111-L113</a></p>",
+        "id": 499882552,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739595993
+    },
+    {
+        "content": "<p>Feel free to comment out the tokenizer test for now.</p>",
+        "id": 499882564,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739596007
+    },
+    {
+        "content": "<p>I'll fix it up in a bit</p>",
+        "id": 499882613,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739596065
+    },
+    {
+        "content": "<p>technically, moving all fuzz executables to <code>src/fuzz-tokenize.zig</code> and using relative imports would fix this. Otherwise, we need something like<code>src/lib.zig</code> and have all the fuzz executables go through that.</p>",
+        "id": 499882712,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739596158
+    },
+    {
+        "content": "<p>The issues is that if you directly import <code>src/check/parse/tokenize.zig</code> as your root module file, it is only allowed to import things form <code>src/check/parse/...</code></p>",
+        "id": 499882800,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739596230
+    },
+    {
+        "content": "<p>Interesting. Confusingly, that isn't the first such import in that file. But I guess it must be processing things out of order or something</p>",
+        "id": 499882847,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739596308
+    },
+    {
+        "content": "<p>And here I was looking forward to fuzzing the tokenizer :P</p>",
+        "id": 499882858,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739596321
+    },
+    {
+        "content": "<p>Anyway, feel free to just disable, not exactly sure when I will next have time to look at it, but I'll fix it up if no one else does first. Just gonna be flying tomorrow, so not sure timing.</p>",
+        "id": 499882897,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739596325
+    },
+    {
+        "content": "<p>Which test should I be commenting out?</p>",
+        "id": 499882907,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739596334
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/blob/33a2c663e00c9309624978913a4f9ade3e66113f/build.zig#L125-L138\">https://github.com/roc-lang/roc/blob/33a2c663e00c9309624978913a4f9ade3e66113f/build.zig#L125-L138</a></p>",
+        "id": 499882918,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739596351
+    },
+    {
+        "content": "<p>Fix the fuzz tests: <a href=\"https://github.com/roc-lang/roc/pull/7612\">https://github.com/roc-lang/roc/pull/7612</a></p>",
+        "id": 499973152,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739675677
+    },
+    {
+        "content": "<p>Also adds a readme!</p>",
+        "id": 499973297,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739675816
+    },
+    {
+        "content": "<p>Looks like we had our first merge conflict. Something simple, tokenize fuzzer got fixed and merged at the same time the tokenize function got updated to have malformed nodes. So now the fuzzer doesn't handle reprinting any of the malformed nodes.</p>\n<p>I don't currently have time to work on this. cc <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> in case he has time. He probably can add printing for the malformed nodes quicker than anyone else cause he knows what they are all.</p>\n<p>Otherwise, anyone can fix my just handing a few extra cases in a switch statement. That or for now, giving them empty handling just to unblock merging a PR.</p>",
+        "id": 500025322,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739724826
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/pull/7617\">https://github.com/roc-lang/roc/pull/7617</a></p>",
+        "id": 500029576,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739727868
+    },
+    {
+        "content": "<p>Right now this just bails out. The slightly better approach would be to copy the corresponding range in the input, and even better would be making sure we have enough information to trigger the same issue.</p>",
+        "id": 500029887,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739728088
+    },
+    {
+        "content": "<p>Yep. Sounds totally good</p>",
+        "id": 500030517,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739728635
+    },
+    {
+        "content": "<p>Also, <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span>, not sure it is the best use of time, but I think the fuzzer is now at the state where it finds reasonable tokenizer bugs. Some may be in the reprint, but I think a lot are due to minor mistakes around exact token type such that when reprinted in basic form it leads to bugs.</p>",
+        "id": 500045397,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739740212
+    },
+    {
+        "content": "<p>Cool, will take a look in a bit</p>",
+        "id": 500047968,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1739742532
+    },
+    {
+        "content": "<p>Great talk about Tigerbeetle's fuzzing setup. Maybe there are some aspects we could adopt for Roc. <a href=\"https://www.hytradboi.com/2025/c222d11a-6f4d-4211-a243-f5b7fafc8d79-rocket-science-of-simulation-testing\">https://www.hytradboi.com/2025/c222d11a-6f4d-4211-a243-f5b7fafc8d79-rocket-science-of-simulation-testing</a></p>",
+        "id": 502639157,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1740766672
+    },
+    {
+        "content": "<p>Yep</p>",
+        "id": 502649756,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740770199
+    },
+    {
+        "content": "<p>Sounds like they are mostly solving the continuous fuzzing case.</p>",
+        "id": 502649843,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740770228
+    },
+    {
+        "content": "<p>Which may be less important for roc, but still useful to gleam from</p>",
+        "id": 502649889,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740770243
+    },
+    {
+        "content": "<p>that was a great talk, it finally clicked for me the \"level triggered\" vs \"edge triggered\" thing. based on your comment Brendan I think that point might not have sunk in for you yet</p>",
+        "id": 502683106,
+        "sender_full_name": "Andrew Kelley",
+        "timestamp": 1740784547
+    },
+    {
+        "content": "<p>I only quickly skimmed it cause today has been busy, need to give it a proper watch still.</p>",
+        "id": 502686226,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740786498
+    },
+    {
+        "content": "<p>I think most initial statement still mostly stands. It isn't that async level triggered setup wouldn't be great. It is more that roc is still super early on with limited resources and fuzzing only run on local machines. Long term, I would love to have a similar setup, but currently fuzzing is local only for roc and not tied to CI at all. That said, maybe grabbing a single machine and setting up what tigerbeetled did wouldn't be as much work as I expect. Just feels like a large investment in infra than roc is ready for. Especially given somehow you would prefer to notify folks asyncronously on fuzzing failures and don't want too much of a backlog to build up.</p>\n<p>But I definitely might be making a mountain out of a mole hill, they made it look relatively simply to orchestrate all of this.</p>",
+        "id": 502692201,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740790266
+    },
+    {
+        "content": "<blockquote>\n<p>Just feels like a large investment in infra than roc is ready for</p>\n</blockquote>\n<p>I have a linux \"server\" sitting at home that I'm happy to leave running a fuzzer full-time</p>",
+        "id": 502696147,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1740793058
+    },
+    {
+        "content": "<p>Not sure if that is the kind of infra you're referring to, but happy to offer that if it helps</p>",
+        "id": 502696208,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1740793092
+    },
+    {
+        "content": "<p>Yeah, that is part of it</p>",
+        "id": 502696349,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740793209
+    },
+    {
+        "content": "<p>Then it is just extra ci flows, website or notifications for failures, and orchestration code.</p>",
+        "id": 502696384,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740793245
+    },
+    {
+        "content": "<blockquote>\n<p>and don't want too much of a backlog to build up.</p>\n</blockquote>\n<p>One of the suggestions of the talk was to not worry about keeping old failing seeds around indefinitely but only keep the N most recent seeds and rely on the fact that unresolved issues will be found again.</p>",
+        "id": 502703931,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1740798939
+    },
+    {
+        "content": "<p>Yeah, sounds like most of the work is a minor database and a web frontend for that (along with a CI machine to run things)</p>",
+        "id": 502705077,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740799789
+    },
+    {
+        "content": "<p>So not too bad</p>",
+        "id": 502705127,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740799805
+    },
+    {
+        "content": "<p>Also, we use a corpus based method which has implications for multi machine setups, but I think roc can just do a single machine setup which would avoid much of that hassle.</p>",
+        "id": 502705191,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740799881
+    },
+    {
+        "content": "<p>Given we do coverage guide fuzzing, I don't think we can have a single integer seed. I think our inputs will remain a blob of text. So not as portable. I guess we could minimize and base64 encode them to at least make them trivial to copy.</p>",
+        "id": 502705666,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740800259
+    },
+    {
+        "content": "<p>Yeah, maybe this is less work than I initially thought, maybe I'll try to hack something crazy simple together.</p>",
+        "id": 502707054,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740801465
+    },
+    {
+        "content": "<p>Has anyone managed to run our fuzzer on linux? I am trying to but keep hitting linking issues. Wondering if it may be distro/config specific.</p>",
+        "id": 502811904,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740883138
+    },
+    {
+        "content": "<p>I haven't tried tbh</p>",
+        "id": 502826131,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1740895030
+    },
+    {
+        "content": "<p>Actually I did early on, but could get it working either</p>",
+        "id": 502826148,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1740895052
+    },
+    {
+        "content": "<p>Small PR that enabled me to get fuzzing working on linux (though sadly with system install AFL instead of zig compiled AFL): <a href=\"https://github.com/roc-lang/roc/pull/7651\">https://github.com/roc-lang/roc/pull/7651</a></p>",
+        "id": 502933019,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1740973120
+    },
+    {
+        "content": "<p>Please ignore the absolute ugliness of this site: <a href=\"https://roc-lang.github.io/roc-compiler-fuzz/\">https://roc-lang.github.io/roc-compiler-fuzz/</a></p>",
+        "id": 503443462,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741160887
+    },
+    {
+        "content": "<p>This will be really nice, looking forward to building fuzzers and getting some high scores <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 503447687,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741162477
+    },
+    {
+        "content": "<p>Wow awesome!</p>",
+        "id": 503520977,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1741182679
+    },
+    {
+        "content": "<p>yooooo this is sweet!!!</p>",
+        "id": 503526989,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1741183956
+    },
+    {
+        "content": "<p>Also, that site is happily taking contributions if anyone wants to make it pretty.</p>",
+        "id": 503642950,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741212107
+    },
+    {
+        "content": "<p>Aside, I really love minimized repros:</p>\n<div class=\"codehilite\"><pre><span></span><code>zig build repro-tokenize -- -b YW5k -v\n</code></pre></div>\n<p>This is just passing <code>and</code> to our tokenizer. Which breaks cause we assume that <code>and</code> is <code>&amp;&amp;</code>.</p>\n<p>CC: <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> real tokenizer bugs likely will pop up at that site (though some are with the fuzz harness as well).</p>\n<p>Now we just need more fuzzers to start exploring more of the code.</p>",
+        "id": 503643738,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741212341
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> -- how does the <code>src/fuzz-corpus/parse/grab_bag.roc</code> work?</p>",
+        "id": 503686578,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741233353
+    },
+    {
+        "content": "<p>Is that something that the fuzzer will use to start with... and then randomly modify?</p>",
+        "id": 503686654,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741233372
+    },
+    {
+        "content": "<p>Yeah, we are required to give the fuzzer at least one seed</p>",
+        "id": 503686678,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741233389
+    },
+    {
+        "content": "<p>That test case seemed reasonable to me</p>",
+        "id": 503686699,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741233402
+    },
+    {
+        "content": "<p>Also, currently parsing helloworld hangs and I didn't want to figure out fixing it. So I just used something different</p>",
+        "id": 503686756,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741233440
+    },
+    {
+        "content": "<p>Nice. Does it help being large with everything in there together? I wonder if it would be better to have multiple files with simpler syntax?</p>",
+        "id": 503686776,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741233455
+    },
+    {
+        "content": "<p>I was also wanting something similar for the snapshot tests... so I'm wondering if these things could/should be combined somehow. </p>\n<p>But they are also quite different use cases so probably should be kept different.</p>",
+        "id": 503686910,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741233531
+    },
+    {
+        "content": "<p>The fuzzer does a really good job at exploring especially cause I enabled <code>cmplog</code> in ci. It leads to llvm telling the fuzzer all values that are used in comparisons (strings, ints, etc). So starting corpus isn't too imporant.</p>\n<p>In CI, the fuzzer with cache the corpus and keep growing it.</p>",
+        "id": 503686936,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741233551
+    },
+    {
+        "content": "<p>Yeah, fuzzers theoretically could share with snapshot tests (probably a good idea to ensure valid inputs). Would just need a tool to generate a corpus from the snapshots. For example, the tokenizer and parser fuzzers both use <code>.roc</code> files as input. So a script to extract all the original source from the snapshot test cases would create an amazing starting corpus for those fuzzers.</p>",
+        "id": 503687145,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741233677
+    },
+    {
+        "content": "<p>If later fuzzers start with sexpr IR, sharing would also be nice, but likely more complex.</p>",
+        "id": 503687292,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741233737
+    },
+    {
+        "content": "<p>Nice. I looks like we've already got a fairly solid testing framework emerging...</p>\n<ul>\n<li>zig unit tests</li>\n<li>snapshots for integration tests </li>\n<li>fuzzers for simulation testing</li>\n</ul>",
+        "id": 503687330,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741233763
+    },
+    {
+        "content": "<p>(depending if the fuzzers parse the sexpr or programmatically generate it)</p>",
+        "id": 503687341,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741233773
+    },
+    {
+        "content": "<p>I could definitely have the snapshot tool extract the roc source from each snapshot and dump it into a fuzzer corpus folder somewhere</p>",
+        "id": 503687405,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741233821
+    },
+    {
+        "content": "<blockquote>\n<p>for simulation testing</p>\n</blockquote>\n<p>I'm not sure our fuzzing is simulation testing cause nothing is simulated, but none the less is great automatic bug finding.</p>",
+        "id": 503687572,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741233924
+    },
+    {
+        "content": "<blockquote>\n<p>I could definitely have the snapshot tool extract the roc source from each snapshot and dump it into a fuzzer corpus folder somewhere</p>\n</blockquote>\n<p>That would be great. If you just add a flag to the snapshot tool to dump all the <code>.roc</code> files into a folder, I'll integrate that into the fuzz CI.</p>",
+        "id": 503687702,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741233989
+    },
+    {
+        "content": "<p>I'll do that in my next PR</p>",
+        "id": 503688942,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741234601
+    },
+    {
+        "content": "<blockquote>\n<p>nothing is simulated</p>\n</blockquote>\n<p>We're simulating the source file that is being parsed...</p>",
+        "id": 503688987,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741234623
+    },
+    {
+        "content": "<p>haha, I guess. I've always associated simulation testing with fake networks and databases and disks and what not.</p>",
+        "id": 503689575,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741234917
+    },
+    {
+        "content": "<p>Hopefully we can move up the stack someday, and simulate more interesting things... like here's a (generated) expression that should evaluate to some expected value.</p>",
+        "id": 503690297,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741235225
+    },
+    {
+        "content": "<p>Will be interesting to see how far we can take it and what still explores well. At a minimum, we should be able to do repl style expressions.</p>",
+        "id": 503691439,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741235683
+    },
+    {
+        "content": "<p>but not sure how well the fuzzer will explore that (and also have to be careful about infinite loops)</p>",
+        "id": 503691474,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741235704
+    },
+    {
+        "content": "<p>Do you think it's ok for the snapshots to be copied in all at the same level... or would you want them to maintain whatever folder structure they had from the <code>snapshots/</code> folder?</p>",
+        "id": 503698553,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741238494
+    },
+    {
+        "content": "<p>When copying them into the corpus folder given as an argument to the snapshot tool</p>",
+        "id": 503698601,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741238521
+    },
+    {
+        "content": "<p>Same level is preferred</p>",
+        "id": 503698947,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741238654
+    },
+    {
+        "content": "<p>Should I give them a psuedo random name... or basically keep whatever they came with</p>",
+        "id": 503699062,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741238716
+    },
+    {
+        "content": "<p>We should probably keep the name; otherwise as we modify the snapshots we won't know which one they match up to (and thus which one to edit).</p>",
+        "id": 503699273,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1741238796
+    },
+    {
+        "content": "<p>If we used something like the hash of the content, then it'd be hard to know which fuzz corpus we should _remove_ because it's the old version of that input. Otherwise old inputs would keep piling up as fuzz corpus entries, and that's probably not super valuable.</p>",
+        "id": 503699434,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1741238868
+    },
+    {
+        "content": "<p>I don't want to check these into the repo</p>",
+        "id": 503699708,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741238968
+    },
+    {
+        "content": "<p>Let's keep just the snapshots as the source of truth</p>",
+        "id": 503699731,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741238978
+    },
+    {
+        "content": "<p>For fuzzer, hash or random name is fine</p>",
+        "id": 503699741,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741238988
+    },
+    {
+        "content": "<p>That's at least my default opinion for this</p>",
+        "id": 503699833,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741239012
+    },
+    {
+        "content": "<p>Ahhh got it</p>",
+        "id": 503700058,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1741239114
+    },
+    {
+        "content": "<p>In that case I'd do hash, but whatever is fine.</p>",
+        "id": 503700105,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1741239124
+    },
+    {
+        "content": "<p>Hardcore test case: <code>zig build repro-parse -- -b ''</code></p>\n<p>Break the parser with an empty string (we just have an incorrect assert that assumes parsing will generate something).</p>",
+        "id": 503860583,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741285107
+    },
+    {
+        "content": "<p>As a general note, we have the ability to trigger the fuzzer targetting any branch/commit. So if you ever want a PR to get fuzzed, we can do that.</p>",
+        "id": 503869322,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741287864
+    },
+    {
+        "content": "<p>Looking at the snapshot tool, with the flag to copy source into our fuzz corpus. <br>\nOne issue is giving the files a <code>.roc</code> extension is that now git wants to commit them to our repo...</p>\n<div class=\"codehilite\"><pre><span></span><code>Untracked files:\n  (use &quot;git add &lt;file&gt;...&quot; to include in what will be committed)\n    src/fuzz-corpus/cupgstzv.roc\n    src/fuzz-corpus/hdddlnro.roc\n    src/fuzz-corpus/kbdtxaol.roc\n    src/fuzz-corpus/tmtpdcnw.roc\n    src/fuzz-corpus/ufzxxvfu.roc\n</code></pre></div>\n<p>Do you think we should;</p>\n<ol>\n<li>leave these files without an extension</li>\n<li>give them some made up ext like <code>.snap</code> or something</li>\n<li>gitignore all files in <code>/src/fuzz-corpus/</code>, and if we want to add something there we need to <code>git add</code> it manually</li>\n</ol>",
+        "id": 503905890,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741301131
+    },
+    {
+        "content": "<p>I'm leaning towards (3) -- so I'll run with that for now in my draft PR</p>",
+        "id": 503906039,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741301194
+    },
+    {
+        "content": "<p>Yeah, 3 sounds good</p>",
+        "id": 503916821,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741305839
+    },
+    {
+        "content": "<p>So it runs all the different fuzzers every 4 hours, but only if theres a new commit?</p>",
+        "id": 503938533,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741317578
+    },
+    {
+        "content": "<p>I've just noticed the scheduled runs have skipped the actual fuzz run.</p>",
+        "id": 503938719,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741317678
+    },
+    {
+        "content": "<p>Yeah, I messed something up. Should be fixed already</p>",
+        "id": 503938944,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741317837
+    },
+    {
+        "content": "<p>And yeah, runs every 4 hours for 30 minutes. Seemed like a reasonable cadence for now. Will keep fuzzing the same commit and expanding the corpus if no new commits exist.</p>",
+        "id": 503939036,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741317880
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20fuzzing/near/503860583\">said</a>:</p>\n<blockquote>\n<p>Hardcore test case: <code>zig build repro-parse -- -b ''</code></p>\n<p>Break the parser with an empty string (we just have an incorrect assert that assumes parsing will generate something).</p>\n</blockquote>\n<p>Does it count as a real bugfix if I resolve this one? <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 503944961,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741321388
+    },
+    {
+        "content": "<p>As we say in the smash bros community, \"we take those\"</p>",
+        "id": 503945785,
+        "sender_full_name": "Sam Mohr",
+        "timestamp": 1741321876
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> -- how did you install LLVM on your mac?</p>",
+        "id": 503953314,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741326101
+    },
+    {
+        "content": "<p>Did you use brew?</p>",
+        "id": 503953331,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741326107
+    },
+    {
+        "content": "<p>I'm going to try the release from LLVM's github instead and see if I can get fuzzing working on my macos</p>",
+        "id": 503953689,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741326318
+    },
+    {
+        "content": "<p>I just used brew</p>",
+        "id": 503954091,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741326562
+    },
+    {
+        "content": "<p>Also, you don't need llvm and afl to run the repro</p>",
+        "id": 503954108,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741326582
+    },
+    {
+        "content": "<p>That repro should work for everyone with only zig as a dep</p>",
+        "id": 503954121,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741326598
+    },
+    {
+        "content": "<p>Yeah repro is fine... I was wanting to run the fuzzer</p>",
+        "id": 503954789,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741327018
+    },
+    {
+        "content": "<p>I couldn't get the brew version working.</p>",
+        "id": 503954797,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741327025
+    },
+    {
+        "content": "<p>I've tried with a downloaded LLVM... and providing the path but having trouble with that too</p>",
+        "id": 503954827,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741327046
+    },
+    {
+        "content": "<p>Hey got it working using brew... <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span></p>",
+        "id": 503957386,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741328344
+    },
+    {
+        "content": "<p>Needed to add <code>export PATH=$PATH:/opt/homebrew/opt/llvm@18/bin</code> to my zshrc so it could find brew's <code>llvm-config</code></p>",
+        "id": 503957425,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741328368
+    },
+    {
+        "content": "<p>Got it running with </p>\n<div class=\"codehilite\"><pre><span></span><code>$ ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/parse -o /tmp/fuzz-parse-out zig-out/bin/fuzz-parse\n</code></pre></div>",
+        "id": 503957838,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741328598
+    },
+    {
+        "content": "<p><a href=\"/user_uploads/22008/_3Tnud5Ot4Huq0zYh8jf_pMD/Screenshot-2025-03-07-at-17.23.53.png\">Screenshot 2025-03-07 at 17.23.53.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/_3Tnud5Ot4Huq0zYh8jf_pMD/Screenshot-2025-03-07-at-17.23.53.png\" title=\"Screenshot 2025-03-07 at 17.23.53.png\"><img data-original-content-type=\"image/png\" data-original-dimensions=\"1476x1044\" src=\"/user_uploads/thumbnail/22008/_3Tnud5Ot4Huq0zYh8jf_pMD/Screenshot-2025-03-07-at-17.23.53.png/840x560.webp\"></a></div>",
+        "id": 503957898,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741328641
+    },
+    {
+        "content": "<p>My new commands to use the fuzzer with zig 0.14.0, thank you <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> for helping me workaround my issues to get back online fuzzing again</p>\n<div class=\"codehilite\"><pre><span></span><code>// for some reason homebrew llvm isn&#39;t working, but system -afl is...\nbrew install afl++\n\nzig build -Dfuzz -Dsystem-afl\nzig build snapshot -- --fuzz-corpus ./src/fuzz-corpus/\nafl-fuzz -i ./src/fuzz-corpus/ -o /tmp/corpus zig-out/bin/fuzz-parse\n</code></pre></div>",
+        "id": 504326041,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741474700
+    },
+    {
+        "content": "<p>My best guess is that there is a bug with this build script: <a href=\"https://github.com/allyourcodebase/AFLplusplus\">https://github.com/allyourcodebase/AFLplusplus</a></p>\n<p>As such, system afl is required instead of using zig built afl. Might just be some form of version overlap issue and not an issue with the actual build script. Need to do more testing at some point.</p>",
+        "id": 504327085,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741475393
+    },
+    {
+        "content": "<p>how, might just be that we need to wait for aflplusplus to update to <a href=\"https://github.com/allyourcodebase/AFLplusplus/tree/zig-0.14_afl_4.31c\">zig-0.14_afl_4.31c</a></p>",
+        "id": 504327351,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741475590
+    },
+    {
+        "content": "<p>maybe afl 21c doesn't work with newer zig</p>",
+        "id": 504327362,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1741475605
+    },
+    {
+        "content": "<p>I've got it down to a couple of seconds before we get a crash now... <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span> (on the parser)</p>",
+        "id": 504442155,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741562279
+    },
+    {
+        "content": "<p>New record for fuzz-parser - 2min, 23 sec before my first crash</p>",
+        "id": 504793430,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741687641
+    },
+    {
+        "content": "<p>Let me get these headers done and hopefully that goes up</p>",
+        "id": 504797917,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1741688758
+    },
+    {
+        "content": "<p>Have you been posting the all of the crashing input?</p>",
+        "id": 504798009,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1741688774
+    },
+    {
+        "content": "<p>I've been making a new snapshot for each failure, which I think will help prevent against regressions and seed future fuzzing efforts.</p>",
+        "id": 504803178,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741690092
+    },
+    {
+        "content": "<p>You can see all the ones I have so far in my PR <a href=\"https://github.com/roc-lang/roc/pull/7672\">https://github.com/roc-lang/roc/pull/7672</a></p>",
+        "id": 504803298,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1741690125
+    },
+    {
+        "content": "<p>One fuzzing hang that comes up semi often is having a ton of <code>{</code> brackets. When Roc reformats that, it adds essentially infinite spaces due to indentation. This fails fuzzing due to the fuzzer thinking it is a hang.</p>\n<p>For example, one fuzz failure I saw recently had ~7k <code>{</code> brackets. When formatted, that led to 92,910,578 spaces being printed. It is unsurprising that is too slow.</p>\n<p>This leads me to a few questions:</p>\n<ol>\n<li>Should we have a limit to how nested of an expression can parse? Is allowing 7k+ levels of nesting ok?</li>\n<li>Is the correct solution to tons of <code>{</code> brakects to just nest infinitely deep and have ridiculously long lines?</li>\n<li>How can I avoid this hang in the fuzzer (hangs in general mean slower execution and worse fuzzing)?</li>\n</ol>\n<hr>\n<p>I get that metric tons of <code>{</code> is contrived, but I think it is still best practice to consider and handle so we can maintain robust fuzzing.</p>",
+        "id": 517381237,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1746985172
+    },
+    {
+        "content": "<p>i think more than 100 levels of indentation is overkill</p>",
+        "id": 517382947,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1746986552
+    },
+    {
+        "content": "<p>let alone 7k+</p>",
+        "id": 517382974,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1746986579
+    },
+    {
+        "content": "<p>i would just just move indenting to a function that panics if it exceeds some limit</p>",
+        "id": 517383074,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1746986666
+    },
+    {
+        "content": "<p>or to be more graceful, returns a parse error and a malformed node</p>",
+        "id": 517383096,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1746986699
+    },
+    {
+        "content": "<p>Yeah, that is my thought, maybe after a certain level of nesting, we should just bail and return a parse error</p>",
+        "id": 517384534,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1746987875
+    },
+    {
+        "content": "<p>i could add that to my current PR unless it was already merged</p>",
+        "id": 517388389,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1746990837
+    },
+    {
+        "content": "<p>I would actually rather we handled this with a fuzzer change</p>",
+        "id": 517559828,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747058944
+    },
+    {
+        "content": "<p>pathological parsing cases like this can come up irl in generated code</p>",
+        "id": 517559910,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747058958
+    },
+    {
+        "content": "<p>where almost nobody notices, but then one person is totally blocked by it and has to try to make some complex workaround</p>",
+        "id": 517560074,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747058992
+    },
+    {
+        "content": "<p>what kind of change would you like to see?  some sort of filter on the fuzz inputs?</p>",
+        "id": 517560597,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747059068
+    },
+    {
+        "content": "<p>so if the payoff is something like \"everyone gets faster builds\" (e.g. u16 line counts instead of u32) I'm ok with that, but if the only problem is the fuzzer itself, I'd rather address this by changing the fuzzer than by changing the parser</p>",
+        "id": 517560690,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747059081
+    },
+    {
+        "content": "<p>yeah something like that - I'm not sure what options would be best there!</p>",
+        "id": 517560854,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1747059109
+    },
+    {
+        "content": "<p>Fair enough. Though if we format exceptionally nested code to be deeply indented, it won't be readable either.</p>",
+        "id": 517561590,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747059232
+    },
+    {
+        "content": "<p>a good thing to note is that if it's taking this level of complexity to crash the fuzzer we must be doing <em>something</em> pretty good</p>",
+        "id": 517561721,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747059248
+    },
+    {
+        "content": "<p>We have some basic crashes too, but I think we are overall doing well.</p>",
+        "id": 517561896,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747059282
+    },
+    {
+        "content": "<p>feel free to send basic crashes to me if they seem legit</p>",
+        "id": 517562000,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747059305
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20fuzzing/near/517561590\">said</a>:</p>\n<blockquote>\n<p>Fair enough. Though if we format exceptionally nested code to be deeply indented, it won't be readable either.</p>\n</blockquote>\n<p>To be more concrete here. Formating this code to ident just slows down parsing. So if this would be coming from generated code that no one is expected to read, we would just be making the experience worse by making the file way latger and way slower to parse.</p>\n<p>That said, I do agree that given this is a contrived example, limiting the fuzzer is reasonable too. In the fuzzer, I could pre scan for nesting depth and limit.</p>",
+        "id": 517564440,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747059740
+    },
+    {
+        "content": "<p>Aside, we decided on tabs as the canonical form, right? So the formatter should be changed to use tabs for indentation instead of spaces?</p>",
+        "id": 517565136,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747059869
+    },
+    {
+        "content": "<p>i didn't know that we made that decision but that should be easier</p>",
+        "id": 517567225,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747060276
+    },
+    {
+        "content": "<p>that cuts the number of characters per indented line by on average 4</p>",
+        "id": 517567343,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747060297
+    },
+    {
+        "content": "<p>so in that worst case example that's 7k tabs instead of 28k soaxes</p>",
+        "id": 517567568,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747060329
+    },
+    {
+        "content": "<p>That might actually be longer than max fuzzer input length.</p>",
+        "id": 517567680,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747060351
+    },
+    {
+        "content": "<p>So changing to tabs might actually remove the hangs</p>",
+        "id": 517567721,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747060360
+    },
+    {
+        "content": "<p>sweet</p>",
+        "id": 517567779,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747060371
+    },
+    {
+        "content": "<p>I think make is 8 or 16k</p>",
+        "id": 517567800,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747060374
+    },
+    {
+        "content": "<p>i can make that change tomorrow</p>",
+        "id": 517567840,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747060381
+    },
+    {
+        "content": "<p>should be just a few loc change</p>",
+        "id": 517568043,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747060421
+    },
+    {
+        "content": "<p>Looks like this is a wee bit harder than I expected. Zig multiline string literals don't allow literal tabs - they recommend a (IMHO) pretty insane system of postprocessing strings at comptime to replace some other sigil in the string with a tab</p>",
+        "id": 517625082,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747073438
+    },
+    {
+        "content": "<p><del>Also, there might be a tokenization error with tabs currently, but I'm not sure</del>  There is not.  Just an issue with Zig</p>",
+        "id": 517625179,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747073466
+    },
+    {
+        "content": "<p>I'm pretty much going to need to move all parser tests that contain indentation out to snapshot files and make running snapshots more ergonomic during my development workflow</p>",
+        "id": 517629801,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747074692
+    },
+    {
+        "content": "<p><img alt=\":thinkies:\" class=\"emoji\" src=\"https://avatars.zulip.com/22008/emoji/images/9055c9eb.png\" title=\"thinkies\"> yikes</p>",
+        "id": 517644689,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747078711
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"781658\">Anthony Bullard</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20fuzzing/near/517382947\">said</a>:</p>\n<blockquote>\n<p>i think more than 100 levels of indentation is overkill</p>\n</blockquote>\n<p>To me this makes me think of the way that Elm's compiler refuses to have tuples with more than 3 elements, and gracefully explains the rationale to the user. <br>\nIt could probably be a selling point if Roc didn't allow for .. 10? 20? levels of nesting. I think nesting can always be managed with some refactoring. If the language itself would encourage this behavior from the early days, I think the global quality of Roc code would just increase. <br>\nI can also see some \"management selling points\" when you can say that a language has built-in mandatory opinions about code complexity <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 517820995,
+        "sender_full_name": "Fábio Beirão",
+        "timestamp": 1747140345
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> Here's my PR on this <a href=\"https://github.com/roc-lang/roc/pull/7786\">https://github.com/roc-lang/roc/pull/7786</a></p>",
+        "id": 518320560,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747319389
+    },
+    {
+        "content": "<p>Addressed all review feedback</p>",
+        "id": 518424762,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747356256
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"781658\">@Anthony Bullard</span> just to show you the most commonly found fuzz failure. It is a variant of:<br>\n<code>zig build repro-parse -- -b MApmb3I= -v</code></p>\n<p>Which in this case is:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"mi\">0</span>\n<span class=\"k\">for</span>\n</code></pre></div>\n<p>Most of the failures hit this panic:</p>\n<div class=\"codehilite\"><pre><span></span><code>thread 26416288 panic: Should have gotten a valid pattern, pos=3 peek=EndOfFile\n\n/Users/bren077s/Projects/roc/src/check/parse/Parser.zig:1266:24: 0x1050855c7 in parsePattern (repro-parse)\n        std.debug.panic(&quot;Should have gotten a valid pattern, pos={d} peek={s}\\n&quot;, .{ self.pos, @tagName(self.peek()) });\n</code></pre></div>\n<p>Probably an easy fix around EOF handling</p>",
+        "id": 518841712,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1747506082
+    },
+    {
+        "content": "<p>cool i can find a fix for this rep quick</p>",
+        "id": 518842200,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747506375
+    },
+    {
+        "content": "<p>are we parsing this as a statement? expr? module?</p>",
+        "id": 518842246,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747506401
+    },
+    {
+        "content": "<p>NVM i can just read the code <span aria-label=\"wink\" class=\"emoji emoji-1f609\" role=\"img\" title=\"wink\">:wink:</span></p>",
+        "id": 518842301,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747506436
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/pull/7792\">https://github.com/roc-lang/roc/pull/7792</a> <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span></p>",
+        "id": 518844129,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1747507657
+    },
+    {
+        "content": "<p>I realised I could wire up our coordinate into the fuzzer really easily. </p>\n<p>So I've been fuzzing the whole compiler pipeline (at least everything we have so far up to type checking)... and it's been really great so far.</p>",
+        "id": 526182121,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1751091706
+    },
+    {
+        "content": "<p>In case this helps anyone... here is how I'm running the fuzzer for the <code>roc check</code> zig compiler pipeline.</p>\n<div class=\"codehilite\"><pre><span></span><code>brew install afl++\n\nrm -rf /tmp/corpus/default/crashes\n\nzig build -Dfuzz -Dsystem-afl\n\nafl-fuzz -i ./src/fuzz-corpus/ -o /tmp/corpus zig-out/bin/fuzz-canonicalize\n</code></pre></div>",
+        "id": 526186655,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1751096874
+    },
+    {
+        "content": "<p>And this is what it looks like in my terminal...<br>\n<a href=\"/user_uploads/22008/oGstBBXZee_5lgN9M3zGCoeD/Screenshot-2025-06-28-at-17.48.10.png\">Screenshot 2025-06-28 at 17.48.10.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/oGstBBXZee_5lgN9M3zGCoeD/Screenshot-2025-06-28-at-17.48.10.png\" title=\"Screenshot 2025-06-28 at 17.48.10.png\"><img data-original-content-type=\"image/png\" data-original-dimensions=\"1460x918\" src=\"/user_uploads/thumbnail/22008/oGstBBXZee_5lgN9M3zGCoeD/Screenshot-2025-06-28-at-17.48.10.png/840x560.webp\"></a></div>",
+        "id": 526186708,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1751096928
+    },
+    {
+        "content": "<p>where do the crashes end up?</p>",
+        "id": 526199287,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751111853
+    },
+    {
+        "content": "<p><a href=\"http://roc-lang.github.io/roc-compiler-fuzz\">roc-lang.github.io/roc-compiler-fuzz</a></p>",
+        "id": 526208414,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751122072
+    },
+    {
+        "content": "<p>what I mean is like if I run it locally and it reports a number of crashes, how do I reproduce an individual crash so I can try to fix it?</p>",
+        "id": 526208755,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751122475
+    },
+    {
+        "content": "<p>I think you just have to run it passing in a file as the first arg. <code>zig run fuzz-canonicalize -- /tm/corpus/default/crashes/...</code> I think</p>",
+        "id": 526209604,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751123399
+    },
+    {
+        "content": "<p>Fuzzing can make such curious crashes at times:</p>\n<div class=\"codehilite\"><pre><span></span><code>0\npr000000e:{e:0}pr000000e={p:0r}\n</code></pre></div>\n<p>This leads to (either an infinite or near infinite loop) in <code>check.check_types.unify.Unifier.gatherRecordFields</code>. I'm quite surprised this even makes it past parsing and to canonicalization.</p>",
+        "id": 526283897,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751218823
+    },
+    {
+        "content": "<p><code>zig build repro-canonicalize -- -b MApwcjAwMDAwMGU6e2U6MH1wcjAwMDAwMGU9e3A6MHJ9 -v</code></p>",
+        "id": 526283959,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751218890
+    },
+    {
+        "content": "<p>would like to see the snapshot for that failure</p>",
+        "id": 526285669,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751220645
+    },
+    {
+        "content": "<p>this reminds me i would like to have a META option to limit the stages run on a snapshot</p>",
+        "id": 526285707,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751220690
+    },
+    {
+        "content": "<p>that one looks like:</p>\n<div class=\"codehilite\" data-code-language=\"Elixir\"><pre><span></span><code><span class=\"n\">rec</span><span class=\"w\"> </span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">e</span><span class=\"w\"> </span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"n\">rec</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"ss\">p</span><span class=\"p\">:</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"n\">r</span><span class=\"w\"> </span><span class=\"p\">}</span>\n</code></pre></div>\n<p>so I suspect it's getting typed as an error, and something about trying to gather up all the record fields in an erroneous record is the problem</p>",
+        "id": 526285821,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751220829
+    },
+    {
+        "content": "<p>in this case both the type annotation and the record expression are invalid, but not sure if that's required to repro</p>",
+        "id": 526286287,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751221457
+    },
+    {
+        "content": "<p>this is probably the sort of situation that breaks the old compiler when you try to do the \"run anyway despite errors\" thing, so it's pretty great to see the fuzzer turning it up! <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 526286346,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751221513
+    },
+    {
+        "content": "<p>I'd love to see a count of how many runs of the fuzzer it takes to generate a file / statement (not expr) that is actually completely valid with no reports</p>",
+        "id": 526286525,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1751221704
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"781658\">Anthony Bullard</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20fuzzing/near/526286525\">said</a>:</p>\n<blockquote>\n<p>I'd love to see a count of how many runs of the fuzzer it takes to generate a file / statement (not expr) that is actually completely valid with no reports</p>\n</blockquote>\n<p>Just need to make an inverted fuzzer that only fails if everything goes successful though the complete compiler stack</p>",
+        "id": 526287070,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751222299
+    },
+    {
+        "content": "<p>Regression tests generator lol</p>",
+        "id": 526287939,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751223321
+    },
+    {
+        "content": "<p>First tokenizer fuzz failure in a long long time: <code>zig build repro-tokenize -- -b Jyc= -v</code></p>",
+        "id": 527224747,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751656255
+    },
+    {
+        "content": "<p>Seems to be related to new single quote changes. I think it is a bug on the formatting side technically rather than truly a tokenizer bug.</p>",
+        "id": 527224791,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751656291
+    },
+    {
+        "content": "<p>We now allow for empty single quote literals, which was not allowed before.</p>",
+        "id": 527224818,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751656311
+    },
+    {
+        "content": "<p>I'll take a look</p>",
+        "id": 527224901,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751656383
+    },
+    {
+        "content": "<p>Also, we are getting some fun canonicalize failures now like: <code>zig build repro-canonicalize -- -b IiJ1PSc= -v</code></p>\n<p>It leads to a zig slice that is invalid:</p>\n<div class=\"codehilite\"><pre><span></span><code>thread 219880510 panic: start index 1 is larger than end index 0\n/Users/bren077s/Projects/roc/src/check/canonicalize.zig:1269:42: 0x104a227af in canonicalize_expr (repro-canonicalize)\n            const inner_text = token_text[1 .. token_text.len - 1];\n</code></pre></div>",
+        "id": 527225010,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751656462
+    },
+    {
+        "content": "<p>Interesting, because there's a snapshot with an empty single quote. In such a case, <code>''</code> is of length 2 so the slice is <code>[1..1]</code>. Looks like a problem in the tokenizer. Likely it creates the token  too son</p>",
+        "id": 527225282,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751656694
+    },
+    {
+        "content": "<p>Of note, for the tokenizer fuzzer, we try to generate a \"canonical\" version of each token. Then retokenize a second time</p>",
+        "id": 527225492,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751656873
+    },
+    {
+        "content": "<p>So that \"canonical\" version is probably wrong for single quotes now. It probably needs to be allowed to be empty</p>",
+        "id": 527225516,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751656894
+    },
+    {
+        "content": "<p>Oh, I think the for loop here just needs to be from 0..length:<br>\n<a href=\"https://github.com/roc-lang/roc/blob/9a32c422f290713a312e18a96cb6f43c850aa4d0/src/check/parse/tokenize.zig#L1662-L1667\">https://github.com/roc-lang/roc/blob/9a32c422f290713a312e18a96cb6f43c850aa4d0/src/check/parse/tokenize.zig#L1662-L1667</a></p>",
+        "id": 527225569,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751656939
+    },
+    {
+        "content": "<p>Or maybe <code>1..length-1</code>?</p>",
+        "id": 527225599,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751656968
+    },
+    {
+        "content": "<p>It should be length-1, right</p>",
+        "id": 527226169,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751657547
+    },
+    {
+        "content": "<p>Looks like this code generated only open single quote, truncating the closing one. So <code>''</code> becomes <code>'</code> thus the slice <code>[1..(1 - 1)]</code></p>",
+        "id": 527226473,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751657888
+    },
+    {
+        "content": "<p><a href=\"https://github.com/roc-lang/roc/pull/7941\">https://github.com/roc-lang/roc/pull/7941</a></p>",
+        "id": 527227234,
+        "sender_full_name": "Kiryl Dziamura",
+        "timestamp": 1751658748
+    },
+    {
+        "content": "<p>General question, it is fair to say that all files under 16KB should definitely complete roc check in under a second, right?</p>\n<p>16KB is just an arbitrary number I set for fuzzing and I bet the true number should be higher, but compiler perf wise, I assume we want be able to roc check much much faster than that.</p>\n<p>For reference, Dict.roc is 60KB and is only 1776 lines.</p>\n<p>Of course in the worst case fuzzing experience, it will find code that takes maximal time and generates a metric ton of errors. So it isn't truly representative.</p>\n<p>Just thinking about fuzzer hangs and settings.</p>",
+        "id": 527309624,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751757032
+    },
+    {
+        "content": "<p>Also, how the heck does an input like this pass parsing and get to canonicalization? This feels pretty deeply wrong to me:</p>\n<div class=\"codehilite\"><pre><span></span><code>0]r={s=||{r={s=||{s={r=||{l={s=||{s={s={v={r={s={v=||{c00st=0t=c00st(0)c00st(0)t=c00st(0)\n</code></pre></div>\n<p>I get we want the compiler to be able to run as much as possible, but this has to fail parsing, right?</p>",
+        "id": 527309828,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751757369
+    },
+    {
+        "content": "<p>Hmm... I guess it does fail parsing, but we just keep going anyway:</p>\n<div class=\"codehilite\"><pre><span></span><code>[0]: check.parse.AST.Diagnostic{ .tag = check.parse.AST.Diagnostic.Tag.missing_header, .region = check.parse.AST.TokenizedRegion{ .start = 0, .end = 1 } }\n[1]: check.parse.AST.Diagnostic{ .tag = check.parse.AST.Diagnostic.Tag.expr_unexpected_token, .region = check.parse.AST.TokenizedRegion{ .start = 55, .end = 56 } }\n[2]: check.parse.AST.Diagnostic{ .tag = check.parse.AST.Diagnostic.Tag.expr_unexpected_token, .region = check.parse.AST.TokenizedRegion{ .start = 56, .end = 57 } }\n</code></pre></div>",
+        "id": 527309860,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751757426
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20fuzzing/near/527309828\">said</a>:</p>\n<blockquote>\n<p>Also, how the heck does an input like this pass parsing and get to canonicalization? This feels pretty deeply wrong to me:</p>\n<div class=\"codehilite\"><pre><span></span><code>0]r={s=||{r={s=||{s={r=||{l={s=||{s={s={v={r={s={v=||{c00st=0t=c00st(0)c00st(0)t=c00st(0)\n</code></pre></div>\n<p>I get we want the compiler to be able to run as much as possible, but this has to fail parsing, right?</p>\n</blockquote>\n<p>Maybe we want to support droid mode. The robots can plug and and skip all the human whitespace nonsense.</p>",
+        "id": 527310561,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1751758715
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20fuzzing/near/527309624\">said</a>:</p>\n<blockquote>\n<p>General question, it is fair to say that all files under 16KB should definitely complete roc check in under a second, right?</p>\n</blockquote>\n<p>Hindley-Milner type inference has pathological asymptotic time complexity if you just keep nesting <code>let</code>s (or defs in our case), and relies on the fact that in practice people don't actually do that</p>",
+        "id": 527313888,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751763905
+    },
+    {
+        "content": "<p>but if a fuzzer did that, it would presumably get bad <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 527313895,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751763913
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20fuzzing/near/527309828\">said</a>:</p>\n<blockquote>\n<p>Also, how the heck does an input like this pass parsing and get to canonicalization? This feels pretty deeply wrong to me:</p>\n<div class=\"codehilite\"><pre><span></span><code>0]r={s=||{r={s=||{s={r=||{l={s=||{s={s={v={r={s={v=||{c00st=0t=c00st(0)c00st(0)t=c00st(0)\n</code></pre></div>\n<p>I get we want the compiler to be able to run as much as possible, but this has to fail parsing, right?</p>\n</blockquote>\n<p>I think the right answer here is that parsing should generate a ton of error nodes, but then when we proceed to canonicalization, it finds essentially no work to do because it's all error nodes, so canonicalization and type-checking end up being no-ops</p>",
+        "id": 527313962,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751764002
+    },
+    {
+        "content": "<p>so you get the same outcome as if we \"stopped at parsing\" except:</p>\n<ul>\n<li>the CPU did more work than if we stopped</li>\n<li>we maintain the ability to actually do useful things in cases where the programmer actually made a mistake or two</li>\n</ul>",
+        "id": 527313998,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751764036
+    },
+    {
+        "content": "<blockquote>\n<p>but if a fuzzer did that, it would presumably get bad</p>\n</blockquote>\n<p>Makes senses, we'll see. The fuzzer just optimizes for new exploration so may be unlikely, but not really sure.</p>",
+        "id": 527314533,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751764977
+    },
+    {
+        "content": "<blockquote>\n<p>I think the right answer here is that parsing should generate a ton of error nodes, but then when we proceed to canonicalization, it finds essentially no work to do because it's all error nodes, so canonicalization and type-checking end up being no-ops</p>\n</blockquote>\n<p>If I understand what is happening, the parser generates a mostly valid tree by automatically adding a bunch of <code>}</code>s at the end. Can then runs with tons of recursive lambda and expression checks. Can is very slow. The end result of Can is mostly a bunch of unused variable and duplicate definition complaints.</p>",
+        "id": 527314590,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751765091
+    },
+    {
+        "content": "<p>One thing that a lot of fuzzers count as new coverage is loop counts (maybe recursion counts?) going over some threshold</p>",
+        "id": 527314592,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1751765092
+    },
+    {
+        "content": "<p>Yeah, bucketed loop counts is new coverage</p>",
+        "id": 527314602,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751765109
+    },
+    {
+        "content": "<p>so it isn't down to the individual iteration, but it does count overall</p>",
+        "id": 527314613,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751765126
+    },
+    {
+        "content": "<p>I predict as soon as any low hanging fruit is cleared out, it'll start finding things like that (unless we dissuade it somehow!)</p>",
+        "id": 527314623,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1751765151
+    },
+    {
+        "content": "<p>Would it be reasonable to put some limit on that let recursion and start erroring after that?</p>",
+        "id": 527314651,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1751765211
+    },
+    {
+        "content": "<p>Yeah, I'm sure when it comes up we can work around it. That said, right now there are lots of hangs with can in general (though hang is a pretty loose definition. Like the example above is considered a hang on the CI machine (old/weak cpu), but only takes 250ms on my M1 mac. That said, something that short taking 250ms is almost certainly a perf bug.</p>",
+        "id": 527314744,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751765347
+    },
+    {
+        "content": "<p>So probably worthwhile currently to consider a failure.</p>",
+        "id": 527314751,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751765359
+    },
+    {
+        "content": "<p>agreed!</p>",
+        "id": 527314752,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1751765360
+    },
+    {
+        "content": "<p>At least that is my thought</p>",
+        "id": 527314753,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751765362
+    },
+    {
+        "content": "<p>Just want to make sure that what we get currently that is considered a hang is useful. I think it is, but thought it would be worth double checking.</p>",
+        "id": 527314769,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751765399
+    },
+    {
+        "content": "<p>And yeah, we still have tons of low hanging crashes in both parse and can</p>",
+        "id": 527314783,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1751765418
+    },
+    {
+        "content": "<p>Took me way too long to debug the fuzz job failing...turns out it was just OOMing and github was killing it. Set afl to limit memory use and I think it is all good now.</p>",
+        "id": 531233007,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1753658955
+    },
+    {
+        "content": "<p>Have been very slowly poking at this for probably a few weeks now.</p>",
+        "id": 531233064,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1753658976
+    },
+    {
+        "content": "<p><span aria-label=\"eyes\" class=\"emoji emoji-1f440\" role=\"img\" title=\"eyes\">:eyes:</span> <br>\n<a href=\"/user_uploads/22008/BzqSBff4xV7fiaQuW7RqlOlz/Screenshot-2025-08-23-at-07.45.27.png\">Screenshot 2025-08-23 at 07.45.27.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/BzqSBff4xV7fiaQuW7RqlOlz/Screenshot-2025-08-23-at-07.45.27.png\" title=\"Screenshot 2025-08-23 at 07.45.27.png\"><img data-original-content-type=\"image/png\" data-original-dimensions=\"1190x61\" src=\"/user_uploads/thumbnail/22008/BzqSBff4xV7fiaQuW7RqlOlz/Screenshot-2025-08-23-at-07.45.27.png/840x560.webp\"></a></div>",
+        "id": 535786913,
+        "sender_full_name": "JRI98",
+        "timestamp": 1755931572
+    },
+    {
+        "content": "<p>It's finally green <span aria-label=\"tada\" class=\"emoji emoji-1f389\" role=\"img\" title=\"tada\">:tada:</span><br>\n<a href=\"/user_uploads/22008/zUBim88xgZbWO-kgXoZ7NOO0/Screenshot-2025-08-26-at-19.57.34.png\">Screenshot 2025-08-26 at 19.57.34.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/zUBim88xgZbWO-kgXoZ7NOO0/Screenshot-2025-08-26-at-19.57.34.png\" title=\"Screenshot 2025-08-26 at 19.57.34.png\"><img data-original-content-type=\"image/png\" data-original-dimensions=\"1197x214\" src=\"/user_uploads/thumbnail/22008/zUBim88xgZbWO-kgXoZ7NOO0/Screenshot-2025-08-26-at-19.57.34.png/840x560.webp\"></a></div>",
+        "id": 536295914,
+        "sender_full_name": "JRI98",
+        "timestamp": 1756234701
+    },
+    {
+        "content": "<p>an idea for how to make formatter fuzzing maximally robust: (I'm not sure how much of this we're currently fuzzing but I don't think all of it!)</p>\n<ul>\n<li>start with the random source code</li>\n<li>parse it into an AST and save that AST for later</li>\n<li>format it and save the resulting output source code for later</li>\n<li>format the already-formatted source code again</li>\n<li>verify that the formatting was stable (the second format was a no-op)</li>\n<li>parse the already-formatted source code into a new AST</li>\n<li>verify that the new AST was the same as the original saved AST</li>\n<li>re-tokenize both the original source code and the new one, considering only the comments, and verify that all comments from the original are encountered in the formatted one, and in the same order (meaning we neither dropped comments nor reordered them relative to one another, even though we may have changed what line they're on etc.)</li>\n</ul>",
+        "id": 536929776,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1756575888
+    },
+    {
+        "content": "<p>anyone know how much of that we're already doing? <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 536929880,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1756576010
+    },
+    {
+        "content": "<p>I think we current do:<br>\nsrc -&gt; parse -&gt; format -&gt; src2 -&gt; parse -&gt; format -&gt; src3</p>\n<p>Assert src2 == src3.</p>",
+        "id": 536938031,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1756585276
+    },
+    {
+        "content": "<p>So I think you could lose comments and that would not be caught</p>",
+        "id": 536938064,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1756585323
+    },
+    {
+        "content": "<p>I also think we don't check ast equivalency, but not fully sure</p>",
+        "id": 536938076,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1756585344
+    },
+    {
+        "content": "<p>Yeah, it is the first thing I commented.</p>\n<p>So we have double formatting with stablility</p>\n<p>We don't have:</p>\n<ul>\n<li>AST verification</li>\n<li>comment verification</li>\n</ul>",
+        "id": 536938898,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1756586491
+    },
+    {
+        "content": "<p>Oh, also, if the first parse has any issues, it just fully bails.</p>",
+        "id": 536940399,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1756588625
+    },
+    {
+        "content": "<p>Seems our can fuzzer is broken. Not sure if it is an innate tool chain issue or if it is something we can easily fix:</p>\n<blockquote>\n<p>ld.lld: error: undefined symbol: exp<br>\n89</p>\n<blockquote>\n<blockquote>\n<blockquote>\n<p>referenced by pow.zig:140 (/home/runner/work/_temp/81f1e437-3d6b-4bc5-a459-32de5609b04b/zig-x86_64-linux-0.14.1/lib/std/math/pow.zig:140)<br>\n90<br>\n              lto.tmp:(CIR.SmallDecValue.toFracRequirements)<br>\n91<br>\nclang: error: linker command failed with exit code 1 (use -v to see invocation)<br>\n92<br>\nerror: the following command exited with error code 1:<br>\n93<br>\n/usr/bin/afl-cc -O3 -o /home/runner/.cache/zig/o/88680f28f115b97e56cfab0f8f6281de/canonicalize_obj /home/runner/.cache/zig/p/afl_kit-0.1.0-uhOgGEEbAADSSVtFLWc0eoZFxVLiELWLNldB9K_f9x5L/afl.c /home/runner/.cache/zig/o/26ab65f70269c251a2c7d8de690dfc8e/canonicalize_obj.bc</p>\n</blockquote>\n</blockquote>\n</blockquote>\n</blockquote>\n<p><a href=\"https://github.com/roc-lang/roc-compiler-fuzz/actions/runs/18261456695/job/51989932652\">https://github.com/roc-lang/roc-compiler-fuzz/actions/runs/18261456695/job/51989932652</a></p>",
+        "id": 543187585,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759692606
+    },
+    {
+        "content": "<p>The fun of using special afl tooling with zig.</p>",
+        "id": 543187622,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759692643
+    },
+    {
+        "content": "<p>Can't wait for high quality builtin zig fuzzing. I think it is at least farther along now.</p>",
+        "id": 543187641,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1759692664
+    }
+]

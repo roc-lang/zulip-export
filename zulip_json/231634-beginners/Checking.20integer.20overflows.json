@@ -1,0 +1,38 @@
+[
+    {
+        "content": "<p>I watched <span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span>'s <a href=\"https://media.handmade-seattle.com/roc-lang/\">Roc at Handmade Seattle</a> talk, and I've a question about integer overflows. This is (or at least was back when the talk was given) the kind of code the ROC compiler generates for an overflow-checked integer addition:</p>\n<div class=\"codehilite\"><pre><span></span><code>    add rdi, rsi\n    jo  .LBB1_2\n</code></pre></div>\n<p>According to the video, the problem with the above code is not so much the presence of one extra machine instruction, but rather the fact that that instruction is a jump, which makes it more difficult for the LLVM compiler to optimize the code.</p>\n<p>Now, what I'm going to ask may be the most stupid question ever, but I don't know enough to tell, so I'll dare ask anyway: in a pure functional language without recoverable exceptions like ROC, do we need to check that overflow right away?</p>\n<p>Let's suppose we can permanently spare one bit in one of the CPU registers. Let's call that bit <code>STICKY_OVERFLOW_BIT</code>. We could initialize it to 0 at startup, and than do this after each overflow-checked integer addition:</p>\n<div class=\"codehilite\"><pre><span></span><code>    z = x + y;\n    STICKY_OVERFLOW_BIT |= ACTUAL_HARDWARE_OVERFLOW_BIT;\n</code></pre></div>\n<p>If an overflow happens we just record that fact and keep going. From that moment on the memory used by ROC code (as opposed to the memory used by the platform for its own purposes, which will still be fine) will contain garbage, but it seems to me that the problem will remained contained for as long as we avoid I/O. So maybe all we need to do is check the <code>STICKY_OVERFLOW_BIT</code> before performing the next I/O operation? Or maybe delay that check until we return from the function, since the return instruction is going to confuse the optimizer anyway?</p>\n<p>Another possibility would be to check before returning from the current function and also before making a call into any other function. That way we would preserve the correct stack trace (not sure how useful that would be in a release build, but still...) and we wouldn't need to permanently allocate any CPU register space for the sticky overflow bit, since the decision of what (if any) register to use for that purpose could be made on a function-by-function basis.</p>\n<p>An even more minimalist possibility would be to delay the check only when the operations we need to check are in a tight loop, or when there's several of them in a row. Take this code, for example:</p>\n<div class=\"codehilite\"><pre><span></span><code>    sum = 0;\n    for (int i=0 ; i &lt; n ; i++) {\n      int x = xs[i];\n      sum += x;\n    }\n</code></pre></div>\n<p>On an Intel processor, the carry flag is (I think) bit 0 of the <code>EFLAGS</code> register. Let's say there's a spare CPU register at that particular location in the code and let's call it <code>STICKY_EFLAGS</code>. The above code could be checked like this:</p>\n<div class=\"codehilite\"><pre><span></span><code>  sum = 0;\n  STICKY_EFLAGS = 0;\n  for (int i=0 ; i &lt; n ; i++) {\n    int x = xs[i];\n    sum += x;\n    STICKY_EFLAGS |= EFLAGS;\n  }\n  if (STICKY_EFLAGS &amp; 1)\n    panic();\n</code></pre></div>\n<p>The ideal solution of course would be to have a sticky carry bit that is implemented in hardware. So I did a quick search, and it looks like maybe the ARM processor does have something like that? It's called the <code>Q</code> flag, and it comes with its own <code>QADD</code>, <code>QSUB</code>, ... instructions. I wasn't able to find anything similar for Intel processors.</p>\n<p>Could that possibly work? Would it provide any benefits? I've been wondering since I watched that talk.</p>",
+        "id": 276787117,
+        "sender_full_name": "Giovanni Zanandrea",
+        "timestamp": 1648385821
+    },
+    {
+        "content": "<p>So a few pieces here. I am trying to figure out the right order to present them.</p>\n<p>Let's start with the actual issue with the <code>jo  .LBB1_2</code> instruction. This individual instruction actually has about zero cost. It is a jump instruction that is never taken and should have 100% branch prediction accuracy. So on any vaguely modern processor, that cost is super low.<br>\nThe actual cost comes from simply bloating the number of instructions. In order to load the next useful instruction after the add instruction, the cpu now has to load 1 more instruction than without the jump. So this can lead to performance cost, particularly in hot loops.</p>\n<p>side note: the real cost is probably the slot the jump instruction takes up in buffers in the cpu before it is resolved, but it easier to just view it the cost of loading an extra instruction.</p>",
+        "id": 276800356,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1648404727
+    },
+    {
+        "content": "<p>When it comes tot using a <code>STICKY_EFLAGS</code> it has a number likely issues. The main ones I see are:</p>\n<ul>\n<li>Still adding an extra instruction to the pipeline (though it has less resolution concerns in the cpu)</li>\n<li>Losing precision on the issues. We generate different panics depending on the issues that cause them. With this solution, we may run into cases where we can't distinguish the correct panic to generate.</li>\n<li>Also pinning a register. That can have large performance implication in some cases.</li>\n</ul>",
+        "id": 276800626,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1648405155
+    },
+    {
+        "content": "<p>An extra clarification on <code>which makes it more difficult for the LLVM compiler to optimize the code</code></p>\n<p>LLVM is generating optimized code for what we are asking it to do. In order to get more optimized code, we would need to ask it to do something different. For example, adding a surrounding if branch that ensures integer overflow can't happen will lead to llvm removing all of the jump instructions related to integer overflow.</p>",
+        "id": 276800777,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1648405373
+    },
+    {
+        "content": "<p>Thanks for the explanation. I see now it was indeed a stupid question, but as I said, I didn't know enough to figure that out on my own.</p>",
+        "id": 276825836,
+        "sender_full_name": "Giovanni Zanandrea",
+        "timestamp": 1648440986
+    },
+    {
+        "content": "<p>It's not stupid, the question is totally valid. There is even a decent chance that implementing the <code>STICKY_EFLAGS</code> version could be faster for some programs. A branch definitely has more weird constraints in a CPU than other instructions. It is most likely the case that that they would perform almost identical for most programs. The big thing here that makes it so <code>STICKY_EFLAGS</code> is not likely to be faster is just that our branch should never be taken. If instead this was a branch that was taken even 1% of the time, <code>STICKY_EFLAGS</code> could be significantly faster.</p>",
+        "id": 276826065,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1648441393
+    }
+]

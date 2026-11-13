@@ -1,0 +1,98 @@
+[
+    {
+        "content": "<p>Hello all,</p>\n<p>Here's a pretty simple app which is walking down directories starting with a root path provided as a command line argument. I call it like so :</p>\n<div class=\"codehilite\"><pre><span></span><code>roc --no-cache -- /Users\n</code></pre></div>\n<p>I'm using the latest <em>basic-cli</em> platform available and the corresponding nightly version or Roc, but I get the same result with the most recent Roc build.</p>\n<p>The issue is that it never recurses deeper than 7 levels and sometimes gives me the following crash :</p>\n<div class=\"codehilite\"><pre><span></span><code>*Roc crashed: RocList.refcount: getAllocationDataPtr returned null (capacity=4416949544, is_slice=false)*\n</code></pre></div>\n\n<p>The crash doesn't seem random as if I get it for a specific root directory, I'll get it consistently. But not every root path results in a crash.</p>\n<div class=\"codehilite\"><pre><span></span><code>app [main!] { pf: platform &quot;https://github.com/roc-lang/basic-cli/releases/download/alpha-0/HVZonS7HStbvGwhqvDZE1HreyDfqD6tayzFbi9rAUXYN.tar.zst&quot;}\n\nimport pf.Stdout\nimport pf.Dir\nimport pf.Path\n\nmain! = |args| {\n  root_path = args.get(1)?\n  files = walk_directory!(root_path, Bool.False)\n  Stdout.line!(Str.inspect(files))\n  Ok({})\n}\n\nwalk_directory! : Str, Bool =&gt; List(Str)\nwalk_directory! = |root_path, include_invisibles| {\n  dbg(root_path)\n  content = dir_content!(root_path, include_invisibles)\n  fold!(content.dirs, [], |dirs, d| {dirs.concat(walk_directory!(d, include_invisibles))})\n}\n\ndir_content! : Str, Bool =&gt; {dirs: List(Str), files: List(Str)}\ndir_content! = |root_path, include_invisibles| {\n    content = match Dir.list!(root_path) {\n      Ok(c) =&gt; c\n      Err(e) =&gt; {\n        dbg(e)\n        []\n      }\n    }\n\n    fold!(content, {files: [], dirs: []},\n      |state, path| {\n        if include_invisibles.not() and path_is_visible(path).not() {\n          state\n        } else if Path.is_file!(path).ok_or(Bool.False) {\n          {..state, files: state.files.append(path)}\n        } else if Path.is_dir!(path).ok_or(Bool.False) {\n          {..state, dirs: state.dirs.append(path)}\n        } else {\n          state\n        }\n      }\n    )\n}\n\nfold! : List(item), state, (state, item =&gt; state) =&gt; state\nfold! = |list, init, step| {\n    var $state = init\n\n    for item in list {\n        $state = step($state, item)\n    }\n\n    $state\n}\n\npath_is_visible : Str -&gt; Bool\npath_is_visible = |path| {\n  basename(path).starts_with(&quot;.&quot;).not()\n}\n\nbasename : Str -&gt; Str\nbasename = |path| {\n  path.split_on(&quot;/&quot;).last().ok_or(&quot;&quot;)\n}\n</code></pre></div>\n<p>Before asking my questions I tried my best to exhaust all other possibilities except using AI. Is there a mini guide somewhere in the discussions on how I could set one up, maybe in combination with Zed? </p>\n<p>Thank you so much for the help and, mostly, for all the hard work on this amazing language!</p>",
+        "id": 575373359,
+        "sender_full_name": "Claude Précourt",
+        "timestamp": 1771872373
+    },
+    {
+        "content": "<p>Hi <span class=\"user-mention\" data-user-id=\"928710\">@Claude Précourt</span>, I am done for today but I can take a look tomorrow and provide you with an AI prompt as well :)</p>",
+        "id": 575377112,
+        "sender_full_name": "Anton",
+        "timestamp": 1771873310
+    },
+    {
+        "content": "<p>So kind of you <span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> ! There is obviously no rush, no code in production here.</p>",
+        "id": 575377508,
+        "sender_full_name": "Claude Précourt",
+        "timestamp": 1771873440
+    },
+    {
+        "content": "<p>Here is the workaround, using more for loops instead of fold:</p>\n<div class=\"codehilite\"><pre><span></span><code>app [main!] { pf: platform &quot;../platform/main.roc&quot; }\n\nimport pf.Stdout\nimport pf.Dir\nimport pf.Path\n\nmain! = |args| {\n  root_path = args.get(1)?\n  files = walk_directory!(root_path, Bool.False)\n  Stdout.line!(Str.inspect(files))\n  Ok({})\n}\n\nwalk_directory! : Str, Bool =&gt; List(Str)\nwalk_directory! = |root_path, include_invisibles| {\n  dbg(root_path)\n  dirs = get_subdirs!(root_path, include_invisibles)\n\n  var $result = dirs\n  $result = []\n  for d in dirs {\n    $result = $result.concat(walk_directory!(d, include_invisibles))\n  }\n\n  $result\n}\n\nget_subdirs! : Str, Bool =&gt; List(Str)\nget_subdirs! = |root_path, include_invisibles| {\n    content = match Dir.list!(root_path) {\n      Ok(c) =&gt; c\n      Err(e) =&gt; {\n        dbg(e)\n        []\n      }\n    }\n\n    var $dirs = content\n    $dirs = []\n\n    for path in content {\n      if include_invisibles.not() and path_is_visible(path).not() {\n        {}\n      } else if Path.is_dir!(path).ok_or(Bool.False) {\n        $dirs = $dirs.append(path)\n      }\n    }\n\n    $dirs\n}\n\npath_is_visible : Str -&gt; Bool\npath_is_visible = |path| {\n  basename(path).starts_with(&quot;.&quot;).not()\n}\n\nbasename : Str -&gt; Str\nbasename = |path| {\n  path.split_on(&quot;/&quot;).last().ok_or(&quot;&quot;)\n}\n</code></pre></div>",
+        "id": 575524836,
+        "sender_full_name": "Anton",
+        "timestamp": 1771934777
+    },
+    {
+        "content": "<p>This was my prompt for Opus 4.6 (Effort High) in Claude Code:<br>\n\"\"\"<br>\nLooks like I am hitting a segmentation fault, please investigate:</p>\n<div class=\"codehilite\"><pre><span></span><code>❯ ./roc_nightly-macos_apple_silicon-2026-02-24-9d46896/roc --no-cache ./examples/dir-walk-crash.roc /Users/username/gitrepos/basic-cli4/basic-cli\ndbg: &quot;/Users/username/gitrepos/basic-cli4/basic-cli&quot;\ndbg: &quot;/Users/username/gitrepos/basic-cli4/basic-cli/crates&quot;\ndbg: &quot;/Users/username/gitrepos/basic-cli4/basic-cli/crates/roc_host_lib&quot;\ndbg: &quot;/Users/username/gitrepos/basic-cli4/basic-cli/crates/roc_host_lib/src&quot;\n❯ echo $?\n139\n</code></pre></div>\n<h1>tips</h1>\n<p>You are working in basic-cli, a Roc platform made with Roc and Rust. Passing things between Roc and Rust requires special care and is prone to issue with the memory.</p>\n<p>The source code of zig 0.15.2 is in /Users/username/gitrepos/zig, you can use it as documentation.</p>\n<p>If you make any changes inside basic-cli that are not in the examples folder, you will most likely need to rebuild with ./build.sh</p>\n<p>After you are done, run ./ci/all_tests.sh to confirm you did not break anything else.</p>\n<h1>tips for the Roc repo</h1>\n<p>You can find the source code for the nightly release at /Users/username/gitrepos/roc. That repo contains the Roc CLI, a compiler and interpreter written in zig. Ignore everything in the crates folder there, exclude it from all your searches.</p>\n<p>You can rebuild the roc binary with <code>zig build roc</code>, this will put it in <code>./zig-out/bin/roc</code>.</p>\n<p>Debugging:</p>\n<ul>\n<li>I encourage you to add debug prints and other necessary code to verify your hypothesis.</li>\n<li>You can enable printing of std.log.debug statements by altering the log_level at the top of src/cli/main.zig</li>\n<li>If you are missing a tool that is not installed and that would help significantly, stop execution and tell me what I need to install.</li>\n<li>If you believe an issue is memory related, try building roc with refcount tracing: <code>zig build roc -Dtrace-refcount</code></li>\n</ul>\n<p>Style:</p>\n<ul>\n<li>Avoid using shortcuts, workarounds and special cases to get something to work. Avoid hardcoding things.</li>\n<li>Try to follow existing patterns in the codebase when applicable.</li>\n<li>Do not just change code when there are comments above it that explain the need for something to be done a certain way.</li>\n<li>Write high quality code, this is a production codebase.</li>\n</ul>\n<p>If you encounter a network error when fetching dependencies, just run the command again.</p>\n<p>Some zig commands do not output anything on success and just exit with code 0.</p>\n<p>Note that <code>zig test</code> often does not work with our project, so we typically rely on <code>zig build test</code>, the flag <code>--summary all</code> can give your more info about which tests ran. You can run a single test with <code>zig build test -- --test-filter \"substring that occurs in test name\"</code>. If you add <code>--summary all</code> it must be located before the <code>-- --test-filter</code>.</p>\n<p>It's recommended to always run with <code>--no-cache</code>, so <code>./zig-out/bin/roc myfile.roc --no-cache</code>, to prevent caching from behaving in unexpected ways.</p>\n<p>Note that Roc has changed since your training data, it's recommended to check existing .roc files in the repo if you're getting confusing errors when adding Roc code.<br>\n\"\"\"</p>",
+        "id": 575525008,
+        "sender_full_name": "Anton",
+        "timestamp": 1771934834
+    },
+    {
+        "content": "<p>Here are instructions for the initial setup:<br>\n\"\"\"<br>\nThe debugging process:</p>\n<div class=\"codehilite\"><pre><span></span><code>git clone https://github.com/roc-lang/basic-cli.git\ncd basic-cli\ngit checkout migrate-zig-compiler\n</code></pre></div>\n<p>Get commit from latest nightly at <a href=\"https://github.com/roc-lang/nightlies/releases\">https://github.com/roc-lang/nightlies/releases</a>: 9d46896bdfbb44f915a935d77b69ea86cdc23e78</p>\n<p>In your local basic-cli folder, update the rev for roc_std_new in Cargo.toml to 9d46896bdfbb44f915a935d77b69ea86cdc23e78</p>\n<p>run <code>./ci/all_tests.sh</code> as a sanity check. You will need to have zig 0.15.2 installed.</p>\n<p>Create ./examples/dir-walk-crash.roc, changing the header to: <code>app [main!] { pf: platform \"../platform/main.roc\" }</code></p>\n<p>I ran the following:</p>\n<div class=\"codehilite\"><pre><span></span><code>❯ ./roc_nightly-macos_apple_silicon-2026-02-24-9d46896/roc --no-cache ./examples/dir-walk-crash.roc /Users/username/gitrepos/basic-cli4/basic-cli\ndbg: &quot;/Users/username/gitrepos/basic-cli4/basic-cli&quot;\ndbg: &quot;/Users/username/gitrepos/basic-cli4/basic-cli/crates&quot;\ndbg: &quot;/Users/username/gitrepos/basic-cli4/basic-cli/crates/roc_host_lib&quot;\ndbg: &quot;/Users/username/gitrepos/basic-cli4/basic-cli/crates/roc_host_lib/src&quot;\n❯ echo $?\n139\n</code></pre></div>\n<p>Exit code 139 means a segmentation fault.</p>\n<p>I set my local Roc repo to the same commit as the nightly <code>git checkout 9d46896bdfbb44f915a935d77b69ea86cdc23e78</code>.<br>\n\"\"\"</p>",
+        "id": 575525181,
+        "sender_full_name": "Anton",
+        "timestamp": 1771934886
+    },
+    {
+        "content": "<p>Claude thinks the bug is in Roc itself, not basic-cli, so I will look into a fix there too.</p>",
+        "id": 575525371,
+        "sender_full_name": "Anton",
+        "timestamp": 1771934949
+    },
+    {
+        "content": "<p>So the workaround is to use a less of a functional approach for now. I, Claude Human tend agree with Claude AI that the bug is in Roc itself. While debugging I added many dbg() statements everywhere I was calling effectful methods of basic-cli to make sure that I wasn't silently failing somewhere when interacting with the file system. </p>\n<p>And thanks <span class=\"user-mention\" data-user-id=\"361169\">@Anton</span>  for the example prompt. I need to invest more time to get better at this AI stuff...  ;-)</p>",
+        "id": 575567339,
+        "sender_full_name": "Claude Précourt",
+        "timestamp": 1771945596
+    },
+    {
+        "content": "<blockquote>\n<p>I, Claude Human</p>\n</blockquote>\n<p>everybody is talking about you these days <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 575567659,
+        "sender_full_name": "Anton",
+        "timestamp": 1771945669
+    },
+    {
+        "content": "<p>I know! It was funny at first. Especially since I've always been the go to guy for all sorts of weird requests everywhere I have worked at. But now I must admit that it's just weird and mildly annoying seeing my first name used so often... At least Anthropic seems to have a good reputation and seems more ethical than most!</p>",
+        "id": 575568475,
+        "sender_full_name": "Claude Précourt",
+        "timestamp": 1771945857
+    },
+    {
+        "content": "<p><a href=\"https://en.wikipedia.org/wiki/Anton_aus_Tirol\">Anton aus Tirol</a> used to be a hit song when I was a child, but yeah this is something else :p</p>",
+        "id": 575568968,
+        "sender_full_name": "Anton",
+        "timestamp": 1771945969
+    },
+    {
+        "content": "<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/01EZaOqAKS_4MSDk6nX3U0wc/image.png\"><img data-original-content-type=\"image/png\" data-original-dimensions=\"238x212\" src=\"/user_uploads/thumbnail/22008/01EZaOqAKS_4MSDk6nX3U0wc/image.png/840x560.webp\"></a></div>",
+        "id": 575569372,
+        "sender_full_name": "Steve Howell",
+        "timestamp": 1771946088
+    },
+    {
+        "content": "<p>It would be nice if you were able to use it to get a pay raise if some out of touch higher up manager has been hearing office chatter about how Claude is making them so much more productive <span aria-label=\"smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"smile\">:smile:</span></p>",
+        "id": 575571531,
+        "sender_full_name": "Anton",
+        "timestamp": 1771946558
+    },
+    {
+        "content": "<p>Great idea! I'll ask Claude to compose an email for me...!</p>\n<p>I just listened to \"Anton aus Tirol\" and... it helped me make peace with having an AI homonym. <span aria-label=\"wink\" class=\"emoji emoji-1f609\" role=\"img\" title=\"wink\">:wink:</span></p>",
+        "id": 575572443,
+        "sender_full_name": "Claude Précourt",
+        "timestamp": 1771946751
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"361169\">Anton</span> <a href=\"#narrow/channel/231634-beginners/topic/Crash.20in.20recursive.20code/near/575525371\">said</a>:</p>\n<blockquote>\n<p>Claude thinks the bug is in Roc itself, not basic-cli, so I will look into a fix there too.</p>\n</blockquote>\n<p>Fixed in <a href=\"https://github.com/roc-lang/roc/issues/9200\">#9200</a></p>",
+        "id": 575591394,
+        "sender_full_name": "Anton",
+        "timestamp": 1771951022
+    },
+    {
+        "content": "<p>Yeah I was going to guess it's most likely in the interpreter <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 575642555,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1771967632
+    }
+]

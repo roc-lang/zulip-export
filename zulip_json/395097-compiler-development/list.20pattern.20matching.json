@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>As I am working on adding <code>.. as rest</code> in list pattern matching, I noticed that our list pattern matching has a bug related to redundant patterns:</p>\n<div class=\"codehilite\"><pre><span></span><code>The 3rd pattern is redundant:\n\n4│       when [2, 1] is\n5│         [1, .., 1] -&gt; 0\n6│         [1, ..] -&gt; 1\n7│&gt;        [.., 1] -&gt; 2\n8│         _ -&gt; 3\n\nAny value of this shape will be handled by a previous pattern, so this\none should be removed.\n</code></pre></div>\n<p>The third pattern is what should match here , but it is marked as redudant. Any tips on debugging/fixing this? I assume this would be a change to the <code>constrain_pattern</code> function, but maybe this checking is elsewhere, this code is new to me.</p>",
+        "id": 403239304,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700511507
+    },
+    {
+        "content": "<p><code>exhaustive</code> is the crate you'll want to check. List patterns are kind of annoying to exhaustiveness-check, there is a large description of the current algorithm here: <a href=\"https://github.com/roc-lang/roc/blob/b2e33c09252fcc0e96a4134f3f48e0155d1cc20c/crates/compiler/exhaustive/src/lib.rs#L694-L817\">https://github.com/roc-lang/roc/blob/b2e33c09252fcc0e96a4134f3f48e0155d1cc20c/crates/compiler/exhaustive/src/lib.rs#L694-L817</a></p>",
+        "id": 403242693,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1700513027
+    },
+    {
+        "content": "<p>Thanks for the info</p>",
+        "id": 403243180,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700513282
+    },
+    {
+        "content": "<p>Don't understand the code enough yte to have a fix, but the core issue is that <code>[1, ..]</code> and <code>[.., 1]</code> both end up boiling down the the equivalent of a literal 1 in the recursive usefulness check. As such, If one of the patterns exists, the other is not useful. Somehow the before and after related information needs to be added here such that the pattern check can differentiate a 1 at the beginning and a 1 at the end.</p>\n<p>At least that is my rough current understanding.</p>",
+        "id": 403250670,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700516781
+    },
+    {
+        "content": "<p>Oh interesting. <code>[1,..]</code> should boil down into the infinite sequence <code>[1], [1, _], [1, _, _], ...</code> and <code>[..,1]</code> to [1], [_, 1], [_,_,1], ...<code>, so maybe that's being lost somewhere after the first of each sequence (</code>[1]`) is compared</p>",
+        "id": 403250864,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1700516891
+    },
+    {
+        "content": "<p>I think it is related to minimizing the length of the list, but I am not fully sure. Cause we don't actually want to generate <code>[1], [1, _], [1, _, _], ...</code>. So there is logic to restrict to the minimal size list necessary for comparison. I assume the bug is there. But I don't fully understand all the pieces, so maybe there is something more.</p>",
+        "id": 403251019,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700516997
+    },
+    {
+        "content": "<p>Yeah, we don't actually generate the infinite sequence</p>",
+        "id": 403251843,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1700517431
+    },
+    {
+        "content": "<p>we should generate the smallest irrefutable sequence tho</p>",
+        "id": 403251858,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1700517440
+    },
+    {
+        "content": "<p>So what we want is for the second and third case, to generate the comparisons <code>[1, _]</code> and <code>[_, 1]</code>. That's enough to see the lack of redundancy</p>",
+        "id": 403251909,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1700517465
+    },
+    {
+        "content": "<p>If you or maybe folkert have a chance to look at this, it would be much appreciated.</p>\n<p>I pushed a commit that is my attempted fix, but looking at the tests that are failing, I think I made it too flexible. My gut feeling is that the fix should be pretty simple overall.</p>\n<p>PR: <a href=\"https://github.com/roc-lang/roc/issues/6030\">#6030</a><br>\nBranch: <a href=\"https://github.com/roc-lang/roc/tree/pattern-match-rest-as\">pattern-match-rest-as</a><br>\nMy <a href=\"https://github.com/roc-lang/roc/pull/6030/commits/06cf9f6cf3f6c79f6461a16f139ae7b12a53010d\">attempted fix</a></p>\n<p>My new test case can be run with <code>cargo test-gen-llvm -- rest_as</code>. It is functional with my attempted fix, but a lot of tests under <code>-p roc_load --test test_reporting</code> are broken in a way that leads to new error messages that definitely are wrong.</p>",
+        "id": 403261064,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700521745
+    },
+    {
+        "content": "<p>There is this related issue, someone said they would take a look at it a few days ago so might be worth letting them know that you have a fix <a href=\"https://github.com/roc-lang/roc/issues/5187\">https://github.com/roc-lang/roc/issues/5187</a></p>",
+        "id": 403261536,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1700522013
+    },
+    {
+        "content": "<p>oops. Didn't mean to take a fix from someone. Just got annoyed and wanted to use the feature</p>",
+        "id": 403261663,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700522075
+    },
+    {
+        "content": "<p>Yes I am very eager to use it also, it will significantly clean up some code I have</p>",
+        "id": 403261740,
+        "sender_full_name": "Isaac Van Doren",
+        "timestamp": 1700522120
+    },
+    {
+        "content": "<p>I'll take a look later tonight</p>",
+        "id": 403274481,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1700528450
+    },
+    {
+        "content": "<p>Thanks</p>",
+        "id": 403276507,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700529138
+    },
+    {
+        "content": "<p>This is great Brendan, I think you were totally on the right track. I think the problem is that you are specializing to the list constructor which is being checked for redundancy, rather than to the patterns that are checked against.</p>",
+        "id": 403287122,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1700534338
+    },
+    {
+        "content": "<p>This diff seems to work correctly for me:</p>\n<div class=\"codehilite\"><pre><span></span><code>diff --git a/crates/compiler/exhaustive/src/lib.rs b/crates/compiler/exhaustive/src/lib.rs\nindex 090b222ac..5239cb725 100644\n--- a/crates/compiler/exhaustive/src/lib.rs\n+++ b/crates/compiler/exhaustive/src/lib.rs\n@@ -389,7 +389,6 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -&gt; bool {\n                             vector.extend(args);\n                         } else {\n                             // TODO turn this into an iteration over the outer loop rather than bouncing\n-                            vector.extend(args);\n                             for list_ctor in spec_list_ctors {\n                                 let mut old_matrix = old_matrix.clone();\n                                 let mut spec_matrix = Vec::with_capacity(old_matrix.len());\n@@ -400,10 +399,19 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -&gt; bool {\n                                     &amp;mut spec_matrix,\n                                 );\n\n-                                if is_useful(spec_matrix, vector.clone()) {\n+                                let mut vector = vector.clone();\n+                                specialize_row_with_polymorphic_list(\n+                                    &amp;mut vector,\n+                                    &amp;args,\n+                                    arity,\n+                                    list_ctor,\n+                                );\n+\n+                                if is_useful(spec_matrix, vector) {\n                                     return true;\n                                 }\n                             }\n+\n                             return false;\n                         }\n                     }\n@@ -504,6 +512,36 @@ fn specialize_matrix_by_list(\n     }\n }\n\n+fn specialize_row_with_polymorphic_list(\n+    row: &amp;mut Vec&lt;Pattern&gt;,\n+    list_element_patterns: &amp;[Pattern],\n+    polymorphic_list_ctor: ListArity,\n+    specialized_list_ctor: ListArity,\n+) {\n+    let min_len = specialized_list_ctor.min_len();\n+    if list_element_patterns.len() &gt; min_len {\n+        row.extend(list_element_patterns.iter().cloned());\n+    }\n+\n+    let (patterns_before, patterns_after) = match polymorphic_list_ctor {\n+        ListArity::Slice(before, after) =&gt; (\n+            &amp;list_element_patterns[..before],\n+            &amp;list_element_patterns[after..],\n+        ),\n+        ListArity::Exact(_) =&gt; (list_element_patterns, &amp;[] as &amp;[Pattern]),\n+    };\n+\n+    let middle_any_patterns_needed =\n+        specialized_list_ctor.min_len() - polymorphic_list_ctor.min_len();\n+    let middle_patterns = std::iter::repeat(Anything).take(middle_any_patterns_needed);\n+\n+    row.extend(\n+        (patterns_before.iter().cloned())\n+            .chain(middle_patterns)\n+            .chain(patterns_after.iter().cloned()),\n+    );\n+}\n+\n // Specialize a row that matches a list&#39;s constructor(s).\n //\n // See the docs on [build_list_ctors_covering_patterns] for more information on how list\ndiff --git a/crates/compiler/uitest/tests/foo1.txt b/crates/compiler/uitest/tests/foo1.txt\nnew file mode 100644\nindex 000000000..4939d9710\n--- /dev/null\n+++ b/crates/compiler/uitest/tests/foo1.txt\n@@ -0,0 +1,6 @@\n+app &quot;test&quot; provides [main] to &quot;./platform&quot;\n+\n+main = when [] is\n+    [1, .., 1] -&gt; &quot;one&quot;\n+    [_, .., 1] -&gt; &quot;two&quot;\n+    _ -&gt; &quot;three&quot;\n</code></pre></div>",
+        "id": 403287151,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1700534352
+    },
+    {
+        "content": "<p>Hmm, I can't apply the patch for some reason. do you think you could just push a commit to the branch?</p>",
+        "id": 403288970,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700535293
+    },
+    {
+        "content": "<p>Done. I didn't add tests though. We'll want a few tests in <code>roc_load/tests/reporting</code></p>",
+        "id": 403289204,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1700535412
+    },
+    {
+        "content": "<p>Sounds good. Thanks for the help!</p>",
+        "id": 403289512,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700535571
+    },
+    {
+        "content": "<p>fsfs</p>",
+        "id": 403290277,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1700535803
+    },
+    {
+        "content": "<p>This looks to still hit the original issue according to ci: <a href=\"https://github.com/roc-lang/roc/actions/runs/6938641739/job/18874694012\">https://github.com/roc-lang/roc/actions/runs/6938641739/job/18874694012</a></p>\n<p>Maybe just still needs some more minor tweaking</p>",
+        "id": 403293196,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700537172
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/395097-compiler-development/topic/list.20pattern.20matching/near/403290277\">said</a>:</p>\n<blockquote>\n<p>fsfs</p>\n</blockquote>\n<p>I misread this as \"ffs\" and I was like \"oh no what happened?\" and then I realized \"oh what happened is that I am old\"</p>",
+        "id": 403295565,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1700538456
+    },
+    {
+        "content": "<p>found a fix, was a super minor indexing bug</p>",
+        "id": 403295695,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1700538530
+    }
+]

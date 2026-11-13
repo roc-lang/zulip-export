@@ -1,0 +1,134 @@
+[
+    {
+        "content": "<p>So I have been messing around with using python and c++ together recently. Of course, a major problem is avoiding copying data around especially with multidimensional array like types. For python, they expose a buffer protocol that is essentially data pointer, size of element, element type, number of dimensions, size of dimensions, and strides in bytes. This enables easily sharing data buffers of any shape while avoiding copying.</p>\n<p>I know that we eventually plan to add seamless slices, and we believe that minor abuses to seamless slices should enable passing a buffer from host to Roc without copying. I am wonder if there would be some merit digging into a more structured/full featured buffer protocol.</p>\n<p>Of course we have some complications around mutability and garbage collection, but performance of platform to app communication can be super important when talking about large amounts of data.</p>\n<p>In the case of performance critical code, it would be amazing to pass in a unique buffer owned by the host, have a way to ensure roc only does in place transformations on the buffer, and profit from never copying.</p>\n<p>Anyway, here is an article talking some about the buffer protocol: <a href=\"https://pybind11.readthedocs.io/en/stable/advanced/pycpp/numpy.html#buffer-protocol\">https://pybind11.readthedocs.io/en/stable/advanced/pycpp/numpy.html#buffer-protocol</a></p>",
+        "id": 301678085,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664552875
+    },
+    {
+        "content": "<p>I might be missing something, but doesn't <a href=\"https://github.com/roc-lang/roc/issues/1361\">the current seamless slices design</a> (with the changes noted in the issue itself) cover that use case?</p>",
+        "id": 301684117,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664554473
+    },
+    {
+        "content": "<p>you have to allocate a refcount somewhere for the buffer, but I don't think that's avoidable for Roc's automatic memory management to work</p>",
+        "id": 301684214,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664554511
+    },
+    {
+        "content": "<p>but if that refcount is 1, you'd still get in-place mutation</p>",
+        "id": 301684285,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664554531
+    },
+    {
+        "content": "<p>I guess it does mostly cover it. It doesn't have any extra information around shapes and what not, but i guess that can done in user land.</p>\n<p>I also think that something I keep coming back to is wanting a Unique type level tag that at compile time ensures you never copy.</p>\n<p>In this case for example, you really want an inout parameter. As such, refcounting doesn't really make sense. If you try to free the buffer, there will be problems. So yes it is unique and roc can edit it, but no, roc can't ever free it. Also, roc should edit it in place because we don't want to return anything. Just modify the buffer. So I guess if we had a return type, we would want to be able to assert that we return the exact same buffer that came in.</p>",
+        "id": 301686447,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664555160
+    },
+    {
+        "content": "<p>Also, i think that is something we missed with seamless slices, they likely can't have a refcount of 1 because if roc frees the slice, it would fail.</p>",
+        "id": 301686602,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664555196
+    },
+    {
+        "content": "<p>hm, that's true</p>",
+        "id": 301738090,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664574051
+    },
+    {
+        "content": "<p>although the host can say \"this has a refcount of 1, so go ahead and free it, but in my <code>roc_dealloc</code> implementation I'll look up the pointer and see that it's actually still in use, and so make dealloc be a no-op for this particular pointer\"</p>",
+        "id": 301738150,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664574092
+    },
+    {
+        "content": "<blockquote>\n<p>I also think that something I keep coming back to is wanting a Unique type level tag that at compile time ensures you never copy.</p>\n</blockquote>\n<p>I'm pretty sure this requires linear types, which (aside from being a big complication to the type system) would also <a href=\"https://www.reddit.com/r/ProgrammingLanguages/comments/6sq6nv/comment/dlfq306/?utm_source=share&amp;utm_medium=web2x&amp;context=3\">be infectious</a>, which would mean you couldn't just put a wrapper type around one type</p>",
+        "id": 301738878,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664574454
+    },
+    {
+        "content": "<p>I do think <code>expect-unique</code> sounds plausible though, which would at least let you verify specific paths through tests</p>",
+        "id": 301739071,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664574530
+    },
+    {
+        "content": "<p>The roc_dealloc option is a possibility though definitely a lot messier than I would hope.</p>",
+        "id": 301739373,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664574688
+    },
+    {
+        "content": "<p>And yeah, if it requires linear types that definitely is problemática. I would really hope there is some middle ground here where we can still get some stronger guarantees.....but i also, am currently debating trying to use roc in something with machine learning and large tensors. Probably a niche use case.</p>",
+        "id": 301739660,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664574832
+    },
+    {
+        "content": "<p>yeah and I think it's worth trying to figure out ways to make things work in these use cases!</p>",
+        "id": 301739848,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664574905
+    },
+    {
+        "content": "<p>just gotta balance that with the potential costs to the type system</p>",
+        "id": 301740113,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664575018
+    },
+    {
+        "content": "<p>Also, just to clarify, my main question -&gt; can I get roc to consistently update the data in a tensor inplace without the overhead of a function call to an effect per write?</p>",
+        "id": 301747822,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664579006
+    },
+    {
+        "content": "<p>If we can solve that nicely, I will be happy.</p>",
+        "id": 301747835,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664579023
+    },
+    {
+        "content": "<p>I assume a tensor is an array of data that was allocated by the host, and doesn't have space for a refcount at the start?</p>",
+        "id": 301778374,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664608666
+    },
+    {
+        "content": "<p>That is correct.</p>\n<p>Also, a tensor is multidimensional and might be pinned to a special location of memory that is automatically being copied to the GPU.</p>",
+        "id": 301827466,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1664633805
+    },
+    {
+        "content": "<p>yeah then I think the \"make sure dealloc doesn't free them\" approach should work</p>",
+        "id": 301837422,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664638938
+    },
+    {
+        "content": "<p>one way this could be done efficiently: implement <code>roc_alloc</code> to mmap a big chunk of contiguous virtual memory up front, and then parcel out chunks of it as normal (the way <code>malloc</code> would).</p>\n<p>Now <code>roc_dealloc</code> can trivially test whether it's trying to free a tensor: see if the given pointer is inside that big chunk of mmap'd virtual address space reserved for non-host Roc allocations</p>",
+        "id": 301837723,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664639110
+    },
+    {
+        "content": "<p>you could also get fancier and support multiple big backing allocations (in which case you might have to check a small N number of pointer ranges as the program's memory usage grows) but that might never be necessary in practice if you can get away with a big enough virtual memory allocation at the start</p>",
+        "id": 301837856,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664639211
+    },
+    {
+        "content": "<p>this does mean you need to have a custom <code>roc_alloc</code>, of course, but depending on your perspective, having a good reason to do that might be a fun bonus <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 301837962,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1664639275
+    }
+]
