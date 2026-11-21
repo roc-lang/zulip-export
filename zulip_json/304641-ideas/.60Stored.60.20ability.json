@@ -1,0 +1,1076 @@
+[
+    {
+        "content": "<p><code>roc-pg</code> could use <code>Stored</code> for auto-prepared statements, a feature drivers on other languages offer</p>",
+        "id": 363346980,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1685810951
+    },
+    {
+        "content": "<p>I think<code>Stored</code> is a bad idea. I fundamentally think it is something that will be badly abused and make many libraries much less trust-able than they should.</p>\n<p>Like I totally get the convenience of it, but I think it will be a huge blow for purity and understandably of roc code, especially without the 3 arg <code>Task</code>. It will lead to a huge swath of functions that could be pure instead returning a <code>Task</code>. It will not be clear if those functions are doing everything under the sun or simply storing a value.</p>\n<p>Let's look at random numbers as a concrete idea. Currently, we can make a nice chain-able random number api (still more explorations of a final api should be done, but what is below isn't too bad). Even if we were to force someone to store or pass around the state, what the state is, it's initial value, and if it ever gets reused is very clear. Besides requesting the initial seed, random numbers can be represented in completely pure roc code. So there are no <code>Task</code>s anywhere else in the api. That is an extremely good thing.</p>\n<p>here is some simple code with an api achievable in current roc</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nx\">state</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">Random</span><span class=\"p\">.</span><span class=\"nx\">seed</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">await</span><span class=\"w\"> </span><span class=\"c1\"># this is the only task required</span>\n<span class=\"nv\">int</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">Random</span><span class=\"p\">.</span><span class=\"nx\">int</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"mi\">100</span>\n<span class=\"nv\">x</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">int</span><span class=\"w\"> </span><span class=\"nx\">state</span>\n<span class=\"nv\">y</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">x</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Random</span><span class=\"p\">.</span><span class=\"nx\">next</span><span class=\"w\"> </span><span class=\"nx\">int</span>\n\n<span class=\"nx\">x</span><span class=\"p\">.</span><span class=\"nx\">value</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nx\">y</span><span class=\"p\">.</span><span class=\"nx\">value</span><span class=\"w\"> </span><span class=\"c1\"># the sum of two random number from 0 to 100</span>\n</code></pre></div>\n<p>Now lets imagine a world with <code>Stored</code> used for the random module:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">Random</span><span class=\"p\">.</span><span class=\"nx\">seed</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">await</span>\n<span class=\"nv\">int</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"nx\">Random</span><span class=\"p\">.</span><span class=\"nx\">int</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"mi\">100</span><span class=\"w\"> </span><span class=\"c1\"># This is a task.</span>\n<span class=\"nx\">x</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">int</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">await</span>\n<span class=\"nx\">y</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">int</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">await</span>\n\n<span class=\"nx\">x</span><span class=\"w\"> </span><span class=\"o\">+</span><span class=\"w\"> </span><span class=\"nx\">y</span>\n</code></pre></div>\n<p>Cool, these apis get the same thing done and look about the same. The first is probably less convenient because you have a state variable that is passed around. So, why do I think the second one is way worse? The loss of purity through proliferation of <code>Task</code> is a huge security hole.</p>\n<p>Look at the types of the random functions in the second example:</p>\n<ul>\n<li><code>Random.seed</code>: <code>Task {} err</code></li>\n<li><code>Random.int</code>: <code>I32, I32 -&gt; Task I32 err</code></li>\n<li>any other random method would be <code>Task something err</code></li>\n</ul>\n<p>Each of these functions is now another potential security hole that I need to audit. What do they do? Can they make network calls? Will someone later add code that spies on me to those function? Who knows, they are just <code>Task</code>. <code>Task</code> is important to roc and will be required in libraries, but fundamentally, we don't want it everywhere. I think that <code>Stored</code> will lead to <code>Task</code> being everwhere.</p>\n<p>On top of that, what if I want multiple random number generators? What if I use a package, but also one of my subpackages uses it as well? Will our stored values/secrets clash? How is that managed?</p>\n<p>I think we need to put a lot more design work into keeping things pure and monadic before considering <code>Stored</code>. If we do add <code>Stored</code> I think it should be a lot better defined. I also think that likely it should be used with 3 argument <code>Task</code>. I think it will lead to <code>Task</code> being proliferated so much that it will be very important to have the type system verify exactly what affects a function call can use.</p>\n<p>My gut feeling is that <code>Stored</code> should be a clunky api only provide by some platforms unless we commit to 3 arg <code>Task</code>. I don't think this is something we want to promote the spread of.</p>",
+        "id": 363370599,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685820778
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> I am way out of my depth here, but I would like to share my 2 cents. I agree with Brendan, that it would be a \"wtf\" if a library could have such \"tentacles\" from within to reach out to global state.</p>\n<p>I am thinking that Elm has this kind of \"key\" system for Url (the user receives it on <a href=\"https://package.elm-lang.org/packages/elm/browser/latest/Browser#application\">application.init</a>)</p>\n<p>I think that the ergonomics of libraries being able to state \"hey, I would like to read and store data such and such\" in a strong typed way is paramount.</p>\n<p>I think ultimately the user (developer) should be in control. Any library function what would need to interact with the <code>Stored</code> api would need to carry with it this key, for both <code>read</code> and <code>write</code>.</p>\n<p>To me this means it becomes clear to the user \"ah, there's <code>Stored</code> operations going on on this Task\". Also, I am thinking that when user is somehow declaring these keys, this is a place where we can \"namespace\" the keys to prevent collisions.<br>\nOnce again this is kind of a stream of thought ramble, but it could be interesting to make it even explicit at the manifest level.</p>\n<div class=\"codehilite\"><pre><span></span><code>app &quot;hello-world&quot;\n  packages { pf: &quot;...&quot; }\n  imports []\n  provides [main] to pf\n  stores [ pg_username, pg_password, aws_api_key, openai_apikey ] # &lt;- this would mean that on `main` we would receive a record like { pg_username : Stored.Key, pg_password: Stored.Key, etc... }\n\nmain : { pg_username : Stored.key, .... } -&gt; Task ....\nmain = \\keys -&gt;\n    # the user could now invoke library functions, passing each library the corresponding key\n</code></pre></div>",
+        "id": 363398035,
+        "sender_full_name": "Fábio Beirão",
+        "timestamp": 1685836764
+    },
+    {
+        "content": "<p>A note as I think about this more. I honestly think we should reconsider 3 arg task. I think 3 arg task will be wonted once we have a real package echo system. i think it is only inconvenient now because we mostly have people working on very small apps where it is something to learn.</p>",
+        "id": 363399365,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685837737
+    },
+    {
+        "content": "<p>Know exactly what effect types a task can produce is quite important in many library trust real red situations.</p>",
+        "id": 363399450,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685837779
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> do you think 3 arg tasks would improve your perception of Stored? (since we could potentially see what is being stored? unless I got it wrong)</p>\n<p>I don't really see how having a common storage effect in all applications would necessarily break purity. wouldn't it be the same as something provided by a platform?</p>",
+        "id": 363401401,
+        "sender_full_name": "Georges Boris",
+        "timestamp": 1685839212
+    },
+    {
+        "content": "<p>I think the real issue isn't technically purity, the real issue is the pollution of task (especially without knowing what the tasks do). It basically leads to programming in what is equivalent to a totally impure language.</p>\n<p>I think 3 arg task helps because you can see that the random library only uses the store random seed effect and no other effects. Without that, it little is a totally opaque impure task</p>",
+        "id": 363404788,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685841812
+    },
+    {
+        "content": "<p>But i guess this is also technically the largest argument against tasks in libraries in general, but i think fully restricting them would be too draconic and greatly limit the package ecosystem.</p>",
+        "id": 363405091,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685842021
+    },
+    {
+        "content": "<p>I think stored is just such a large convenience function that is can be extremely problematic. Not only would way more code return tasks, but suddenly tons of code is essentially buckets around mutable state. Instead i think it would be better for a web platform just to provide stored for tokens or something more limited. That would help it not get abused as a mutability escape hatch all over the place</p>",
+        "id": 363405230,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685842130
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Task.20as.20builtin/near/363370599\">said</a>:</p>\n<blockquote>\n<p>I think we need to put a lot more design work into keeping things pure and monadic before considering <code>Stored</code>.</p>\n</blockquote>\n<p>The problem with monads is that without HKTs they get more unwieldy the more you combine them.</p>",
+        "id": 363416214,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1685850192
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> I don't really understand what a three arg task is, I assume something like <code>Task ok err op</code> based on previous discussion. Is the basic idea that each of the <code>Op</code>s or effects are enumerated for the task? I assume this is less ergonomic than the 2-arg task, is that the main tradeoff?</p>",
+        "id": 363421057,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1685854448
+    },
+    {
+        "content": "<p>Yeah, that is pretty much it:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"c1\"># two arg</span>\n<span class=\"c1\"># No transparency around what it does. could call any tasks.</span>\n<span class=\"nv\">printRandomNumber</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"p\">[]</span>\n\n<span class=\"c1\"># three arg</span>\n<span class=\"c1\"># Can only read random integers and print to stdout</span>\n<span class=\"nv\">printRandomNumber</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"p\">[]</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">Random</span><span class=\"p\">.</span><span class=\"nx\">int</span><span class=\"w\"> </span><span class=\"nx\">_</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">Stdout</span><span class=\"p\">.</span><span class=\"nx\">line</span><span class=\"w\"> </span><span class=\"nx\">_</span><span class=\"p\">]</span>\n\n<span class=\"c1\"># If you don't care, does not have to be more verbose really</span>\n<span class=\"c1\"># still three arg, but letting the compiler fill in the op</span>\n<span class=\"nv\">printRandomNumber</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"p\">[]</span><span class=\"w\"> </span><span class=\"nx\">_</span>\n\n<span class=\"c1\"># Could even just make an alias in your app if you really don't care</span>\n<span class=\"c1\"># I think that would work, but I may be wrong.</span>\n<span class=\"nx\">MyTask</span><span class=\"w\"> </span><span class=\"nx\">ok</span><span class=\"w\"> </span><span class=\"nv\">err</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"w\"> </span><span class=\"nx\">ok</span><span class=\"w\"> </span><span class=\"nx\">err</span><span class=\"w\"> </span><span class=\"nx\">_</span>\n</code></pre></div>\n<p>Important note, even if a library author writes there code always using <code>_</code> as the third arg, the doc generated type will still fill in the exact args and it can be enforced by the user code.</p>\n<p>Main drawback we commented on before was that it is more confusing to teach new users and more verbose. I think that mostly can be alleviated by starting by teaching with it always being <code>_</code> and saying it is not important yet.</p>",
+        "id": 363421148,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685854561
+    },
+    {
+        "content": "<p>Thank you for that explanation. Is there a difference between Tasks that are composed of other Tasks, and those provided by the platform?</p>",
+        "id": 363421980,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1685855195
+    },
+    {
+        "content": "<p>Like, does a Task from the platform still have a third argument in this design?</p>",
+        "id": 363422043,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1685855230
+    },
+    {
+        "content": "<p>No difference. All tasks would have 3 args. The raw plaform tasks would just be directly defined:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"c1\"># in Stdout.roc in the platform</span>\n<span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"err\">\\</span><span class=\"nx\">Str</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"p\">[]</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">Stdout</span><span class=\"p\">.</span><span class=\"nx\">line</span><span class=\"w\"> </span><span class=\"nx\">_</span><span class=\"p\">]</span>\n<span class=\"nv\">line</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">...</span>\n</code></pre></div>",
+        "id": 363423198,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685856146
+    },
+    {
+        "content": "<p>This is the primitive information needed such that any task chain that calls <code>Stdout.line</code> will be required to specify that it uses the <code>Stdout.line</code> op.</p>",
+        "id": 363423234,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685856184
+    },
+    {
+        "content": "<p>Note: exact naming will be slightly different, but fundamentally it will be the same thing. Like the op actual may be <code>Stdout (Line Str)</code> or similar. This means an end user could write any of <code>_</code>, <code>Stdout _</code>, <code>Stdout (Line _)</code>, or <code>Stdout (Line Str)</code>, depending on how specific they want to be.</p>",
+        "id": 363423280,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685856234
+    },
+    {
+        "content": "<p>but what would <code>op</code> mean in the context of Tasks in packages that are not tied to one specific platform? the packages would either need to use a type variable or define what platforms they are meant to work with, right?</p>",
+        "id": 363475184,
+        "sender_full_name": "Georges Boris",
+        "timestamp": 1685877645
+    },
+    {
+        "content": "<p>that makes a lot of sense</p>",
+        "id": 363475209,
+        "sender_full_name": "Georges Boris",
+        "timestamp": 1685877653
+    },
+    {
+        "content": "<p>and tbh when I first read about Stored I loved it because it did seem like a giant bucket of possibilities - so I agree with you that having it will probably be a mistake because people will definitely over use it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 363475449,
+        "sender_full_name": "Georges Boris",
+        "timestamp": 1685877723
+    },
+    {
+        "content": "<p>maybe having 3 arg would already be enough for solving the same problem? since then we could have something used for aws tokens for instance using a stored-like effect. we would just need a platform that supports it</p>",
+        "id": 363475704,
+        "sender_full_name": "Georges Boris",
+        "timestamp": 1685877823
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"620083\">@Fábio Beirão</span>  I think your concern about \"tentacles\" is answered by the following if I understand correctly?</p>\n<blockquote>\n<p>... Stored is secure by default. Each opaque type is only accessible by default inside its own module; you have to go out of your way to grant other modules access to each opaque type individually.</p>\n</blockquote>",
+        "id": 363477851,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1685878520
+    },
+    {
+        "content": "<p>So I guess this means that a package can only touch state that is internal; i.e. from inside the module that declares an opaque type which implements the <code>Stored</code> ability.</p>",
+        "id": 363478457,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1685878738
+    },
+    {
+        "content": "<p>What I mean by tentacles, might be a bit like the (very unfamiliar to me!) <code>IO</code> monad in Haskel. As in, I would expect that if a function from a platform wants to \"do things\", its API signature would make it clear to the user (from an input point of view). <br>\nTo be honest I don't really have a crystalized opinion on this topic, since I haven't yet gotten to experiment deeper with Effects/Tasks, to see how I feel about them.</p>",
+        "id": 363486837,
+        "sender_full_name": "Fábio Beirão",
+        "timestamp": 1685881114
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"489294\">Agus Zubiaga</span> <a href=\"#narrow/stream/304641-ideas/topic/Task.20as.20builtin/near/363416214\">said</a>:</p>\n<blockquote>\n<p>The problem with monads is that without HKTs they get more unwieldy the more you combine them.</p>\n</blockquote>\n<p>I believe it. I wish it wasn't the case, but based on what i have seen, seems like a totally plausible conclusion.</p>\n<p>In that cause, I would say that we should:</p>\n<ol>\n<li>Use 3 arg task.</li>\n<li>Seriously consider if <code>Stored</code> should be general or specialized.</li>\n<li>If we pick general, figure out how we can discourage it's use except in a limited set of situations.</li>\n</ol>",
+        "id": 363512948,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685889939
+    },
+    {
+        "content": "<blockquote>\n<p>The problem with monads is that without HKTs they get more unwieldy the more you combine them.</p>\n</blockquote>\n<p>I think this is true even if you have HKTs <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 363521167,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685892659
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"364014\">Georges Boris</span> <a href=\"#narrow/stream/304641-ideas/topic/Task.20as.20builtin/near/363475449\">said</a>:</p>\n<blockquote>\n<p>and tbh when I first read about Stored I loved it because it did seem like a giant bucket of possibilities - so I agree with you that having it will probably be a mistake because people will definitely over use it <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>\n</blockquote>\n<p>it unlocks similar things to Haskell's <a href=\"https://hackage.haskell.org/package/base-4.18.0.0/docs/Data-IORef.html#v:IORef\"><code>IORef</code></a>, which I wouldn't say is overused</p>",
+        "id": 363528343,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685895167
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Task.20as.20builtin/near/363404788\">said</a>:</p>\n<blockquote>\n<p>I think the real issue isn't technically purity, the real issue is the pollution of task (especially without knowing what the tasks do). It basically leads to programming in what is equivalent to a totally impure language.</p>\n<p>I think 3 arg task helps because you can see that the random library only uses the store random seed effect and no other effects. Without that, it little is a totally opaque impure task</p>\n</blockquote>\n<p>there's another way achieve this with 2-arg <code>Task</code> - but that's the thing I haven't finished writing up yet <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 363528660,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685895290
+    },
+    {
+        "content": "<p>maybe these proposals are more coupled than I thought, although I didn't want to put everything in one huge proposal either haha</p>",
+        "id": 363529001,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685895413
+    },
+    {
+        "content": "<p>So I guess <code>Stored</code> is <code>IORef</code>, but with implicit keys? So instead of passing around a reference value and needing to store that, <code>Stored</code> hides away all of that. So with <code>IORef</code>, you would know that it is used because it wold return the reference. With <code>Stored</code> you have now way to tell.</p>",
+        "id": 363533231,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685896968
+    },
+    {
+        "content": "<p>WIth <code>IORef</code>, I would make a guess that needing to return and store the reference gets rid of most of the benefits. So you would still hit a lot of the same issues we hit with direct monads. That would mean that it isn't any more convenient to use really. <code>Stored</code> on the other hand is super convenient to slip in anywhere. Just make a new opaque type and init function.</p>\n<p>Note: total speculation, have never used <code>IORef</code> in haskell, but it looks like it still has the issue of need to pass around a state variable. The state variable just happens to be a reference.</p>",
+        "id": 363533855,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685897163
+    },
+    {
+        "content": "<p>How would <code>Stored.read</code> and <code>Stored.write</code> differ fundamentally from, for example, a task that sends an HTTP request that results in a state mutation on a server? The state lives in memory instead of a remote server, and you don't have to serialize or deserialize the data.  But they are all <code>Task</code>s that represent a state mutation somewhere. Am I missing something?</p>",
+        "id": 363554587,
+        "sender_full_name": "Bryce Miller",
+        "timestamp": 1685905035
+    },
+    {
+        "content": "<p>Also, <code>Stored.read</code> and <code>Stored.write</code> seem meaningfully less convenient than mutations in, say, any imperative language.  If someone were going to use <code>Stored</code> values everywhere, wouldn't there be a strong incentive for them to just use a different language instead?</p>",
+        "id": 363555295,
+        "sender_full_name": "Bryce Miller",
+        "timestamp": 1685905324
+    },
+    {
+        "content": "<p>They don't differ fundamentally from HTTP, I think that's the point! Normally a functional program mostly consists of pure functions, and only a few effectful functions at the \"edges\" return tasks. I think the concern is that this feature makes it easy to make effectful stuff in the \"middle\" of your program. Then it's easier to write Roc in a style where you just mutate lots of stuff and everything returns tasks. Functional programming is meant to guide you away from that kind of thing.</p>",
+        "id": 363562418,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1685908402
+    },
+    {
+        "content": "<blockquote>\n<p>How would <code>Stored.read</code> and <code>Stored.write</code> differ fundamentally from, for example, a task that sends an HTTP request that results in a state mutation on a server?</p>\n</blockquote>\n<p>A HTTP request can change based on things outside of the program's control. <code>Stored</code> would be controlled by the language, so could only change based on what's in your program. It's still mutability and effects, but it's still a step more trustworthy than the outside world.</p>",
+        "id": 363575780,
+        "sender_full_name": "Sky Rose",
+        "timestamp": 1685916590
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Task.20as.20builtin/near/363533231\">said</a>:</p>\n<blockquote>\n<p>So I guess <code>Stored</code> is <code>IORef</code>, but with implicit keys? So instead of passing around a reference value and needing to store that, <code>Stored</code> hides away all of that. So with <code>IORef</code>, you would know that it is used because it wold return the reference. With <code>Stored</code> you have now way to tell.</p>\n</blockquote>\n<p>you can implement <code>IORef</code> using <code>Stored</code>, although (like <code>IORef</code>) it would only be usable in a single-threaded environment, since in a multithreaded environment there would be race conditions:</p>\n<div class=\"codehilite\" data-code-language=\"Python\"><pre><span></span><code><span class=\"n\">IORef</span> <span class=\"n\">a</span> <span class=\"o\">:=</span> <span class=\"n\">Nat</span>\n\n<span class=\"n\">IORefStore</span> <span class=\"n\">a</span> <span class=\"o\">:=</span> <span class=\"n\">List</span> <span class=\"n\">a</span>\n    <span class=\"n\">implements</span> <span class=\"n\">Stored</span>\n\n<span class=\"n\">newIORef</span> <span class=\"p\">:</span> <span class=\"n\">a</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Task</span> <span class=\"p\">(</span><span class=\"n\">IORef</span> <span class=\"n\">a</span><span class=\"p\">)</span> <span class=\"o\">*</span>\n<span class=\"n\">newIORef</span> <span class=\"o\">=</span> \\<span class=\"n\">val</span> <span class=\"o\">-&gt;</span>\n    <span class=\"nd\">@IORefStore</span> <span class=\"nb\">list</span> <span class=\"o\">&lt;-</span> <span class=\"n\">Stored</span><span class=\"o\">.</span><span class=\"n\">read</span> <span class=\"o\">|&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"k\">await</span>\n\n    <span class=\"c1\"># Use the length of the list (before we append to it)</span>\n    <span class=\"c1\"># to identify the index the val will be stored in</span>\n    <span class=\"n\">ref</span> <span class=\"o\">=</span> <span class=\"nd\">@IORef</span> <span class=\"p\">(</span><span class=\"n\">List</span><span class=\"o\">.</span><span class=\"n\">len</span> <span class=\"nb\">list</span><span class=\"p\">)</span>\n\n    <span class=\"c1\"># This would be a race condition in a multithreaded</span>\n    <span class=\"c1\"># environment, because the (read+write) here are not atomic</span>\n    <span class=\"p\">{}</span> <span class=\"o\">&lt;-</span> <span class=\"n\">Stored</span><span class=\"o\">.</span><span class=\"n\">write</span> <span class=\"p\">(</span><span class=\"nd\">@IORefStore</span> <span class=\"p\">(</span><span class=\"n\">List</span><span class=\"o\">.</span><span class=\"n\">append</span> <span class=\"n\">val</span><span class=\"p\">))</span> <span class=\"o\">|&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"k\">await</span>\n\n    <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"n\">succeed</span> <span class=\"n\">ref</span>\n\n<span class=\"n\">readIORef</span> <span class=\"p\">:</span> <span class=\"n\">IORef</span> <span class=\"n\">a</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Task</span> <span class=\"n\">a</span> <span class=\"o\">*</span>\n<span class=\"n\">readIORef</span> <span class=\"o\">=</span> \\<span class=\"nd\">@IORef</span> <span class=\"n\">index</span> <span class=\"o\">-&gt;</span>\n    <span class=\"nd\">@IORefStore</span> <span class=\"nb\">list</span> <span class=\"o\">&lt;-</span> <span class=\"n\">Stored</span><span class=\"o\">.</span><span class=\"n\">read</span> <span class=\"o\">|&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"k\">await</span>\n\n    <span class=\"n\">when</span> <span class=\"n\">List</span><span class=\"o\">.</span><span class=\"n\">get</span> <span class=\"nb\">list</span> <span class=\"n\">index</span> <span class=\"ow\">is</span>\n        <span class=\"n\">Ok</span> <span class=\"n\">val</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"n\">succeed</span> <span class=\"n\">val</span>\n        <span class=\"n\">Err</span> <span class=\"n\">OutOfBounds</span> <span class=\"o\">-&gt;</span> <span class=\"n\">crash</span> <span class=\"s2\">\"Invalid IORef. This should never happen!\"</span>\n</code></pre></div>\n<p>since the design of <code>Stored</code> is for <code>Stored.read</code> and <code>Stored.write</code> to be locking, you could also use <code>Stored</code> to implement a threadsafe alternative to the above, using a different <code>Stored</code> to lock/unlock the <code>IORefStore</code>, and then block on it using tail recursion...but that implementation would be a lot more complicated of course <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 363582738,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685921990
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Task.20as.20builtin/near/363533231\">said</a>:</p>\n<blockquote>\n<p>So I guess <code>Stored</code> is <code>IORef</code>, but with implicit keys? So instead of passing around a reference value and needing to store that, <code>Stored</code> hides away all of that.</p>\n</blockquote>\n<p>as far as I can tell, this is an absolute requirement for simulation tests to be hand editable - there has to be a way to have a primitive which fits this description</p>",
+        "id": 363582849,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922076
+    },
+    {
+        "content": "<p>for example, let's say I'm trying to create a simulated version of <code>Http.request : Request -&gt; Task Response HttpErr</code></p>",
+        "id": 363582871,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922111
+    },
+    {
+        "content": "<p>so I'm trying to create a function with that signature which can be used in place of the real one, in order to write a test which does not have effects</p>",
+        "id": 363582919,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922132
+    },
+    {
+        "content": "<p>a fact about HTTP requests is that, given the same <code>Request</code>, the server may return a different <code>Response</code></p>",
+        "id": 363582931,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922154
+    },
+    {
+        "content": "<p>so I cannot make a simulated version of that function using <code>IORef</code> (and <code>Task.succeed</code> etc), precisely because I would have to pass the <code>IORef</code> through - and I can't do that in a simulation; the simulated function has to be the exact same type as the function it's simulating</p>",
+        "id": 363582966,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922203
+    },
+    {
+        "content": "<p>it has to be a drop-in replacement</p>",
+        "id": 363582967,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922208
+    },
+    {
+        "content": "<p>this use case is the main motivation behind <code>Stored</code></p>",
+        "id": 363582972,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922218
+    },
+    {
+        "content": "<p>as far as I can tell, it's not possible to make a simulated version of <code>Http.request : Request -&gt; Task Response HttpErr</code> which doesn't actually run effects without something that has the same characteristic as <code>Stored</code>—namely, that it lets you read from some modular state using only <code>Task</code>, without having to pass that state through as arguments</p>",
+        "id": 363583067,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922297
+    },
+    {
+        "content": "<p>so I feel similarly to <code>Stored</code> to how I felt about abilities: I share the concern that it might be overused, but \"otherwise there is no possible way to do this in the language\" is a very important consideration to balance that against, and the thing we're talking about making possible is being able to simulate effects without actually running the real effect—and I think it's very important that Roc be able to do that!</p>",
+        "id": 363583183,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922394
+    },
+    {
+        "content": "<p>so I'm totally open to other designs that make it possible to create a simulated version of <code>Http.request : Request -&gt; Task Response HttpErr</code> but I think it's very important that we have a way to do that in the language <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 363583223,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922451
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span>...that feels like a very specific use case that we could probably deal with via builtins given task itself is a built-in and we control the testing framework. Doesn't feel like it needs <code>Stored</code>. Also, only allowing <code>Stored</code> for simulating tasks in tests is very different than allowing <code>Stored</code> everywhere.</p>",
+        "id": 363583283,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685922496
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Task.20as.20builtin/near/363583283\">said</a>:</p>\n<blockquote>\n<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span>...that feels like a very specific use case that we could probably deal with via builtins given task itself is a built-in and we control the testing framework.</p>\n</blockquote>\n<p>I couldn't think of a way, but I'm open to suggestions! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 363583297,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922524
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/stream/304641-ideas/topic/Task.20as.20builtin/near/363583283\">said</a>:</p>\n<blockquote>\n<p>Also, only allowing <code>Stored</code> for simulating tasks in tests is very different than allowing <code>Stored</code> everywhere.</p>\n</blockquote>\n<p>sure, although:</p>\n<ul>\n<li>if we have it just for tests, there will inevitably be lots of requests to \"liberate\" it from the test-only restriction (which currently nothing else in the language has), especially given that it would address known pain points like AWS APIs and randomness via <code>Task</code></li>\n<li>I'm not sure exactly how we would enforce that; like one possible answer is that if I run <code>roc test</code> it works, but if I run <code>roc build</code> or <code>roc run</code> I get an error if I'm using <code>Stored</code> in any code path...but then now I can't colocate my simulation tests inside my modules, like normal? That doesn't seem great...</li>\n<li>Making it test-only inevitably seems like it will introduce some learning curve (\"this only works in tests\" is easy to say, but I think the rules would inevitably create edge cases like the previous bullet point, e.g. \"ok normally you can write code in this way, but in this case you can't because...\") - and learning curve is another factor to balance against \"this might be overused\"</li>\n</ul>",
+        "id": 363583503,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922724
+    },
+    {
+        "content": "<p>btw I appreciate the push-back on this! I ended up with this design as a way to address a number of known pain points at once, but that doesn't mean there isn't a better solution out there somewhere...and even if we don't find one, I think exploring further will only lead to a better outcome <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 363583546,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685922790
+    },
+    {
+        "content": "<p>Question on simulation, couldn't the roc effect interpreter just track a state? Have something that has a state and just keeps getting the next task? So when it first sees an <code>Http.request</code> task, it can modify it's internal state to return something different next time it is called? So fundamentally, the task interpreter walks over the task and has a state? Am I missing something here?</p>",
+        "id": 363585578,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685924610
+    },
+    {
+        "content": "<p>Also, really excited to read this when you write it up:</p>\n<blockquote>\n<p>there's another way achieve this with 2-arg <code>Task</code> - but that's the thing I haven't finished writing up yet <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> </p>\n</blockquote>",
+        "id": 363585662,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685924658
+    },
+    {
+        "content": "<p>I agree with the concerns for Stored re. inducing implicit mutability. Another concern I have is that it potentially allows arbitrary modules to read away types you’ve stored away, without your knowledge - for example, suppose there is some library that exposes an opaque “PrivateToken” type that implements Stored (for use in testing) and a debug printing function over PrivateToken. Now, I construct some PrivateToken is some code path, and in a later but disjoint code path, use some library that, without my knowledge, Stored.read’s a PrivateToken. Without limiting the scope of the storage API, or capturing the side effects in the type system, you have no knowledge of this potential vulnerability.</p>",
+        "id": 363585964,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685924890
+    },
+    {
+        "content": "<p>fwiw I think there are a lot of benefits to “Task as a builtin” that are orthogonal to the “Stored API builtin”, and they can be considered independently, even if they play well together. So it may be worth breaking out this discussion into separate streams, since so far most of the discussion has been about Stored.</p>",
+        "id": 363586349,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685925208
+    },
+    {
+        "content": "<p>56 messages were moved here from <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/stream/304641-ideas/topic/Task.20as.20builtin\">#ideas &gt; Task as builtin</a> by <span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span>.</p>",
+        "id": 363587839,
+        "sender_full_name": "Notification Bot",
+        "timestamp": 1685926326
+    },
+    {
+        "content": "<p>done!</p>",
+        "id": 363588045,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685926445
+    },
+    {
+        "content": "<p>I also wonder if the restriction of <code>Stored</code> in tests only is indeed that high. I don't think it would be too onerous to say, here is a module, Stored, that you can use to make testing Tasks easier, but you can only use it in <code>expect</code>s. That's just my opinion of course, I am biased.</p>",
+        "id": 363589219,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685927294
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363585964\">said</a>:</p>\n<blockquote>\n<p>I agree with the concerns for Stored re. inducing implicit mutability.</p>\n</blockquote>\n<p>hm, so I don't quite follow this concern - <code>Task</code> is already a black box that can do anything, including arbitrary reads/writes to/from arbitrary state.</p>\n<p>put another way: it's already possible in Roc to do everything <code>Stored</code> can do, except:</p>\n<ul>\n<li>you have to use a host to implement the tasks (which is why they can't be used in simulation tests)</li>\n<li>you potentially have to serialize to/from <code>List U8</code>, making it slower at runtime than <code>Stored</code> would be</li>\n<li>you can't store functions in the state, because of the serialization requirement</li>\n</ul>\n<p>so I'm not seeing what <code>Stored</code> would change here <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 363590404,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685928163
+    },
+    {
+        "content": "<p>I totally get that making it more convenient to be able to access mutable state, but you have to use <code>Task</code> to get at it, would create an incentive to reach for <code>Task</code> more often - and I definitely see that as a downside!</p>",
+        "id": 363590437,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685928207
+    },
+    {
+        "content": "<p>but I don't understand the concern that this would change any fundamental characteristics or guarantees about <code>Task</code>, if that makes sense</p>",
+        "id": 363590485,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685928242
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363585964\">said</a>:</p>\n<blockquote>\n<p>Another concern I have is that it potentially allows arbitrary modules to read away types you’ve stored away, without your knowledge - for example, suppose there is some library that exposes an opaque “PrivateToken” type that implements Stored (for use in testing) and a debug printing function over PrivateToken. Now, I construct some PrivateToken is some code path, and in a later but disjoint code path, use some library that, without my knowledge, Stored.read’s a PrivateToken. Without limiting the scope of the storage API, or capturing the side effects in the type system, you have no knowledge of this potential vulnerability.</p>\n</blockquote>\n<p>well you can always have <code>PrivateToken</code> wrap the actual <code>Stored</code> opaque type, and then expose <code>PrivateToken</code> but not the <code>Stored</code> opaque type it wraps, and then that can't happen anymore.</p>\n<p>if we're concerned about that, we could always have a compiler warning if you try to expose an opaque type you've given <code>Stored</code>, and suggest that instead you wrap it and expose the wrapper, and if you really want to give people access to the <code>Stored</code> primitives, then implement wrapper functions and expose those</p>",
+        "id": 363590760,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685928442
+    },
+    {
+        "content": "<p>maybe it would be worth it to imagine some scenarios where this could get out of hand? what would be a possible terrible misuse of Stored?</p>",
+        "id": 363590908,
+        "sender_full_name": "Georges Boris",
+        "timestamp": 1685928553
+    },
+    {
+        "content": "<p>I think the basic shape of misuse is where you misuse it in the way that global mutable variables get misused, because that's basically what it wraps <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 363591051,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685928640
+    },
+    {
+        "content": "<p>there are cases where they're genuinely the nicest tool for the job, e.g. <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> I think you ran into a case recently where mutable references were desirable?</p>",
+        "id": 363591089,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685928676
+    },
+    {
+        "content": "<p>I'd expect a common way that <code>Stored</code> would be misused is to avoid threading arguments through functions</p>\n<p>like \"I could pass this new value through all these functions that already return <code>Task</code>, but that would take <em>literally</em> dozens of seconds of my life that I'll never get back, so instead I'll make a new <code>Stored</code> thing, have the first function <code>write</code> to it, have the function at the end of the chain <code>read</code> from it, and that will have been faster to implement, plus then I don't have to look at the extra argument in the type signatures\"</p>\n<p>I'd consider that worse because now it's harder to tell which code paths might have altered that value. When I'm passing it through as an argument, I can see exactly which functions might possibly have altered that value—they're all right there in the call chain. As soon as I put it in <code>Stored</code> to avoid that, now any function which can run a <code>Task</code> can potentially affect its value.</p>\n<p>To me, it would have been better for long-term maintainability to just do the function threading.</p>",
+        "id": 363591201,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685928754
+    },
+    {
+        "content": "<p>My concern is exposing this without any visibility of what may be going on, so getting at needing effects in the type system (a-la a third type parameter as Brendan mentioned). I agree you can do all this today. But to do it today you must opt in since only the platform can provide it; with this proposal on its own, there is no way to see what Storage APIs a library you might want to use accesses.</p>",
+        "id": 363591323,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685928854
+    },
+    {
+        "content": "<blockquote>\n<p>well you can always have PrivateToken wrap the actual Stored opaque type, and then expose PrivateToken but not the Stored opaque type it wraps, and then that can't happen anymore.<br>\nif we're concerned about that, we could always have a compiler warning if you try to expose an opaque type you've given Stored, and suggest that instead you wrap it and expose the wrapper, and if you really want to give people access to the Stored primitives, then implement wrapper functions and expose those</p>\n</blockquote>\n<p>I’m not sure this is enough if the wrapped type exposes a function to show its representation - for example, an “Inspect” implementation that prints the value representation. I agree we could provide warnings, make a convention, and perhaps it’s not something that would happen that often. But I wonder if there is a better design here, that rules it out altogether, or makes opting into potential uses of these behaviors (as a user of these libraries, not an implementor) more explicit.</p>",
+        "id": 363591496,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685929005
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363591496\">said</a>:</p>\n<blockquote>\n<p>I’m not sure this is enough if the wrapped type exposes a function to show its representation - for example, an “Inspect” implementation that prints the value representation.</p>\n</blockquote>\n<p>hm, how would I use that to get access? <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 363591784,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929207
+    },
+    {
+        "content": "<p>like let's say I have <code>PrivateToken := StoredToken</code> and <code>StoredToken</code> has <code>Stored</code> but <code>PrivateToken</code> doesn't</p>",
+        "id": 363591806,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929239
+    },
+    {
+        "content": "<p>and I expose <code>PrivateToken</code> but not <code>StoredToken</code></p>",
+        "id": 363591812,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929242
+    },
+    {
+        "content": "<p>how would the fact that it happens to wrap a <code>Stored</code> type change what anyone outside the module can do with <code>PrivateToken</code>?</p>",
+        "id": 363591842,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929272
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363591323\">said</a>:</p>\n<blockquote>\n<p>My concern is exposing this without any visibility of what may be going on, so getting at needing effects in the type system (a-la a third type parameter as Brendan mentioned).</p>\n</blockquote>\n<p>I see - so I get the concern conceptually, I'm just not seeing any practical impact. <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span> </p>\n<p>like for example, let's say I know \"this <code>Task</code> can do HTTP\" versus \"this <code>Task</code> can do HTTP and also potentially read from/write to a global variable\" - what is an example of a decision that I make differently based on this knowledge?</p>",
+        "id": 363591981,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929394
+    },
+    {
+        "content": "<p>I might be missing something, but kinda seems like non-actionable trivia</p>",
+        "id": 363591998,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929411
+    },
+    {
+        "content": "<p>maybe I misunderstood your initial example, but I guess I don't see the utility of wrapping <code>PrivateToken</code> wrapping <code>StoredToken</code>. When would you used <code>StoredToken</code> then?</p>",
+        "id": 363592019,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685929441
+    },
+    {
+        "content": "<p>only inside the module that defines it</p>",
+        "id": 363592071,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929457
+    },
+    {
+        "content": "<p>what is the utility of that?</p>",
+        "id": 363592079,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685929470
+    },
+    {
+        "content": "<p>well whatever I'd planned to use it for haha <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 363592088,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929498
+    },
+    {
+        "content": "<p>I'm taking it as a given that there's some desire to put <code>Stored</code> on <code>PrivateType</code></p>",
+        "id": 363592112,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929513
+    },
+    {
+        "content": "<p>Well then we have the same concern, right? Because then you can <code>Stored.read</code> the <code>PrivateToken</code></p>",
+        "id": 363592134,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685929538
+    },
+    {
+        "content": "<p>maybe i'm not following</p>",
+        "id": 363592140,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685929543
+    },
+    {
+        "content": "<p>haha I think I should write this out more thoroughly! 1 sec</p>",
+        "id": 363592146,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929554
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363591998\">said</a>:</p>\n<blockquote>\n<p>I might be missing something, but kinda seems like non-actionable trivia</p>\n</blockquote>\n<p>I'm thinking of the following case:</p>\n<ul>\n<li>I construct some private access token, say an AWS access token, at the top level of an HTTP request handler. I use a third party library <code>Aws.roc</code> for this. I store this away for convinience for the lifetime of the request.</li>\n<li>A call library F that exposes some Task that I'd like to execute.</li>\n<li>Library F actually calls <code>Stored.read</code> on the AWS access token because it also imports <code>Aws.roc</code> and the types it exposes. Now library F may be able to read or use my access token, without my explicit concent.</li>\n</ul>",
+        "id": 363592287,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685929646
+    },
+    {
+        "content": "<p>ok great example!</p>",
+        "id": 363592378,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929694
+    },
+    {
+        "content": "<p>clarification question: who defines the private token type, me or <code>Aws.roc</code>?</p>",
+        "id": 363592555,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929862
+    },
+    {
+        "content": "<p>(either works, I'm just not sure which to assume)</p>",
+        "id": 363592576,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685929876
+    },
+    {
+        "content": "<p>I think Aws.roc in this example</p>",
+        "id": 363592586,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685929897
+    },
+    {
+        "content": "<p>ok cool, so in that case there's no extra wrapping necessary. Here's Aws.roc:</p>\n<div class=\"codehilite\" data-code-language=\"Python\"><pre><span></span><code><span class=\"n\">interface</span> <span class=\"n\">Aws</span>\n    <span class=\"n\">exposes</span> <span class=\"p\">[</span><span class=\"n\">SecretKey</span><span class=\"p\">,</span> <span class=\"n\">storeInS3</span><span class=\"p\">]</span>\n    <span class=\"n\">imports</span> <span class=\"p\">[</span><span class=\"n\">Http</span><span class=\"p\">]</span>\n\n<span class=\"n\">SecretKey</span> <span class=\"o\">:=</span> <span class=\"n\">Str</span>\n\n<span class=\"n\">TempToken</span> <span class=\"o\">:=</span> <span class=\"p\">[</span><span class=\"n\">Uninitialized</span><span class=\"p\">,</span> <span class=\"n\">Initialized</span> <span class=\"n\">Str</span><span class=\"p\">]</span>\n    <span class=\"n\">implements</span> <span class=\"n\">Stored</span>\n\n<span class=\"n\">secretKeyFromStr</span><span class=\"p\">:</span> <span class=\"n\">Str</span> <span class=\"o\">-&gt;</span> <span class=\"n\">SecretKey</span>\n<span class=\"n\">secretKeyFromStr</span><span class=\"p\">:</span> <span class=\"o\">=</span> <span class=\"nd\">@SecretKey</span>\n\n<span class=\"n\">storeInS3</span> <span class=\"p\">:</span> <span class=\"n\">SecretKey</span><span class=\"p\">,</span> <span class=\"n\">DataForS3</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Task</span> <span class=\"p\">{}</span> <span class=\"n\">Http</span><span class=\"o\">.</span><span class=\"n\">Err</span>\n<span class=\"n\">storeInS3</span> <span class=\"o\">=</span> \\<span class=\"nd\">@SecretKey</span> <span class=\"n\">secretKey</span><span class=\"p\">,</span> <span class=\"n\">data</span> <span class=\"o\">-&gt;</span>\n    <span class=\"n\">tempToken</span> <span class=\"o\">&lt;-</span> <span class=\"n\">getOrInitTempToken</span> <span class=\"n\">secretKey</span> <span class=\"o\">|&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"k\">await</span>\n\n    <span class=\"c1\"># use the temp token to call S3, since that's what S3 requires</span>\n    <span class=\"c1\"># if the S3 response indicates the temp token was expired,</span>\n    <span class=\"c1\"># run getOrInitTempToken again and re-run the S3 request</span>\n    <span class=\"c1\"># with that new token</span>\n\n<span class=\"c1\"># note: this is not exposed!</span>\n<span class=\"n\">getOrInitTempToken</span> <span class=\"p\">:</span> <span class=\"n\">SecretKey</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Task</span> <span class=\"n\">Str</span> <span class=\"n\">Http</span><span class=\"o\">.</span><span class=\"n\">Err</span>\n<span class=\"n\">getOrInitTempToken</span> <span class=\"o\">=</span> \\<span class=\"nd\">@SecretKey</span> <span class=\"n\">secretKey</span> <span class=\"o\">-&gt;</span>\n    <span class=\"nd\">@TempToken</span> <span class=\"n\">tempToken</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Stored</span><span class=\"o\">.</span><span class=\"n\">read</span>\n\n    <span class=\"n\">when</span> <span class=\"n\">tempToken</span> <span class=\"ow\">is</span>\n        <span class=\"n\">Uninitialized</span> <span class=\"o\">-&gt;</span>\n            <span class=\"c1\"># assume getNewTempToken has been implemented</span>\n            <span class=\"nb\">str</span> <span class=\"o\">&lt;-</span> <span class=\"n\">getNewTempToken</span> <span class=\"n\">secretKey</span> <span class=\"o\">|&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"k\">await</span>\n            <span class=\"p\">{}</span> <span class=\"o\">&lt;-</span> <span class=\"n\">Stored</span><span class=\"o\">.</span><span class=\"n\">write</span> <span class=\"p\">(</span><span class=\"nd\">@TempToken</span> <span class=\"nb\">str</span><span class=\"p\">)</span>\n            <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"n\">succeed</span> <span class=\"nb\">str</span>\n\n        <span class=\"n\">Initialized</span> <span class=\"nb\">str</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"n\">succeed</span> <span class=\"nb\">str</span>\n</code></pre></div>",
+        "id": 363593427,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685930542
+    },
+    {
+        "content": "<p>so the <code>TempToken</code> opaque type is never exposed, but still allows us to present a public-facing <code>storeInS3</code> function that looks like a normal API that doesn't require this stateful temporary token concept that AWS has</p>",
+        "id": 363593479,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685930617
+    },
+    {
+        "content": "<p>in other words, it just asks for the secret key and that's it; users of this API don't even need to know that AWS does all this temporary token stuff</p>",
+        "id": 363593545,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685930646
+    },
+    {
+        "content": "<p>btw of note, this exact use case is in my mind the <a href=\"https://github.com/roc-lang/roc/issues/2\">#2</a> selling point of <code>Stored</code> (<a href=\"https://github.com/roc-lang/roc/issues/1\">#1</a> being simulation tests)</p>",
+        "id": 363593568,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685930669
+    },
+    {
+        "content": "<p>also note that this is a good example where saying \"the host can implement this\" is much worse for security than <code>Stored</code></p>",
+        "id": 363593751,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685930839
+    },
+    {
+        "content": "<p>like yeah a host can offer a key/value store like <code>write : Str, List U8 -&gt; Task {} *</code> and <code>read : Str -&gt; Task (List U8) *</code></p>",
+        "id": 363593836,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685930885
+    },
+    {
+        "content": "<p>but for <code>Aws.roc</code> to use that, it would have to both say \"I need the platform to offer both HTTP as well as a key/value store like this\" and then also it would have to pick a specific <code>Str</code> to use as a key for that</p>",
+        "id": 363593867,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685930923
+    },
+    {
+        "content": "<p>Yeah that example makes sense. I agree you can design an API in this manner and it works around the problem.<br>\nMy concern is, is the current Stored API the pit of success? Like I wonder if there is an alternative here that eliminates the potential to create a less-secure API in libraries like Aws.roc to begin with. In my mind, the first thought in a library designer's mind would be \"let me expose SecretKey, and also an implementation of Stored for it, so users of my library can test with an arbitrary token in their unit tests!\" - and it takes some knowledge of the best practice/security implications of the API/reading examples like the one you've provided to see that there is a better way.<br>\nI wonder if we can make \"the best way\" the default, or more actively push people in a safe direction, rather than leaving it up to convention that things should be defined this way.</p>",
+        "id": 363593901,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685930962
+    },
+    {
+        "content": "<p>at which point the original concern actually does apply: any other library which requires both HTTP as well as that key/value store can very much call the platform's <code>read</code> passing the same string key that AWS uses</p>",
+        "id": 363593902,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685930964
+    },
+    {
+        "content": "<p>so AWS is an example where it can be done safely and ergonomically using <code>Stored</code>, but I literally do not see a way to have it be both safe and ergonomic in current Roc</p>",
+        "id": 363593921,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685930995
+    },
+    {
+        "content": "<p>(and very unfortunately, the insecure way is more ergonomic, which means there would be demand for such a library despite the insecurity)</p>",
+        "id": 363593985,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685931021
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363593901\">said</a>:</p>\n<blockquote>\n<p>I wonder if we can make \"the best way\" the default, or more actively push people in a safe direction, rather than leaving it up to convention that things should be defined this way.</p>\n</blockquote>\n<p>yeah that's a great goal! To be honest, the \"hey don't expose opaque types that have <code>Stored</code>\" warning feels to me like it would accomplish that</p>",
+        "id": 363594035,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685931078
+    },
+    {
+        "content": "<p>I can't really think of a downside to be honest</p>",
+        "id": 363594042,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685931087
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363593921\">said</a>:</p>\n<blockquote>\n<p>so AWS is an example where it can be done safely and ergonomically using <code>Stored</code>, but I literally do not see a way to have it be both safe and ergonomic in current Roc</p>\n<p>(and very unfortunately, the insecure way is more ergonomic, which means there would be demand for such a library despite the insecurity)</p>\n</blockquote>\n<p>just to elaborate on this, I do think it's not the end of the world if Roc doesn't have AWS libraries that are as ergonomic as they are in mainstream languages (but as discussed on other threads, they would really be a <em>lot</em> less ergonomic) but I am genuinely concerned that the degree of painfulness will lead people to reach for insecure solutions that alleviate the user pain at the expense of introducing a vulnerability</p>",
+        "id": 363594190,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685931237
+    },
+    {
+        "content": "<p>so in that sense, if I had to predict, I would guess that in two hypothetical futures which differ only in that one has <code>Stored</code> in Roc (with the warning about exposing types with <code>Stored</code>), I would predict fewer successful security exploits of Roc programs than in the alternate world where everything is the same except there's no <code>Stored</code></p>",
+        "id": 363594307,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685931314
+    },
+    {
+        "content": "<blockquote>\n<p>the \"hey don't expose opaque types that have Stored\" warning feels to me like it would accomplish that</p>\n</blockquote>\n<p>I think that would work if we also introduce the following restrictions:</p>\n<ul>\n<li>you cannot expose an opaque type that contains any Stored type</li>\n<li>you cannot expose functions that reference non-exposed types in them</li>\n</ul>\n<p>and maybe make it an error instead of a warning - that would push developers to only the secure API <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 363594711,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1685931616
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363591089\">said</a>:</p>\n<blockquote>\n<p>there are cases where they're genuinely the nicest tool for the job, e.g. <span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> I think you ran into a case recently where mutable references were desirable?</p>\n</blockquote>\n<p>I don't think <code>Stored</code> really helps my case. Like, yes, I do need something like a refcounted <code>IORef</code>, but whether I do that with a <code>List {rc: Nat, data: MyType }</code> in pure roc. Then just use <code>Nat</code> as my <code>IORef</code> type, or I wrapped that all in stored, it still really is all the exact same logic. Also, currently my code is totally pure with no tasks. So either way, it is adding a stateful wrapper. Either the state is via <code>Stored</code> in <code>Task</code>, or the state is just in my <code>Evaluator</code> type. Really all the same logic and hassle. Both cases, I have to manage a list of manually refcounted data and write code to find an reuse slots.</p>",
+        "id": 363595901,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1685932642
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363594711\">said</a>:</p>\n<blockquote>\n<p>and maybe make it an error instead of a warning - that would push developers to only the secure API <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>\n</blockquote>\n<p>well, sure - I mean, warnings create a nonzero exit code, so they unavoidably block CI <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 363597508,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685933925
+    },
+    {
+        "content": "<p>and neither of them blocks you from running, since that's an explicit goal</p>",
+        "id": 363597535,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685933947
+    },
+    {
+        "content": "<p>so really the only distinction is whether <code>roc dev</code> treats them as blockers to running</p>",
+        "id": 363597552,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685933967
+    },
+    {
+        "content": "<p>and this seems like one that shouldn't block you <code>roc dev</code> from running in the sense that there's nothing broken, you just shouldn't deploy it like this <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 363597667,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685934008
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363594711\">said</a>:</p>\n<blockquote>\n<p>you cannot expose functions that reference non-exposed types in them</p>\n</blockquote>\n<p>just to clarify: you mean functions that reference non-exposed types in <em>their</em> types, yeah?</p>",
+        "id": 363597759,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685934086
+    },
+    {
+        "content": "<p>if so, I totally agree - in general, I think we should give a warning if you expose anything whose type annotation includes a type that isn't exposed</p>",
+        "id": 363597834,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685934124
+    },
+    {
+        "content": "<p>that's always a mistake I think haha</p>",
+        "id": 363597864,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1685934165
+    },
+    {
+        "content": "<p>another potential use of <code>Stored</code> just occurred to me: platform-agnostic caching</p>\n<p>e.g. let's say I want to have a platform-agnostic logging library with different levels you can set at runtime (e.g. through an env var or config file, or maybe even while the program is running). You could implement it to parse an env var on every logging event to see what the current level is, or similarly with reading and parsing a config file, but it would be much faster to have the library cache the log level in (the equivalent of) a global mutable variable so you can access it quickly.</p>\n<p>also the same security concerns would apply (e.g. with <code>Stored</code>, other libraries can't mess with the log level, but with the type of raw <code>Str</code> or <code>List U8</code> key/value store a platform could implement, they totally could), although to be fair there's not much of a security risk to someone maliciously changing the log level...or at least not one I can think of <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 365373496,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1686508228
+    },
+    {
+        "content": "<p>Hmm, but doesn't logging require platform support anyway? Is it logging to file, stdout, stderr, some other service like sending a web request of cached logs.</p>",
+        "id": 365379528,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1686510777
+    },
+    {
+        "content": "<p>So setting the log level doesn't matter if you literally have nothing to log to anyway.</p>",
+        "id": 365379576,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1686510802
+    },
+    {
+        "content": "<p>And if a platform is adding a logging api, I assume that would require some system to setting logging levels. Likely, you would not want a package to set it's own logging level. You would want to be able to configure the logging level for different packages and points in you code from the main app.</p>",
+        "id": 365379784,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1686510883
+    },
+    {
+        "content": "<p>I just thought of a way to offer task simulation without <code>Stored</code>:</p>\n<div class=\"codehilite\" data-code-language=\"Haskell\"><pre><span></span><code><span class=\"kt\">Task</span><span class=\"o\">.</span><span class=\"n\">simulate</span><span class=\"w\"> </span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"kt\">List</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"ow\">-&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"w\"> </span><span class=\"n\">a</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"kt\">SimEnded</span><span class=\"p\">]</span>\n</code></pre></div>\n<p>so each time the task runs, it gives the next element in the list, until the list runs out, at which point it gives the <code>SimEnded</code> error</p>",
+        "id": 372552763,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1688555919
+    },
+    {
+        "content": "<p>(maybe there's a better name for it, since it doesn't strictly have to be used for simulation, but then again I can't think of another use for it!)</p>",
+        "id": 372553024,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1688555979
+    },
+    {
+        "content": "<p>I also separately realized it would be possible to use <code>Stored</code> on opaque types defined in nested scopes, and those couldn't compile to plain global variables.</p>\n<p>In fact, I'm not sure what they could compile to <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 372556599,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1688556728
+    },
+    {
+        "content": "<p>e.g.</p>\n<div class=\"codehilite\" data-code-language=\"Haskell\"><pre><span></span><code><span class=\"nf\">\\</span><span class=\"n\">arg</span><span class=\"w\"> </span><span class=\"ow\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"kt\">Foo</span><span class=\"w\"> </span><span class=\"kt\">:=</span><span class=\"w\"> </span><span class=\"kt\">U8</span><span class=\"w\"> </span><span class=\"n\">implements</span><span class=\"w\"> </span><span class=\"kt\">Stored</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"n\">init</span><span class=\"kt\">:</span><span class=\"w\"> </span><span class=\"mi\">0</span><span class=\"w\"> </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"o\">@</span><span class=\"kt\">Foo</span><span class=\"w\"> </span><span class=\"n\">num</span><span class=\"w\"> </span><span class=\"ow\">&lt;-</span><span class=\"w\"> </span><span class=\"kt\">Stored</span><span class=\"o\">.</span><span class=\"n\">get</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Task</span><span class=\"o\">.</span><span class=\"n\">await</span>\n<span class=\"w\">    </span><span class=\"o\">...</span>\n</code></pre></div>\n<p>what would that compile to?</p>",
+        "id": 372557669,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1688556951
+    },
+    {
+        "content": "<p>I guess one possible answer is that it's the same global mutable variable, which might be surprising but maybe also is fine</p>",
+        "id": 372558164,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1688557036
+    },
+    {
+        "content": "<p>I thought fundamentally stored was going to compile to global mutable variables. That seems like the best way to make it performant and is fundamentally what <code>Stored</code> is.</p>",
+        "id": 372628950,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1688570382
+    },
+    {
+        "content": "<p>Hmm though if roc can be called by multiple threads, it would need to be protected by a mutex or rwlock of some sort.</p>",
+        "id": 372699066,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1688586312
+    },
+    {
+        "content": "<p>Or be thread local</p>",
+        "id": 372699122,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1688586326
+    },
+    {
+        "content": "<p>yeah I think it needs to be protected by a lock</p>",
+        "id": 372699486,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1688586452
+    },
+    {
+        "content": "<p>if it's threadlocal it limits what use cases it can be used for</p>",
+        "id": 372699532,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1688586467
+    },
+    {
+        "content": "<p>also threadlocals require libc-like dependencies, which may not always be available</p>",
+        "id": 372699570,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1688586480
+    },
+    {
+        "content": "<p>also if it's global and protected by a lock, for some cases (e.g. integers) we can theoretically potentially optimize into single instructions like atomic load/store/etc</p>",
+        "id": 372699721,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1688586517
+    },
+    {
+        "content": "<p>thinking about this some more, I think this is actually a subtly error-prone thing to use in the main non-testing use case we've discussed, namely AWS-like APIs</p>",
+        "id": 408253315,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702672597
+    },
+    {
+        "content": "<p>if your entire webserver has exactly one AWS account, then it's fine</p>",
+        "id": 408253338,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702672607
+    },
+    {
+        "content": "<p>however, as soon as you have multiple AWS accounts, or - much, much worse - different threads want to use different request handlers - then suddenly this design becomes a source of errors and possibly also security vulnerabilities</p>",
+        "id": 408253405,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702672649
+    },
+    {
+        "content": "<p>because it's based on one global for the entire type, not one global value <em>per request handler</em> (or for that matter per thread, but the host is free to put different callbacks even within the same request handler on multiple different threads, so it's not like threadlocals would help here)</p>",
+        "id": 408253534,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702672691
+    },
+    {
+        "content": "<p>Is there a link to this proposal somewhere? Ive seen this Stored thingy referenced a few times now and Im curious :)</p>",
+        "id": 408264460,
+        "sender_full_name": "Hannes Nevalainen",
+        "timestamp": 1702678167
+    },
+    {
+        "content": "<p>yes! It's in <a href=\"https://docs.google.com/document/d/1-h9bNNCLuYV2wSvjQA58SsGHOJivH9NHGr4wU_VF5I0/edit?usp=drivesdk\">https://docs.google.com/document/d/1-h9bNNCLuYV2wSvjQA58SsGHOJivH9NHGr4wU_VF5I0/edit?usp=drivesdk</a></p>",
+        "id": 408264725,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702678303
+    },
+    {
+        "content": "<p>relatedly, I had an idea for how to make use cases like AWS SDK more ergonomic without needing <code>Stored</code></p>",
+        "id": 408288738,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702692208
+    },
+    {
+        "content": "<p>the basic idea is to have the AWS SDK package require two more module params along the lines of :</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">get</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"w\"> </span><span class=\"nx\">token</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">NotFound</span><span class=\"p\">]</span><span class=\"w\"> </span><span class=\"nx\">where</span><span class=\"w\"> </span><span class=\"nx\">token</span><span class=\"w\"> </span><span class=\"nx\">implements</span><span class=\"w\"> </span><span class=\"nx\">Decoding</span><span class=\"p\">,</span>\n<span class=\"nv\">set</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">token</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"w\"> </span><span class=\"p\">{}</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"nx\">where</span><span class=\"w\"> </span><span class=\"nx\">token</span><span class=\"w\"> </span><span class=\"nx\">implements</span><span class=\"w\"> </span><span class=\"nx\">Encoding</span><span class=\"p\">,</span>\n</code></pre></div>",
+        "id": 408288947,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702692351
+    },
+    {
+        "content": "<p>and then server platforms can provide a per-request-handler key/value store where both the keys and values are <code>List U8</code>, and the API exposes them in terms of <code>Encoding</code> and <code>Decoding</code></p>",
+        "id": 408289076,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702692431
+    },
+    {
+        "content": "<p>so then as the application author, when importing the AWS SDK package, I give it module params which use this key-value store, but I give it functions that I've prepopulated to use my AWS-specific key</p>",
+        "id": 408289112,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702692468
+    },
+    {
+        "content": "<p>that way, the AWS SDK package gets the storage it needs, but - crucially - other (potentially malicious) packages can't access it at all</p>",
+        "id": 408289189,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702692500
+    },
+    {
+        "content": "<p>and the AWS package can't access storage I'm using for other things either, because I'm only passing it sandboxed functions which know how to access my application's AWS keys in the per-request-handler key/value store</p>",
+        "id": 408289223,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702692544
+    },
+    {
+        "content": "<p>so it's very slightly less ergonomic than <code>Stored</code> in that I have to write these two sandboxed one-liner functions once in my entire code base, and then specify them whenever I import the AWS module, but that's still far more convenient than havnig to thread the AWS temporary token through everywhere</p>",
+        "id": 408289320,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702692606
+    },
+    {
+        "content": "<p>and if I take the ergonomics delta between that and <code>Stored</code>, it's so small I think it would be hard to justify introducing <code>Stored</code> using that as a major motivating factor</p>",
+        "id": 408289373,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702692647
+    },
+    {
+        "content": "<p>I don't quite follow this. I think I'm almost there, but the per-request part has me a bit confused. Is the intent here for a cache that the platform provides to the application as a Task. That <code>token</code> value is going to be the same globally, so if it's set using <code>set</code> then every <code>get</code> will return that same <code>token</code> even across different threads.</p>",
+        "id": 408290845,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1702693813
+    },
+    {
+        "content": "<p>kinda yeah</p>",
+        "id": 408290912,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702693858
+    },
+    {
+        "content": "<p>Without Stored, what would the equivalent in-memory cache look like if I wanted to store session keys and some meta data like userId or user roles?</p>",
+        "id": 408290943,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1702693896
+    },
+    {
+        "content": "<p>If we are using <code>Encoding</code> and <code>Decoding</code> so that we are passing <code>List U8</code> bytes to the platform for safe storage, I assume we are very quickly going to want that compact binary encoding for \"all the things\" so I can store any data and recover it quickly.</p>",
+        "id": 408291058,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1702693984
+    },
+    {
+        "content": "<ul>\n<li>the platform implements it</li>\n<li>the platform has potentially separate concepts of threads and request handlers. For example, one request handler might get put on Thread A, then it needs to go do a network request, and when that network request comes back, Thread A is busy with another request handler, so the host calls the original request handler's callback on Thread B, which is available now. So for maximum throughput, request handlers can end up hopping between threads</li>\n<li>the semantics of the K/V store is that the store wouldn't be tied to a particular thread, but rather to a particular request handler - which is exactly what we want here!</li>\n<li>because <code>Stored</code> would be a builtin, it couldn't possibly know about request handlers and couldn't possibly work this way, even though this is the least error-prone way to do it</li>\n</ul>",
+        "id": 408291095,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702694024
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/408290943\">said</a>:</p>\n<blockquote>\n<p>Without Stored, what would the equivalent in-memory cache look like if I wanted to store session keys and some meta data like userId or user roles?</p>\n</blockquote>\n<p>it would be different in that it wouldn't be per-request-handler, but rather something more global. Kind of a different use case honestly</p>",
+        "id": 408291165,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702694060
+    },
+    {
+        "content": "<p>actually for AWS in particular I can see a lot of applications preferring it to be global. What's cool is that this design works for both use cases, and the library has the same API either way! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 408294077,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702695908
+    },
+    {
+        "content": "<p>Could stored be used for something like <a href=\"https://examples.deno.land/kv\">deno kv</a> or would a more specific platform api be better for that use case?</p>",
+        "id": 408294408,
+        "sender_full_name": "John Murray",
+        "timestamp": 1702696121
+    },
+    {
+        "content": "<p>Should those get and set functions also take a key?</p>",
+        "id": 408321006,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702716637
+    },
+    {
+        "content": "<p>I assumed that was just a specific API for the fictitious AWS package. </p>\n<p>If we are making a (platform independent) package for KV then I assume it would require different API, maybe;</p>\n<div class=\"codehilite\"><pre><span></span><code>get : U64 -&gt; Task value [NotFound] where value implements Decoding,\nset : U64, value -&gt; Task {} * where value implements Encoding,\n</code></pre></div>\n<p>Not sure if the key should just be a U64 or maybe something like <code>where key implements Eq, Ord</code> or something</p>",
+        "id": 408325034,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1702719854
+    },
+    {
+        "content": "<p>yeah exactly</p>",
+        "id": 408334456,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702725589
+    },
+    {
+        "content": "<p>the platform would expose an API with both keys and values but the AWS package wouldn't care what key you're using (which is actively important for security!)</p>",
+        "id": 408334554,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702725642
+    },
+    {
+        "content": "<p>Is it too early to add an effect like this to the platforms? I'd like this for webserver in particular. I can use JSON for now and use it as a cache, assuming thats faster than starting a child process to call into sqlite from command line.</p>",
+        "id": 408334878,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1702725943
+    },
+    {
+        "content": "<p>I think it's fine to add it now! <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 408335421,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702726422
+    },
+    {
+        "content": "<p>I don't think the platform should expose the encoding</p>",
+        "id": 408335431,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702726434
+    },
+    {
+        "content": "<p>I'm not sure about <code>U64</code> keys though, might not be enough for some use cases <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 408335497,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702726474
+    },
+    {
+        "content": "<p>maybe it's fine though?</p>",
+        "id": 408335503,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702726480
+    },
+    {
+        "content": "<p>I guess worth trying (since it's faster than e.g. keys that just implement <code>Encoding</code>) and seeing if it ends up being a problem in practice <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 408335541,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702726509
+    },
+    {
+        "content": "<p>I really like the simplicity of this approach, and it sounds wise to try this before something like <code>Stored</code> that might be harder to take back.</p>",
+        "id": 408337023,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1702727582
+    },
+    {
+        "content": "<p>Other question... Can we do better than encode? Maybe just a box of anything? Though that isn't your safe.... Hmm</p>",
+        "id": 408353227,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702740072
+    },
+    {
+        "content": "<p>Doesn't matter for something that is a string anyway, but feels unnecessarily</p>",
+        "id": 408353251,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702740108
+    },
+    {
+        "content": "<p>It could be safe if you have a <code>Key</code> type with a type variable, couldn’t it?</p>",
+        "id": 408355306,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1702741904
+    },
+    {
+        "content": "<p>but I guess you’d have to guarantee that the same key isn’t used twice with different types</p>",
+        "id": 408355391,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1702741940
+    },
+    {
+        "content": "<p>Are keys global for the whole program or namespaced somehow?</p>",
+        "id": 408355640,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1702742063
+    },
+    {
+        "content": "<p>I understand the platform can namespace per request or whatever makes sense, but you might still have conflicts across modules</p>",
+        "id": 408355841,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1702742236
+    },
+    {
+        "content": "<p>I mean you could do this, but not sure how the key type having value some how fixes any type safety really. Also, it would mean that the key would need to store a dummy value, which is strange. I mean I guess it could be defined like an option and be the nothing case, but still strange</p>\n<div class=\"codehilite\"><pre><span></span><code>get : Key value -&gt; Task (Box value) [NotFound]\nset : Key value, Box value -&gt; Task {} *\n</code></pre></div>",
+        "id": 408356531,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702742626
+    },
+    {
+        "content": "<blockquote>\n<p>I understand the platform can namespace per request or whatever makes sense, but you might still have conflicts across modules</p>\n</blockquote>\n<p>Probably wrap <code>get</code> and <code>set</code> when passing them to a module. That way you could make a wrapping key type. Would require a more complex key type than just an integer.</p>",
+        "id": 408356622,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702742682
+    },
+    {
+        "content": "<p>Yeah, so I’d have a init function that you use like:</p>\n<div class=\"codehilite\"><pre><span></span><code>import pf.State\n\nkey : State.Key (Result Str [Pending])\nkey = State.init “unique key here” (Err Pending)\n</code></pre></div>\n<p>and then you can only get/set using the right type</p>",
+        "id": 408357136,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1702743092
+    },
+    {
+        "content": "<p>But it would break if the same key is used somewhere else with a different type</p>",
+        "id": 408357225,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1702743174
+    },
+    {
+        "content": "<p>It’d be nice to have the platform/language come up with the key using a sequence or something</p>",
+        "id": 408357247,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1702743205
+    },
+    {
+        "content": "<p>I might just be reinventing <code>Stored</code> <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 408359762,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1702745671
+    },
+    {
+        "content": "<p>Using <code>Encode</code>/<code>Decode</code> is probably good enough for this</p>",
+        "id": 408359783,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1702745691
+    },
+    {
+        "content": "<p>I'm a little confused where this ended up, are U64 keys ok? I went with that because thats what we use for Hash and figured you could just hash anything on the platform side before passing to the host. So the Roc to Host interface is just U64 and List U8.</p>",
+        "id": 408364913,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1702750157
+    },
+    {
+        "content": "<p>Yeah I'm confused about how U64 could possibly not be enough, at least on a 64-bit machine.</p>",
+        "id": 408439269,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1702816822
+    },
+    {
+        "content": "<p>I think it could be not enough in a scenario where someone is using arbitrary strings (e.g. domain names) for the keys, but maybe that's just not something that should be supported - like if you want that, store a dictionary in the value under a hardcoded U64 key</p>",
+        "id": 408439709,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702817365
+    },
+    {
+        "content": "<p>Oh I see what you mean.</p>",
+        "id": 408447717,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1702824797
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/363593427\">said</a>:</p>\n<blockquote>\n<p>ok cool, so in that case there's no extra wrapping necessary. Here's Aws.roc:</p>\n<p><div class=\"codehilite\" data-code-language=\"Python\"><pre><span></span><code><span class=\"n\">interface</span> <span class=\"n\">Aws</span>\n    <span class=\"n\">exposes</span> <span class=\"p\">[</span><span class=\"n\">SecretKey</span><span class=\"p\">,</span> <span class=\"n\">storeInS3</span><span class=\"p\">]</span>\n    <span class=\"n\">imports</span> <span class=\"p\">[</span><span class=\"n\">Http</span><span class=\"p\">]</span>\n\n<span class=\"n\">SecretKey</span> <span class=\"o\">:=</span> <span class=\"n\">Str</span>\n\n<span class=\"n\">TempToken</span> <span class=\"o\">:=</span> <span class=\"p\">[</span><span class=\"n\">Uninitialized</span><span class=\"p\">,</span> <span class=\"n\">Initialized</span> <span class=\"n\">Str</span><span class=\"p\">]</span>\n    <span class=\"n\">implements</span> <span class=\"n\">Stored</span>\n\n<span class=\"n\">secretKeyFromStr</span><span class=\"p\">:</span> <span class=\"n\">Str</span> <span class=\"o\">-&gt;</span> <span class=\"n\">SecretKey</span>\n<span class=\"n\">secretKeyFromStr</span><span class=\"p\">:</span> <span class=\"o\">=</span> <span class=\"nd\">@SecretKey</span>\n\n<span class=\"n\">storeInS3</span> <span class=\"p\">:</span> <span class=\"n\">SecretKey</span><span class=\"p\">,</span> <span class=\"n\">DataForS3</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Task</span> <span class=\"p\">{}</span> <span class=\"n\">Http</span><span class=\"o\">.</span><span class=\"n\">Err</span>\n<span class=\"n\">storeInS3</span> <span class=\"o\">=</span> \\<span class=\"nd\">@SecretKey</span> <span class=\"n\">secretKey</span><span class=\"p\">,</span> <span class=\"n\">data</span> <span class=\"o\">-&gt;</span>\n    <span class=\"n\">tempToken</span> <span class=\"o\">&lt;-</span> <span class=\"n\">getOrInitTempToken</span> <span class=\"n\">secretKey</span> <span class=\"o\">|&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"k\">await</span>\n\n    <span class=\"c1\"># use the temp token to call S3, since that's what S3 requires</span>\n    <span class=\"c1\"># if the S3 response indicates the temp token was expired,</span>\n    <span class=\"c1\"># run getOrInitTempToken again and re-run the S3 request</span>\n    <span class=\"c1\"># with that new token</span>\n\n<span class=\"c1\"># note: this is not exposed!</span>\n<span class=\"n\">getOrInitTempToken</span> <span class=\"p\">:</span> <span class=\"n\">SecretKey</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Task</span> <span class=\"n\">Str</span> <span class=\"n\">Http</span><span class=\"o\">.</span><span class=\"n\">Err</span>\n<span class=\"n\">getOrInitTempToken</span> <span class=\"o\">=</span> \\<span class=\"nd\">@SecretKey</span> <span class=\"n\">secretKey</span> <span class=\"o\">-&gt;</span>\n    <span class=\"nd\">@TempToken</span> <span class=\"n\">tempToken</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Stored</span><span class=\"o\">.</span><span class=\"n\">read</span>\n\n    <span class=\"n\">when</span> <span class=\"n\">tempToken</span> <span class=\"ow\">is</span>\n        <span class=\"n\">Uninitialized</span> <span class=\"o\">-&gt;</span>\n            <span class=\"c1\"># assume getNewTempToken has been implemented</span>\n            <span class=\"nb\">str</span> <span class=\"o\">&lt;-</span> <span class=\"n\">getNewTempToken</span> <span class=\"n\">secretKey</span> <span class=\"o\">|&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"k\">await</span>\n            <span class=\"p\">{}</span> <span class=\"o\">&lt;-</span> <span class=\"n\">Stored</span><span class=\"o\">.</span><span class=\"n\">write</span> <span class=\"p\">(</span><span class=\"nd\">@TempToken</span> <span class=\"nb\">str</span><span class=\"p\">)</span>\n            <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"n\">succeed</span> <span class=\"nb\">str</span>\n\n        <span class=\"n\">Initialized</span> <span class=\"nb\">str</span> <span class=\"o\">-&gt;</span> <span class=\"n\">Task</span><span class=\"o\">.</span><span class=\"n\">succeed</span> <span class=\"nb\">str</span>\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>If I understand the AWS example correctly, it would not necessarily use the token fitting the secret key. As I see it, the <code>storeInS3</code> function returns a Task that will use the token that is stored at the time the task is executed. This token must not match the secret key. The implementation could be fixed by storing a Dict from secret key to token.</p>\n<p>At the end, as <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> said, this impurity of using the wrong token is not reflected in the Task type.</p>\n<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> Do you know <a href=\"https://zio.dev\">https://zio.dev</a>? I can't find anything about ZIO here. It's an effect system for Scala and unlike the current Task type has a third type parameter called Environment. If you like to include state in the execution of your ZIO type, you have to specify a <a href=\"https://zio.dev/reference/state-management/zstate\">ZState</a> type in the Environment.</p>\n<p>So essentially ZIO is an example of a 3-arg Task type <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> suggested.</p>",
+        "id": 410989235,
+        "sender_full_name": "Alexander Kiel",
+        "timestamp": 1704277273
+    },
+    {
+        "content": "<p>Same for effect in TypeScript (<a href=\"https://effect.website/\">https://effect.website/</a>)</p>",
+        "id": 410991196,
+        "sender_full_name": "Tobias Steckenborn",
+        "timestamp": 1704278220
+    },
+    {
+        "content": "<p>that example is old - see the thread starting here for the revised idea:</p>\n<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/stream/304641-ideas/topic/.60Stored.60.20ability/near/408288738\">said</a>:</p>\n<blockquote>\n<p>relatedly, I had an idea for how to make use cases like AWS SDK more ergonomic without needing <code>Stored</code></p>\n</blockquote>\n<p>it doesn't need a third argument to <code>Task</code> (which we've had in the past and intentionally decided to remove because it didn't seem to be worth the complexity it introduced) but also doesn't have a concern with token security!</p>",
+        "id": 411357294,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1704456172
+    }
+]

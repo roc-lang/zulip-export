@@ -1,0 +1,182 @@
+[
+    {
+        "content": "<p>Should <code>Str.toU128</code> support <code>e</code>? Roc currently supports this for <code>F32</code> and <code>F64</code>, but not <code>Dec</code> or <code>Int *</code>. This has come up when adding tests for Json decoding of integers, as large numbers can be validly represented using an exponent in Json, but then are not able to be decoded into any Roc type except <code>F64</code>.</p>\n<div class=\"codehilite\"><pre><span></span><code>» Num.toStr 340_000_000_000_000_000_000_000_000_000_000_000_000u128\n\n&quot;340000000000000000000000000000000000000&quot; : Str\n                         # val20\n\n» Str.toU128 &quot;340000000000000000000000000000000000000&quot;\n\nOk 340000000000000000000000000000000000000 : Result U128 [InvalidNumStr]\n                         # val21\n\n» Str.toU128 &quot;34e37&quot;\n\nErr InvalidNumStr : Result U128 [InvalidNumStr]\n                         # val22\n</code></pre></div>",
+        "id": 351981421,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682216199
+    },
+    {
+        "content": "<p><del>Also should we also support <code>E</code> and <code>+</code>, e.g. <code>12e+2</code>,<code>12E+2</code> in as these are currently not supported but commonly used across various programming languages and number formats (XML, Python etc).</del> </p>\n<p><strong>moved to a separate idea thread</strong></p>",
+        "id": 351981431,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682216205
+    },
+    {
+        "content": "<p>And a related question, json numbers technically should only ever be encoded as a double precision float and therefore should be a maximum 21 bytes. However, if we encode a U128 using Roc it could be \"340282366920938463463374607431768211455\" which is 39 bytes long. So should we support a max number of bytes in a json string for Decoding of the max for a double precision float (21), OR the max for a niaive Roc (Num.toStr) of the max U128 (39) bytes?</p>",
+        "id": 351981434,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682216210
+    },
+    {
+        "content": "<p>Shouldn't json decode all types to f64 then convert to the correct type?</p>",
+        "id": 351981967,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682216630
+    },
+    {
+        "content": "<p>Cause the only json native type is f64. Of course you need to check errors when converting from f64 to other types</p>",
+        "id": 351982233,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682216785
+    },
+    {
+        "content": "<p>I'm not sure. My first thought was to collect the bytes that make up a valid json number, and then try to convert to the desired Roc type. What you suggest may be easier and more reliable. Wouldn't that mean there are two conversions, Str -&gt; F64 -&gt; U128 etc</p>",
+        "id": 351982445,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682216925
+    },
+    {
+        "content": "<p>That is fair. I guess it isn't needed, but is <code>7.000</code> a valid U128? In js it is the same thing as <code>7</code>. Idk. Also, i think the cost of f64 to other type will be small compared to parsing bytes</p>",
+        "id": 351982815,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682217157
+    },
+    {
+        "content": "<p>Is this what you mean <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> </p>\n<h2>Current</h2>\n<div class=\"codehilite\"><pre><span></span><code>decodeU16 = Decode.custom \\bytes, @Json {} -&gt;\n    { taken, rest } = takeJsonNumber bytes\n\n    result =\n        taken\n        |&gt; Str.fromUtf8\n        |&gt; Result.try Str.toU16\n        |&gt; Result.mapErr \\_ -&gt; TooShort\n\n    { result, rest }\n</code></pre></div>\n<h2>Proposed</h2>\n<div class=\"codehilite\"><pre><span></span><code>decodeU16 = Decode.custom \\bytes, @Json {} -&gt;\n    { taken, rest } = takeJsonNumber bytes\n\n    result =\n        taken\n        |&gt; Str.fromUtf8\n        |&gt; Result.try Str.toF64\n        |&gt; Result.map Num.round\n        |&gt; Result.map Num.toU16\n        |&gt; Result.mapErr \\_ -&gt; TooShort\n\n    { result, rest }\n</code></pre></div>",
+        "id": 351982912,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682217251
+    },
+    {
+        "content": "<p>I guess one downside, is we can't support anything larger than a F64, but I guess that is a limitation with JSON. A workaround could be to use a Str or something and handle in roc. I think what you have suggested is probably the right way to go</p>",
+        "id": 351983006,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682217337
+    },
+    {
+        "content": "<p>No. I think if you need to round, that would be an error.</p>",
+        "id": 351983011,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682217344
+    },
+    {
+        "content": "<p>Even if I am specifically trying to decode into a U16?</p>",
+        "id": 351983081,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682217389
+    },
+    {
+        "content": "<p>Yeah, cause <code>7.3</code> is not a U16</p>",
+        "id": 351983113,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682217438
+    },
+    {
+        "content": "<p>That should definitely be a decoding failure.</p>",
+        "id": 351983202,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682217465
+    },
+    {
+        "content": "<p>I would think that if an end user specifically needs a big int, they will have to deal with conversions. Store in a string or multiple ints. I don't think the json decoder should automatically deal with it, but i may be wrong. I have not worked a ton with json decoding and specs.</p>",
+        "id": 351983486,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682217648
+    },
+    {
+        "content": "<p>I guess for encoding, this is where it really gets problematic. You don't want encoding a U64 to fail or lose data because it can't fit losslessly in a F64.</p>",
+        "id": 351983535,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682217712
+    },
+    {
+        "content": "<p>This works, is it too hacky? we could make a builtin that checks for fraction part in a float</p>\n<div class=\"codehilite\"><pre><span></span><code>decodeU16 = Decode.custom \\bytes, @Json {} -&gt;\n    { taken, rest } = takeJsonNumber bytes\n\n    result =\n        taken\n        |&gt; Str.fromUtf8\n        |&gt; Result.try Str.toF64\n        |&gt; Result.try hasNoFractionPart\n        |&gt; Result.map Num.round\n        |&gt; Result.map Num.toU16\n        |&gt; Result.mapErr \\_ -&gt; TooShort\n\n    { result, rest }\n\nhasNoFractionPart : F64 -&gt; Result F64 [HasFractionPart]\nhasNoFractionPart = \\a -&gt;\n    fraction = Num.floor((a-Num.toFrac(Num.floor(a/1.0))*1.0)*1000)\n\n    if fraction == 0 then\n        Ok a\n    else\n        Err HasFractionPart\n\nexpect\n    result = hasNoFractionPart 12.0\n\n    Result.isOk result\n\nexpect\n    result = hasNoFractionPart 12.1\n\n    Result.isErr result\n</code></pre></div>",
+        "id": 351985137,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682218893
+    },
+    {
+        "content": "<p>Actually, this has a problem ... we need to use <code>Result.try Num.toU16Checked</code> instead</p>",
+        "id": 351985458,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682219112
+    },
+    {
+        "content": "<p>I don't think you need the round anymore.</p>",
+        "id": 351985490,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682219139
+    },
+    {
+        "content": "<p>That said, as i am thinking about this more especially in the context of encode, i am a lot less sure which approach is better. I think we definitely should look at what other tools do. For example serde_json.</p>",
+        "id": 351985564,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682219180
+    },
+    {
+        "content": "<p>I might just leave this for now, and add some TODO comments for a later deep dive. I'm focussing right now on adding more test coverage and identifying issues like this. Don't want to get too off course here.</p>",
+        "id": 351985991,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682219441
+    },
+    {
+        "content": "<p>Also, i would advise making an idea thread specifically for adding <code>e</code> to parsing with integer types. I feel like this one has been pretty derailed at this point.</p>",
+        "id": 351986437,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682219777
+    },
+    {
+        "content": "<p>Maybe relevant comments from <a href=\"https://github.com/serde-rs/json/issues/846\">a serde_json issue on u128 and i128</a>. Also comments from <a href=\"https://github.com/serde-rs/json/issues/329\">an issue on precision loss and representing as strings</a></p>",
+        "id": 351987266,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682220344
+    },
+    {
+        "content": "<p>They look to lean into how JS defines a number and not explicitly support any large numbers. So you hit issues with anything larger than the max i54. They also do not support u128 and i128 by default.</p>",
+        "id": 351987476,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682220491
+    },
+    {
+        "content": "<p>For Decoding;  it defers to the <code>Str</code> builtins for this, e.g. <code>Str.toI128</code>. It takes the bytes for a valid json string (double precision float-64) and then attempts to convert it to the desired Roc number type. If that fails, then it is a decoding failure. </p>\n<p>The story for Encoding is less compliant with Json right now, we just use <code>Num.toStr</code> which works fine 90% of the time, but will include far too many bytes for valid json if a large number like a U128, Dec, or precise float is used. I'm not sure what our preferred behaviour in these situations should be, we don't have any errors and can't fail when encoding. Would we want to panic in this situation?</p>",
+        "id": 351988323,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1682221123
+    },
+    {
+        "content": "<p>Wait decode gets errors, but not encode? I'm sure we made this decision for a reason, but sounds strange. I'm sure with certain output formats, encoding will definitely have error cases that should get reported.</p>",
+        "id": 351989915,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682222323
+    },
+    {
+        "content": "<p>At least according to Wikipedia, json doesn't really specify anything about number precision: </p>\n<blockquote>\n<p>Numbers in JSON are agnostic with regard to their representation within programming languages. While this allows for numbers of arbitrary precision to be serialized, it may lead to portability issues. For example, since no differentiation is made between integer and floating-point values, some implementations may treat 42, 42.0, and 4.2E+1 as the same number, while others may not. The JSON standard makes no requirements regarding implementation details such as overflow, underflow, loss of precision, rounding, or signed zeros, but it does recommend expecting no more than IEEE 754 binary64 precision for \"good interoperability\". (<a href=\"https://en.wikipedia.org/wiki/JSON\">https://en.wikipedia.org/wiki/JSON</a>)</p>\n</blockquote>",
+        "id": 351993355,
+        "sender_full_name": "Ajai Nelson",
+        "timestamp": 1682224964
+    },
+    {
+        "content": "<blockquote>\n<p>but it does recommend expecting no more than IEEE 754 binary64 precision for \"good interoperability\". </p>\n</blockquote>\n<p>This line is exceptionally important.</p>\n<p>If you encode data in json as an arbitrary precision number, for example: <code>{\"myint\": 9223372036854775807}</code>, that precision will be lost in all browser. <code>myint</code> may claim to be <code>9223372036854775807</code>, but in reality, when it is loaded on the frontend, it will be <code>9223372036854776000</code>. This can be a nasty footgun.</p>\n<p>So even though json does not specify precision, we should take it into account in order to build robust systems. Numbers that are too large should not be encoded as numbers in json. They should be strings or some sort of special large number format.</p>",
+        "id": 352105072,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682272859
+    },
+    {
+        "content": "<p>we should change <code>encode</code> to return a <code>Result</code> so it's allowed to fail based on the value</p>",
+        "id": 352113699,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1682277662
+    },
+    {
+        "content": "<p>because <code>I64</code> can also be too big to represent in <code>F64</code> without precision loss</p>",
+        "id": 352113711,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1682277674
+    },
+    {
+        "content": "<p>With all of this, here is my current thought of something that could work nicely:</p>\n<h5>By default always take <code>F64</code> restrictions into account.</h5>\n<p>When encoding, make sure the value can fit into an f64 without precision loss. If that is the case, encode it. Otherwise, return an error due to loss of precision.</p>\n<p>When decoding, essentially decode to f64, then make sure the value can successfully convert to the correct number type without precision loss. so 7.0 is fine as a u16, but 7.3 is not.</p>\n<p>Note: Dec may make this complicated. We probably should just always encode Dec as a Str. Given precision is very impotant to Dec, we need to be extra careful. We don't want 10.30 dollars to become 10.300000001 dollars or similar.</p>\n<h5>Have parameterization to allow ease of use.</h5>\n<p>Essentially, parameterize json encoding and decoding with a number of options.</p>\n<p>One of those options would be to enable arbitrary precision mode. In that mode, all number types that could lose precision when converting to f64 (maybe all number types in general?) would just be encode as strings.</p>\n<p>Another option could be ignoring precision loss and just converting all numbers to F64 without failure on precision loss.</p>\n<h5>Have a way to enable a specific field to be encoded as a string even though it is a number</h5>\n<p>This is probably not gonna work super nice in Roc, but still will likely be important form some application. The options to support this that I can think of are either to let the user do it manually by converting the type to a String, or adding some sort of opaque wrapper around a type that is the version that encodes as a string. Neither of these sound great, maybe someone else has a better way that we could support this. I think an opaque wrapper is the only way in roc to get a custom encode for a type.</p>\n<p>This is nice in rust for example cause you can do it with an annotation to the field.</p>",
+        "id": 352117133,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1682279892
+    }
+]

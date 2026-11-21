@@ -1,0 +1,320 @@
+[
+    {
+        "content": "<p>I have been toying with the idea of using Roc for developing realtime audio applications - has anyone experimented in this area? If so how successful was it? In its most basic form this could look like using a lib like Portaudio in a platform and using Roc to generate the callback function that gets called with each sample tick. I’m a pretty inexperienced C developer though and I don’t yet fully understand the shape of the function that Roc outputs and the overhead it incudes that could impact performance in a tight audio loop. I’m keen to hear others experiences and share my own too, when the time comes!</p>",
+        "id": 432848408,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1712907609
+    },
+    {
+        "content": "<p>Sounds very doable. I would reach for a zig host, and call into portaudio to write the platform.</p>\n<p>I've written a little about developing a platform <a href=\"https://lukewilliamboswell.github.io/roc-ray-experiment/\">roc-ray-experiment article</a>. There may be something there you could use.</p>",
+        "id": 432849376,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1712907794
+    },
+    {
+        "content": "<p>I've got a few zig platforms we could probably hobble together to get something basic working.</p>",
+        "id": 432849472,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1712907812
+    },
+    {
+        "content": "<p>Fantastic - thanks Luke! I’ll take a look.</p>",
+        "id": 432850004,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1712907921
+    },
+    {
+        "content": "<p>It is's most basic form you could just have the <code>main</code> returned by roc be that callback function. Do you know what types you would like to work with?</p>",
+        "id": 432850020,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1712907925
+    },
+    {
+        "content": "<p>A basic mono signal function (like a distortion lookup table) might be float -&gt; float. I things might get more complicated when they need to use internal buffers to store samples in memory, such as a delay.</p>",
+        "id": 432850842,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1712908315
+    },
+    {
+        "content": "<p>I would probably start with a simple main function that takes a float, does some simple transformation on it and returns the resulting float</p>",
+        "id": 432851224,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1712908453
+    },
+    {
+        "content": "<p>That sounds like a really simple place to start.</p>",
+        "id": 432851402,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1712908530
+    },
+    {
+        "content": "<p>If you need any assistance let us know on zulip. Also <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> will be interested I'm sure.</p>",
+        "id": 432851540,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1712908584
+    },
+    {
+        "content": "<p>So I've implemented this in C and I have successfully managed to pass audio buffers through Roc in realtime. However the <code>roc__mainForHost_1_exposed_generic(&amp;rocOut, &amp;rocIn);</code> function is leaking memory. Does anyone have any clues as to why? Any suggestions appreciated!</p>\n<p>It's also worth noting that the roc_alloc() and roc_dealloc() functions us malloc() and free(), which isn't recommended for sample accuracy. I don't think this is what is causing memory to leak however.</p>\n<p>Here's my host.c:</p>\n<div class=\"codehilite\"><pre><span></span><code>#include &lt;errno.h&gt;\n#include &lt;signal.h&gt;\n#include &lt;stdbool.h&gt;\n#include &lt;stdio.h&gt;\n#include &lt;portaudio.h&gt;\n#include &lt;stdlib.h&gt;\n#include &lt;string.h&gt;\n#include &lt;sys/stat.h&gt;\n#include &lt;unistd.h&gt;\n#include &lt;math.h&gt;\n#include &lt;execinfo.h&gt;\n\n#ifdef _WIN32\n#else\n#include &lt;sys/shm.h&gt;  // shm_open\n#include &lt;sys/mman.h&gt; // for mmap\n#include &lt;signal.h&gt;   // for kill\n#endif\n\n#define SAMPLE_RATE 44100\n#define BLOCK_SIZE 256\n#define NUM_CHANNELS 1 // Adjust for mono (1) or stereo (2)\n\n// Roc memory management\n\nvoid *roc_alloc(size_t size, unsigned int alignment)\n{\n  return malloc(size);\n}\n\nvoid *roc_realloc(void *ptr, size_t new_size, size_t old_size, unsigned int alignment)\n{\n  return realloc(ptr, new_size);\n}\n\nvoid roc_dealloc(void *ptr, unsigned int alignment)\n{\n  free(ptr);\n}\n\nvoid roc_panic(void *ptr, unsigned int alignment)\n{\n  char *msg = (char *)ptr;\n  fprintf(stderr,\n          &quot;Application crashed with message\\n\\n    %s\\n\\nShutting down\\n&quot;, msg);\n  exit(1);\n}\n\n// Roc debugging\nvoid roc_dbg(char *loc, char *msg, char *src)\n{\n  fprintf(stderr, &quot;[%s] %s = %s\\n&quot;, loc, src, msg);\n}\n\nvoid *roc_memset(void *str, int c, size_t n)\n{\n  return memset(str, c, n);\n}\n\nint roc_shm_open(char *name, int oflag, int mode)\n{\n#ifdef _WIN32\n  return 0;\n#else\n  return shm_open(name, oflag, mode);\n#endif\n}\n\nvoid *roc_mmap(void *addr, int length, int prot, int flags, int fd, int offset)\n{\n#ifdef _WIN32\n  return addr;\n#else\n  return mmap(addr, length, prot, flags, fd, offset);\n#endif\n}\n\nint roc_getppid()\n{\n#ifdef _WIN32\n  return 0;\n#else\n  return getppid();\n#endif\n}\n\n// Define the structure of the audio I/O buffer the Roc will work\nstruct RocList\n{\n  float *data;\n  size_t len;\n  size_t capacity;\n};\n\n// Define the Roc function\nextern void roc__mainForHost_1_exposed_generic(struct RocList *outBuffer, struct RocList *inBuffer);\n\n// Audio loop callback function\nstatic int callback(const void *in,\n                    void *out,\n                    unsigned long framesPerBuffer,\n                    const PaStreamCallbackTimeInfo *timeInfo,\n                    PaStreamCallbackFlags statusFlags,\n                    void *userData)\n{\n\n  // Declare Roc&#39;s input and output buffers\n  struct RocList rocIn = {(float *)in, framesPerBuffer, framesPerBuffer};\n  struct RocList rocOut;\n\n  // Call the main Roc function\n  // Possibly leaking memory\n  roc__mainForHost_1_exposed_generic(&amp;rocOut, &amp;rocIn);\n\n  // Copy the output from the Roc buffer to the audio codec output buffer\n  memcpy(out, rocOut.data, framesPerBuffer * sizeof(float));\n\n  return paContinue;\n}\n\nint main()\n{\n  PaError err;\n  PaStream *stream;\n\n  // Initialize PortAudio\n  err = Pa_Initialize();\n  if (err != paNoError)\n  {\n    fprintf(stderr, &quot;PortAudio error: %s\\n&quot;, Pa_GetErrorText(err));\n    return 1;\n  }\n\n  // Open a stream for playback and recording\n  err = Pa_OpenDefaultStream(&amp;stream, NUM_CHANNELS, NUM_CHANNELS, paFloat32, SAMPLE_RATE, BLOCK_SIZE, callback, NULL);\n  if (err != paNoError)\n  {\n    fprintf(stderr, &quot;PortAudio error: %s\\n&quot;, Pa_GetErrorText(err));\n    Pa_Terminate();\n    return 1;\n  }\n\n  // Start, wait for user input, stop, close and terminate PortAudio\n  err = Pa_StartStream(stream);\n  if (err != paNoError)\n  {\n    fprintf(stderr, &quot;PortAudio error: %s\\n&quot;, Pa_GetErrorText(err));\n    Pa_CloseStream(stream);\n    Pa_Terminate();\n    return 1;\n  }\n  printf(&quot;Press any key to stop...\\n&quot;);\n  getchar();\n  err = Pa_StopStream(stream);\n  if (err != paNoError)\n  {\n    fprintf(stderr, &quot;PortAudio error: %s\\n&quot;, Pa_GetErrorText(err));\n  }\n  Pa_CloseStream(stream);\n  Pa_Terminate();\n\n  return 0;\n}\n</code></pre></div>\n<p>platform main.roc:</p>\n<div class=\"codehilite\"><pre><span></span><code>platform &quot;audioPlatform&quot;\n    requires {} { main : List F32 -&gt; List F32 }\n    exposes []\n    packages {}\n    imports []\n    provides [mainForHost]\n\nmainForHost : List F32 -&gt; List F32\nmainForHost = \\inputBuffer -&gt; main inputBuffer\n</code></pre></div>\n<p>and my Roc app:</p>\n<div class=\"codehilite\"><pre><span></span><code>app &quot;audioPlatformTest&quot;\n    packages { pf: &quot;platform/main.roc&quot; }\n    imports []\n    provides [main] to pf\n\nmain : List F32 -&gt; List F32\nmain = \\inputBuffer -&gt;\n\n    # Map an identity function\n    List.map\n        inputBuffer\n        (\\a -&gt;\n\n            a * 0.5\n        )\n</code></pre></div>",
+        "id": 433247014,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713174863
+    },
+    {
+        "content": "<p>Could it be something like Roc is expecting you to free the output RocList?</p>",
+        "id": 433257197,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713178225
+    },
+    {
+        "content": "<p>I'm guessing Roc will free the input RocList.</p>",
+        "id": 433257302,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713178265
+    },
+    {
+        "content": "<p>This is definitely something I have very little confidence in.</p>",
+        "id": 433257349,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713178279
+    },
+    {
+        "content": "<p>Yeah</p>",
+        "id": 433308566,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713191906
+    },
+    {
+        "content": "<p>Need to free the output list</p>",
+        "id": 433308637,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713191919
+    },
+    {
+        "content": "<p>Thanks both - I did try calling ‘free(rocOut.data)’ after the memcpy line in the callback but got a ‘pointer being freed was not allocated’ error</p>",
+        "id": 433364982,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713207777
+    },
+    {
+        "content": "<p>Yeah, roc lists are a tad complicated. Currently only rust and zig have nice libraries for handling them.</p>",
+        "id": 433365499,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713207954
+    },
+    {
+        "content": "<p>As a quick hack, try <code>free(rocOut.data - size_of(size_t))</code></p>",
+        "id": 433365676,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713208000
+    },
+    {
+        "content": "<p>Thanks Brendan - no luck with this either. I'll see if I can address it using a different memory management strategy.</p>",
+        "id": 433409010,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713225051
+    },
+    {
+        "content": "<p>Oh, the input array isn't being initialized in a valid way. That likely also causes issues here.</p>",
+        "id": 433418205,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713230382
+    },
+    {
+        "content": "<p>OK - how so?</p>",
+        "id": 433418579,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713230596
+    },
+    {
+        "content": "<p>I'm on a plane only typing with my phone. Can't to dive into details rn. Sorry.</p>",
+        "id": 433418742,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713230697
+    },
+    {
+        "content": "<p>The issue fundamentally is that it has no refcount so roc will grab random data before the beginning of the array and assume it is the refcount.</p>",
+        "id": 433418838,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713230761
+    },
+    {
+        "content": "<p>Probably what you want to do is pass it in as a seamless slice so that you don't need to copy around any data. I'll share code when I have the chance.</p>",
+        "id": 433418940,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713230799
+    },
+    {
+        "content": "<p>Thank you!</p>",
+        "id": 433420043,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713231459
+    },
+    {
+        "content": "<p>This is an example of passing a seamless slice to roc. By doing so, you retain control of the allocation and must free it. Roc essentially takes it in as read only: <a href=\"https://github.com/bhansconnect/roc-fuzz/blob/20388c307d7328168ebae4bfda2ff99bb10f2bc7/platform/host.cpp#L293-L296\">https://github.com/bhansconnect/roc-fuzz/blob/20388c307d7328168ebae4bfda2ff99bb10f2bc7/platform/host.cpp#L293-L296</a></p>",
+        "id": 433565068,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713285580
+    },
+    {
+        "content": "<p>Avoids needing to create a new allocation, add a refcount, clone the data, and pass that into roc.</p>",
+        "id": 433565324,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713285646
+    },
+    {
+        "content": "<p>As an extra note, if you truly need to avoid all allocations for performance, there are ways to enforce that, but it is more complex. You would need to control that buffer that pa is using and then correctly pass it in uniquely to roc. After that, you would block all allocations reporting an error to make sure that the list is edited in place and never duplicated. Possible, definitely faster, but more wiring to do right. I can help with that if you hit perf issues and find it needed.</p>",
+        "id": 433566814,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713286133
+    },
+    {
+        "content": "<p>Thanks for sharing this - really useful! I've tried applying the seamless slice approach. However the memory leak still persists. Please let me know if I'm applying the seamless slice incorrectly. </p>\n<p>Here's the updated audio callback (including the definitions for RocList etc.) : </p>\n<div class=\"codehilite\"><pre><span></span><code>// Define the structure of the audio I/O buffer the Roc will work\nstruct RocList\n{\n  float *data;\n  size_t len;\n  size_t capacity;\n};\n\nconst size_t SLICE_BIT = ((size_t)1) &lt;&lt; (8 * sizeof(size_t) - 1);\nconst size_t REFCOUNT_MAX = 0;\n\n// Define the Roc function\nextern void roc__mainForHost_1_exposed_generic(struct RocList *outBuffer, struct RocList *inBuffer);\n\n// Audio loop callback function\nstatic int callback(const void *in,\n                    void *out,\n                    unsigned long framesPerBuffer,\n                    const PaStreamCallbackTimeInfo *timeInfo,\n                    PaStreamCallbackFlags statusFlags,\n                    void *userData)\n{\n  size_t rc = REFCOUNT_MAX;\n  size_t slice_bits = (((size_t)&amp;rc) &gt;&gt; 1) | SLICE_BIT;\n\n  // Declare Roc&#39;s input and output buffers\n  struct RocList rocIn = {(float *)in, framesPerBuffer, slice_bits};\n  struct RocList rocOut;\n\n  // Call the main Roc function\n  // Currently leaking memory\n  roc__mainForHost_1_exposed_generic(&amp;rocOut, &amp;rocIn);\n\n  // Copy the output from the Roc buffer to the audio codec output buffer\n  memcpy(out, rocOut.data, framesPerBuffer * sizeof(float));\n\n  return paContinue;\n}\n</code></pre></div>",
+        "id": 433611252,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713303325
+    },
+    {
+        "content": "<p>Logging from <code>roc_alloc()</code>and. <code>roc_dealloc()</code>shows that new memory is being allocated with each call to <code>roc__mainForHost_1_exposed_generic()</code> but not deallocated, hence the leak. I don't want to be dynamically allocating and deallocating memory inside an audio callback anyway so I need to explore another approach I think.</p>",
+        "id": 433614264,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713304710
+    },
+    {
+        "content": "<p>You still have to free <code>rocOut</code> as well.</p>",
+        "id": 433615013,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713305099
+    },
+    {
+        "content": "<p>I have tried that (including your <code>free(rocOut.data - size_of(size_t))</code> suggestion) but it was never allocated via malloc() so I get an error. There may be some other way though that I'm not aware of. Sorry - I'm really hitting the limits of my knowledge of systems-level programming here!</p>",
+        "id": 433641564,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713324347
+    },
+    {
+        "content": "<p>I imagine <code>rocOut.data</code> is allocated by roc using <code>roc_alloc()</code> and so it needs to be freed after the <code>memcpy</code>? I'm not sure, I haven't done any C in many years.</p>",
+        "id": 433647203,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713328194
+    },
+    {
+        "content": "<p>So can you call <code>roc_dealloc(&amp;rocOut, 0);</code> maybe?</p>",
+        "id": 433647332,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713328267
+    },
+    {
+        "content": "<p>I'm currently away on a business trip. When I get back, I'll definitely take a look. If you can put up a repo or gift with the full code, that would be helpful</p>",
+        "id": 433647368,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713328306
+    },
+    {
+        "content": "<p>Should be able to take a look on Thursday or Friday</p>",
+        "id": 433647435,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713328330
+    },
+    {
+        "content": "<p>Thanks Brendan - <a href=\"https://github.com/joseph-salmon/roc-audio-platform-test\">here's the repo</a> if you would like to take a closer look. I really really appreciate your help on this!</p>",
+        "id": 433649198,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713329749
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"515757\">Luke Boswell</span> <a href=\"#narrow/stream/231634-beginners/topic/Roc.20and.20realtime.20audio.20signal.20processing/near/433647332\">said</a>:</p>\n<blockquote>\n<p><code>roc_dealloc(&amp;rocOut, 0);</code></p>\n</blockquote>\n<p>Thanks Luke - yeah I did try that and received one of these: <br>\n<code>main(82727,0x16d78f000) malloc: *** error for object 0x16d78daa0: pointer being freed was not allocated</code></p>",
+        "id": 433649324,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713329867
+    },
+    {
+        "content": "<p>I wanted to test this out, also <a href=\"https://github.com/lukewilliamboswell/test_port_audio\">made a test repository</a>. <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 433662831,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713331156
+    },
+    {
+        "content": "<p>I have only copied your code above, so haven't investigated the leak or anything yet</p>",
+        "id": 433662942,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713331211
+    },
+    {
+        "content": "<p>Would be good to double check that skipping the roc call is free from memory leaks.</p>",
+        "id": 433663039,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713331313
+    },
+    {
+        "content": "<p>Can confirm there is no leak if I comment out <code>roc__mainForHost_1_exposed_generic(&amp;rocOut, &amp;rocIn);</code></p>",
+        "id": 433665767,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713333327
+    },
+    {
+        "content": "<p>Just running Instruments to check things. Took me a little while to figure out that I need to sign the binary before Instruments can target it.</p>",
+        "id": 433665821,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713333362
+    },
+    {
+        "content": "<h2>Not calling roc</h2>\n<p><a href=\"/user_uploads/22008/D5AWVdptjcOrEkcwxPpeALdO/Screenshot-2024-04-17-at-15.57.05.png\">Screenshot-2024-04-17-at-15.57.05.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/D5AWVdptjcOrEkcwxPpeALdO/Screenshot-2024-04-17-at-15.57.05.png\" title=\"Screenshot-2024-04-17-at-15.57.05.png\"><img src=\"/user_uploads/22008/D5AWVdptjcOrEkcwxPpeALdO/Screenshot-2024-04-17-at-15.57.05.png\"></a></div><h2>With the call to roc</h2>\n<p><a href=\"/user_uploads/22008/dpdTSaO16cMC_FQ5K7WilDZU/Screenshot-2024-04-17-at-15.57.59.png\">Screenshot-2024-04-17-at-15.57.59.png</a></p>\n<div class=\"message_inline_image\"><a href=\"/user_uploads/22008/dpdTSaO16cMC_FQ5K7WilDZU/Screenshot-2024-04-17-at-15.57.59.png\" title=\"Screenshot-2024-04-17-at-15.57.59.png\"><img src=\"/user_uploads/22008/dpdTSaO16cMC_FQ5K7WilDZU/Screenshot-2024-04-17-at-15.57.59.png\"></a></div>",
+        "id": 433666003,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713333491
+    },
+    {
+        "content": "<p>Yup! This is pretty much what I'm seeing too. Roc doesn't seem to be deallocating anything?</p>",
+        "id": 433695019,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713340550
+    },
+    {
+        "content": "<p>Solved it</p>",
+        "id": 433700283,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713342215
+    },
+    {
+        "content": "<p><span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 433700294,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713342219
+    },
+    {
+        "content": "<div class=\"codehilite\" data-code-language=\"C\"><pre><span></span><code><span class=\"kt\">void</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"nf\">subtract_from_pointer</span><span class=\"p\">(</span><span class=\"kt\">void</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">ptr</span><span class=\"p\">)</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"kt\">char</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"n\">char_ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">char</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"p\">)</span><span class=\"n\">ptr</span><span class=\"p\">;</span><span class=\"w\">  </span><span class=\"c1\">// Cast to char* to perform byte-wise arithmetic</span>\n<span class=\"w\">    </span><span class=\"n\">char_ptr</span><span class=\"w\"> </span><span class=\"o\">-=</span><span class=\"w\"> </span><span class=\"mh\">0x8</span><span class=\"p\">;</span><span class=\"w\">               </span><span class=\"c1\">// Subtract 8 bytes</span>\n<span class=\"w\">    </span><span class=\"k\">return</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"kt\">void</span><span class=\"w\"> </span><span class=\"o\">*</span><span class=\"p\">)</span><span class=\"n\">char_ptr</span><span class=\"p\">;</span><span class=\"w\">       </span><span class=\"c1\">// Cast back to void* if needed</span>\n<span class=\"p\">}</span>\n\n<span class=\"c1\">// then we can free the pointer</span>\n<span class=\"kt\">void</span><span class=\"o\">*</span><span class=\"w\"> </span><span class=\"n\">ptr</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">subtract_from_pointer</span><span class=\"p\">(</span><span class=\"n\">rocOut</span><span class=\"p\">.</span><span class=\"n\">data</span><span class=\"p\">);</span>\n<span class=\"n\">free</span><span class=\"p\">(</span><span class=\"n\">ptr</span><span class=\"p\">);</span>\n</code></pre></div>",
+        "id": 433700486,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713342284
+    },
+    {
+        "content": "<p><code>rocOut.data</code> actually points 1 byte ahead of where the pointer that is allocated</p>",
+        "id": 433700572,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713342316
+    },
+    {
+        "content": "<p>I'm sure there is a better explanation, but at least now I have a program without the memory leak.</p>",
+        "id": 433700853,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1713342402
+    },
+    {
+        "content": "<p>That's fixed it - amazing! Thanks so much!</p>",
+        "id": 433713568,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713346600
+    },
+    {
+        "content": "<p>Otherwise, I'm thrilled to see how little overhead Roc adds to the audio loop (so far!). It will interesting to see how it performs once I start throwing some more complex computations in there. But for now I have a pure functional app that is processing realtime audio, which feels pretty exciting!</p>",
+        "id": 433714730,
+        "sender_full_name": "Joe Salmon",
+        "timestamp": 1713346993
+    },
+    {
+        "content": "<p>Ah, that's what I missed. It is a void*. So shifting it didn't work.</p>",
+        "id": 433748886,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1713358376
+    }
+]
