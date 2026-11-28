@@ -1,0 +1,50 @@
+[
+    {
+        "content": "<p>I'd like to run <code>(1..=10).sum()</code> but <code>Iter.sum</code> does not exist. I can work around this by writing <code>(1..=10)-&gt;List.from_iter().sum()</code> and this works fine, but it's a pity we have to materialize a <code>List</code> for this. So I wrote the following function:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>sum = |iter| {\n    var $s = 0\n    for value in iter {\n        $s = $s + value\n    }\n    $s\n}\n</code></pre></div>\n<p>It works fine, I can now write <code>(1..=10)-&gt;sum()</code>. However, I'd like to add the type spec for this function, and I just can't. The inferred type is:</p>\n<div class=\"codehilite\"><pre><span></span><code>        a -&gt; b\n          where [\n            a.iter : a -&gt; Iter(item),\n            b.from_numeral : Numeral -&gt; Try(b, [InvalidNumeral(Str)]),\n            b.plus : b, item -&gt; b,\n          ]\n</code></pre></div>\n<p>But when I try to use this type spec, I get an error. Here's a REPL session that shows the error:</p>\n<div class=\"codehilite\"><pre><span></span><code>» sum : a -&gt; b where [\n        a.iter : a -&gt; Iter(item),\n        b.from_numeral : Numeral -&gt; Try(b, [InvalidNumeral(Str)]),\n        b.plus : b, item -&gt; b,\n  ]\n  sum = |iter| {\n        var $s = 0\n        for value in iter {\n                $s = $s + value\n        }\n        $s\n  }\n\nassigned `sum`\n»\n» (1..=10)-&gt;sum()\n\n┌───────────────────┐\n│ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved polymorphic type. ─────────────────────────────────────────────────────────────────────────┐\n└┬──────────────────┘                                                                                                                                          │\n │                                                                                                                                                             │\n │  main = (1..=10)-&gt;sum()                                                                                                                                     │\n │  ‾‾‾‾                                                                                                                                                       │\n └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── repl:14:1 ┘\n\n    Its type is:\n    b\n      where [\n        b.from_numeral : Numeral -&gt; Try(b, [InvalidNumeral(Str)]),\n        b.plus : b, Dec -&gt; b,\n      ]\n    Add an annotation or use this value in a way that fixes its concrete type.\n\n\n┌────────────────┐\n│ MISSING METHOD ├─ This is trying to dispatch a method named from_numeral on an unresolved type variable, but unresolved type variables have no methods. ─────┐\n└┬───────────────┘                                                                                                                                             │\n │                                                                                                                                                             │\n │  main = (1..=10)-&gt;sum()                                                                                                                                     │\n │                   ‾‾‾                                                                                                                                       │\n └───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── repl:14:18 ┘\n\n    Hint: You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a\n    type annotation that narrows its type to something that actually has methods.\n»\n</code></pre></div>\n<p>Should I file a bug?</p>",
+        "id": 613351904,
+        "sender_full_name": "Aurélien Geron",
+        "timestamp": 1785307349
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"341568\">@Jared Ramirez</span></p>",
+        "id": 613415050,
+        "sender_full_name": "Anton",
+        "timestamp": 1785328548
+    },
+    {
+        "content": "<p>oh this is a bug, should be a quick fix</p>",
+        "id": 613422304,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785330714
+    },
+    {
+        "content": "<p>separately, <code>Iter.sum</code> seems reasonable to me <span aria-label=\"thumbs up\" class=\"emoji emoji-1f44d\" role=\"img\" title=\"thumbs up\">:thumbs_up:</span></p>",
+        "id": 613422391,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785330741
+    },
+    {
+        "content": "<p>I had a use case for <code>Iter.sum</code> too in roc-random. I wound up doing it manually with folding but considered going to <code>List</code> so I could use <code>List.sum</code> I figured it would allocate but I was wondering if that’s the kind of thing that would get optimized away, and if so how dependable is that optimization to happen, and lastly is there a way/plan to be able to inspect whether these kind of optimizations are happening? I’m sure it’s a beast of a compilation pipeline, was just curious. <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span>  mentioned adding logging to the host allocator so I’ll try that with both versions of the roc function</p>",
+        "id": 613477399,
+        "sender_full_name": "Austin Clements",
+        "timestamp": 1785345830
+    },
+    {
+        "content": "<blockquote>\n<p>@Luke Boswell mentioned adding logging to the host allocator so I’ll try that with both versions of the roc function</p>\n</blockquote>\n<p>Yes that is a very convenient way to check. You can also look at the llvm IR, instructions from Claude:</p>\n<div class=\"codehilite\"><pre><span></span><code>Quickest way to inspect IR right now: in src/cli/builder.zig around line 617-631, change\n  `.llvm_ir_filename = null,`\n  to point at a path, e.g. .llvm_ir_filename = &quot;/tmp/out.ll&quot;.ptr, (temporarily, for debugging) before the emit_options struct\n  is passed to ZigLLVMTargetMachineEmitToFile at line 633. Rebuild with zig build roc and run your compile — you&#39;ll get a\n  human-readable .ll file alongside the object output.\n</code></pre></div>",
+        "id": 613482570,
+        "sender_full_name": "Anton",
+        "timestamp": 1785347280
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"734214\">@Aurélien Geron</span> this now works, and also <code>Iter.sum</code> is a builtin!</p>",
+        "id": 613501267,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1785353402
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"361169\">Anton</span> <a href=\"#narrow/channel/231634-beginners/topic/Iter.2Esum/near/613482570\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>@Luke Boswell mentioned adding logging to the host allocator so I’ll try that with both versions of the roc function</p>\n</blockquote>\n<p>Yes that is a very convenient way to check. You can also look at the llvm IR, instructions from Claude:</p>\n<p><div class=\"codehilite\"><pre><span></span><code>Quickest way to inspect IR right now: in src/cli/builder.zig around line 617-631, change\n  `.llvm_ir_filename = null,`\n  to point at a path, e.g. .llvm_ir_filename = &quot;/tmp/out.ll&quot;.ptr, (temporarily, for debugging) before the emit_options struct\n  is passed to ZigLLVMTargetMachineEmitToFile at line 633. Rebuild with zig build roc and run your compile — you&#39;ll get a\n  human-readable .ll file alongside the object output.\n</code></pre></div><br>\n</p>\n</blockquote>\n<p>Nice thanks so much I’m gonna try both approaches</p>",
+        "id": 613501386,
+        "sender_full_name": "Austin Clements",
+        "timestamp": 1785353422
+    }
+]

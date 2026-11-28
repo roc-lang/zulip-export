@@ -1,0 +1,170 @@
+[
+    {
+        "content": "<p><em>Thanks to Josh Warner for this idea</em></p>\n<p><strong>Goal.</strong> Propose an approach that evolves Roc's parser to support syntax highlighting for HTML documentation.</p>\n<p><strong>Background.</strong> I have been doing some research into developing a grammar of Roc in <a href=\"https://tree-sitter.github.io/tree-sitter/\">tree-sitter</a> for the use-case of documentation syntax highlighting. A TS grammar also would provide additional benefits, such as folding and support in most text-editors. However, the more I research the more I started to question if this was needed; can we just use the Roc parser instead of maintaining two? </p>\n<p>Roc's indentation rules are subtle, so it may be difficult to build and maintain a tree-sitter parser that works correctly. Keywords are particularly challenging as they are context-sensitive with many subtle cases to handle.</p>\n<p><strong>Proposed Solution.</strong> Emit relevant syntax information as a side stream in the parser. This supports a syntax highlighting use case, and is easy to make optional which eliminates any effect on the production compiler.</p>\n<p><span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span>  has recently embarked on <a href=\"https://github.com/roc-lang/roc/pull/4470\">a campaign</a> to convert the parser to use combinators. His goal is to have <em>one</em> parser (to rule them all) which can be used in multiple contexts with different behaviour as required. The <code>Parser</code> trait currently has a single <a href=\"https://github.com/roc-lang/roc/blob/main/crates/compiler/parse/src/parser.rs#L771\">parse()</a> method. When everything is combinator-based; it will be possible to have a second <code>parse_for_highlight()</code> method which returns alternate data. In this case, it returns a list of syntax relevant locations in the buffer, i.e. <code>Vec&lt;Loc&lt;SyntaxElement&gt;&gt;</code>.</p>\n<p>To do this once the parser is fully converted to combinators; we only need to implement logic in the combinators. We can capture the <code>Loc</code> information for relevant syntax such as; keywords, builtins, constants, literals, strings, comments, operators, and other characters <code>(</code>,<code>:</code> etc. Then when we serialise the text buffer, we can insert <code>&lt;span&gt;</code> and <code>&lt;/span&gt;</code> wherever needed.</p>\n<p>Note that there is a signifcant amount of up front work before we see any externally-visible progress, however, I think this is a worthwhile objective to work towards.</p>",
+        "id": 312249775,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1669405777
+    },
+    {
+        "content": "<p>that sounds great! <span aria-label=\"smiley\" class=\"emoji emoji-1f603\" role=\"img\" title=\"smiley\">:smiley:</span></p>",
+        "id": 312251330,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1669406556
+    },
+    {
+        "content": "<p>Also regarding the use case of highlighting for Github from my research it looks like _Syntax highlighting in GitHub is performed using TextMate-compatible grammars_ whichare based on regex. When a language gets to 200 unique repositories in the wild the team there will support it. Tree-sitter isn't supported in Linguist, so it's mostly a useful alternative for editing support in text editors before the roc editor gets up and running. Just thought I would share here for anyone interested.</p>",
+        "id": 312285620,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1669430287
+    },
+    {
+        "content": "<p>Thanks for the writeup <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> !</p>\n<p>Here's a quick proof-of-concept sketch for how I was thinking about implementing this idea: <a href=\"https://github.com/roc-lang/roc/pull/4608\">https://github.com/roc-lang/roc/pull/4608</a></p>",
+        "id": 312292882,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1669437867
+    },
+    {
+        "content": "<p>There are some key requirements in tree-sitter that we need for the editor's free/legacy editing mode:</p>\n<ul>\n<li>Incremental parsing: start by parsing a file completely, subsequent edits are parsed intelligently so that the whole file does not need to be re-parsed.</li>\n<li>Error recovery: failures in parsing are contained so that the following lines can still be highlighted correctly.</li>\n<li>Fast enough to parse on every keystroke in the editor.</li>\n<li>Preserve all whitespace and newlines.</li>\n<li>Preserve comments.</li>\n</ul>\n<p>So my questions are:</p>\n<ul>\n<li>Can the proposed solution fulfill these requirements?</li>\n<li>Will fulfilling these requirements degrade the experience for the parsing of files for compilation? For example by making it harder to return good error messages or making maintenance noticeably more difficult.</li>\n</ul>",
+        "id": 312309547,
+        "sender_full_name": "Anton",
+        "timestamp": 1669452982
+    },
+    {
+        "content": "<p>Preserving spacing and comments would also be important to the parser a formatter would perhaps need</p>",
+        "id": 312358359,
+        "sender_full_name": "Kevin Gillette",
+        "timestamp": 1669474541
+    },
+    {
+        "content": "<p>Incremental parsing is a very similar transform to what <span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> and I are suggesting for generating tokens for highlighting - we have a third method that all the combinators implement, which caches a map from the observable parts of the <code>State</code> to the parsed return value. For incremental parsing, we just need to invalidate the cached return values that overlap with the edited span and run parsing again. This turns parsing from O(n) in the input length to O(d) in the tree depth.</p>\n<p>We'll also need to make sure the <code>Region</code>s from cached AST results still work. This will require a little finangling, but definitely possible.</p>",
+        "id": 312376985,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1669483517
+    },
+    {
+        "content": "<p>Error recovery is similar - where after an error we need the parser to be able to skip over some number of unrecognized characters and/or close some number of AST nodes until parsing can continue without error. The main thing that requires on top of what we've talked about up until now, is that the AST needs to be able to represent errors at arbitrary levels - something like formalizing the existing <code>MalformedIdent</code> / etc.</p>",
+        "id": 312377393,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1669483767
+    },
+    {
+        "content": "<blockquote>\n<p>Will fulfilling these requirements degrade the experience for the parsing of files for compilation?</p>\n</blockquote>\n<p>No; very few intermediate combinators need to be introduced to support this, so the overhead should be minimal on the compilation path. And even then, my hope is that compiler inlining can completley eliminate that overhead - but it certainly warrants measurement.</p>",
+        "id": 312377685,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1669483911
+    },
+    {
+        "content": "<blockquote>\n<p>Preserve all whitespace</p>\n</blockquote>\n<p>I'm not sure it's actually necessary to do this. If you have a concrete syntax tree that has nodes for each of the paren characters and the identifier in <code>( thingy )</code>, with a <code>Loc</code> for each of them - it's easy to infer from the Loc's that there's whitespace between the parens and the ident. You don't need an extra thing in the tree to tell you that.</p>",
+        "id": 312377960,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1669484074
+    },
+    {
+        "content": "<p>We already preserve (most) newlines/comments in the AST.</p>",
+        "id": 312377980,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1669484094
+    },
+    {
+        "content": "<p>Alright, thanks for addressing my concerns <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span> :)</p>",
+        "id": 312385133,
+        "sender_full_name": "Anton",
+        "timestamp": 1669488596
+    },
+    {
+        "content": "<p>If we're planning on doing major work on the Parser it might be a good time to see if this new Parser AST can be used by the editor.<br>\n<span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> I know we originally planned to use the canonical AST for the editor but if I remember correctly, that one does not contain comments, which we do need for the editor.</p>\n<p>I think the editor's AST would need to consist of <code>NodeId</code>s, instead of having the actual values in the tree. This way a plugin can pass an update for a specific <code>NodeId</code>. With that requirement, we could use <code>NodeId</code>s in the parse AST or we'd need to convert from the <code>NodeId</code>s to the parse AST on every edit.</p>\n<p>I'm not making any formal proposals here, just thinking through some options.</p>",
+        "id": 312466318,
+        "sender_full_name": "Anton",
+        "timestamp": 1669554031
+    },
+    {
+        "content": "<p>FWIW, at some point I want to start code-genning the AST structs/enums.  Probably based on a description in Roc code, because why not? It should be simple to also codegen something that removes all comment/newline information for canonicalization. Similarly, there could be an \"editor-friendly\" variant that also gets codegenned at the same time, with conversion routines.</p>",
+        "id": 312488812,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1669565058
+    },
+    {
+        "content": "<p>Ooh, that sounds interesting :)</p>",
+        "id": 312491141,
+        "sender_full_name": "Anton",
+        "timestamp": 1669566311
+    },
+    {
+        "content": "<p>yeah, we maybe should revisit parser data structures. I saw some talk about using tokens recently as well, which is also interesting</p>",
+        "id": 312492016,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1669566800
+    },
+    {
+        "content": "<p>when we started, we rejected tokens because we'd only ever see compilers that have a separate tokenization step.  It always looked like (because the examples are small) the tokens were materialized. So you would turn the input string into a list of tokens, then parse those tokens</p>",
+        "id": 312492130,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1669566860
+    },
+    {
+        "content": "<p>but it turns out that is not how it should work: the array of tokens should never materialize in memory</p>",
+        "id": 312492156,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1669566886
+    },
+    {
+        "content": "<p>so, maybe tokens are actually preferable, since there is no performance downside (if done well) and might simplify our parsing logic</p>",
+        "id": 312492207,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1669566918
+    },
+    {
+        "content": "<p>also, both for the editor and the compiler, parsing needs to be fast. The data structures we use are a big part of that</p>",
+        "id": 312492254,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1669566955
+    },
+    {
+        "content": "<p>I am writing a blog post (for my company's company blog, if you have comments on it, let me know) <a href=\"https://hackmd.io/@Q66MPiW4T7yNTKOCaEb-Lw/ryfenBCO5\">https://hackmd.io/@Q66MPiW4T7yNTKOCaEb-Lw/ryfenBCO5</a></p>",
+        "id": 312492364,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1669567011
+    },
+    {
+        "content": "<p>where I measure a 12% reduction in memory used in this relatively simple example. I think we could do more of these transforms and achieve more gains. I'd guess  that a reduction in memory usage will translate in reduced processing costs during canonicalization</p>",
+        "id": 312492535,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1669567104
+    },
+    {
+        "content": "<p>FWIW, zig does a full tokenization pass, preserves the tokens in memory, and then runs the parser over that - and the zig parser is _fast_.</p>",
+        "id": 312495064,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1669568615
+    },
+    {
+        "content": "<p>Materializing the tokens in memory in theory opens up opportunities for massively-SIMD-ifying the parser, ala simdjson, except over tokens instead of characters.</p>",
+        "id": 312495235,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1669568695
+    },
+    {
+        "content": "<p>Can I please have some feedback or comments on my <a href=\"https://github.com/roc-lang/roc/pull/5018\">PR#5018</a>. Is this a worthwhile idea to progress with? any assistance would be most appreciated. </p>\n<p>This is a proposal for an interim solution to achieve Roc syntax highlighting in markdown code blocks for our static-site platform, specifically for the use case of the Roc website and tutorial. Longer term options are to have a tree-sitter grammar or to use the Roc compiler to achieve this in a much more reliable way. <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span>  has made a lot of progress recently with the parser and investigated a number of options in this direction which show promising results.</p>\n<p>I apologise for my terrible Rust here; I managed to cobble a quick proof of concept together from some examples online. The basic idea is to find and replace all the text for specific Roc keywords with the equivalent html code, i.e. <code>import </code> becomes <code>&lt;span class=\"kw\"&gt;import &lt;/span&gt;</code>. This is effectively what I have been doing by hand for the examples in our tutorial content.</p>",
+        "id": 327936738,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1676445043
+    },
+    {
+        "content": "<p>This certainly seems like a great starting point - dramatically better than not having syntax highlighting (or doing it by hand)!</p>\n<p>For a more complete approach, I do still want to eventually make the roc parser usable for highlighting. This enables cool things like positional keywords working correctly and eliminates the possibility of regex-based bugs. I have a few irons in the fire here, but nothing that's quite ready yet - and it doesn't seem worthwhile to keep blocking tutorial work on that (or, making it extra painful).</p>\n<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span> - a few things to watch out for:</p>\n<ul>\n<li>You probably want to add a regex for comments and a regex for strings. Trying to get so you can have a # in a string and a string in a comment both work correctly will be complicated - so to a first approximation I wouldn't worry about that.</li>\n<li>You (probably?) don't want to highlight keywords if they occur in comments or strings</li>\n</ul>",
+        "id": 328047938,
+        "sender_full_name": "Joshua Warner",
+        "timestamp": 1676477055
+    },
+    {
+        "content": "<p>Made some excellent progress on this thanks to <span class=\"user-mention\" data-user-id=\"453336\">@Joshua Warner</span>  for adding a lexing-based 'highlight' mode to the parser. Here is a <a href=\"https://github.com/roc-lang/roc/pull/5051\">PR#5051</a> which adds syntax highlighting using <code>roc_parse</code> crate.</p>",
+        "id": 328770236,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1676792797
+    },
+    {
+        "content": "<p>Also I forgot to add the keywords in the example, but it doesn't highlight any keywords in comments etc which is super nice.</p>",
+        "id": 328770404,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1676792978
+    }
+]

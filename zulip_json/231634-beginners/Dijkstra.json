@@ -1,0 +1,134 @@
+[
+    {
+        "content": "<p>I am trying to build a generic dijkstra-shortest-path algorithm in Roc. Here is my current version:</p>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>Node a : a where a implements Eq\nNodeDistance a : { distance : U64, node : Node a }\nGetNeighbors a : Node a -&gt; List (NodeDistance a)\nIsGoal a : Node a -&gt; Bool\n\nshortestPath : Node a, IsGoal a, GetNeighbors a -&gt; Result U64 [NotFound]\nshortestPath = \\start, goal, getNeighbors -&gt;\n    shortestPathHelper [{ distance: 0, node: start }] [] goal getNeighbors\n\n# shortestPathHelper : List (NodeDistance a), List (Node a), IsGoal a, GetNeighbors a -&gt; Result U64 [NotFound]\nshortestPathHelper = \\list, seen, isGoal, getNeighbors -&gt;\n    when list is\n        [] -&gt; Err NotFound\n        [{ distance, node }, .. as rest] -&gt;\n            if isGoal node then\n                Ok distance\n                else\n\n            newSeen = seen |&gt; List.append node\n\n            node\n            |&gt; getNeighbors\n            |&gt; List.dropIf \\neighbor -&gt; List.contains newSeen neighbor.node\n            |&gt; List.map \\nodeDistance -&gt; { nodeDistance &amp; distance: nodeDistance.distance + distance }\n            |&gt; List.walk rest \\acc, neighbor -&gt; updateNodeDistance acc neighbor 0\n            |&gt; List.sortWith \\{ distance: a }, { distance: b } -&gt; Num.compare a b\n            |&gt; shortestPathHelper newSeen isGoal getNeighbors\n\nupdateNodeDistance = \\list, newNodeDistance, index -&gt;\n    when List.get list index is\n        Err OutOfBounds -&gt;\n            List.append list newNodeDistance\n\n        Ok existingNodeDistance if existingNodeDistance.node == newNodeDistance.node -&gt;\n            if newNodeDistance.distance &lt; existingNodeDistance.distance then\n                List.set list index newNodeDistance\n            else\n                list\n\n        _ -&gt;\n            updateNodeDistance list newNodeDistance (index + 1)\n</code></pre></div>\n<p>I can not set the type for <code>shortestPathHelper</code>. </p>\n<p>When I do, I get the following error: </p>\n<div class=\"codehilite\"><pre><span></span><code>This 2nd argument to |&gt; has an unexpected type:\n\n124│              node\n125│              |&gt; getNeighbors\n126│              |&gt; List.dropIf \\neighbor -&gt; List.contains newSeen neighbor.node\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\nThe argument is an anonymous function of type:\n\n    { … } -&gt; Bool\n\nBut |&gt; needs its 2nd argument to be:\n\n    { … } -&gt; Bool\n</code></pre></div>\n<p>I don't understand the error message.</p>\n<p>The inferred type is <code>List { distance : Num a, node : a1 }b, List a1, (a1 -&gt; Bool), (a1 -&gt; List { distance : Num a, node : a1 }b) -&gt; [Err [NotFound], Ok (Num a)] where a1 implements Eq</code></p>\n<p>Also, the code is quite slow. It is used <a href=\"https://github.com/ostcar/aoc2024/blob/4a932c45827ab5dc4f9a9efe51b79c77f6fe24e1/day16.roc\">here</a> and takes around 30 seconds. I tried to use a <code>Set</code> for <code>seen</code>, which made it even slower. I used <code>List.withCapacity</code> for <code>seen</code> and the list of found elements, which also did not help. Do you know, what I could do to improve it?</p>",
+        "id": 490720849,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735080912
+    },
+    {
+        "content": "<p>With types, I bet this doesn't work right: <code>Node a : a where a implements Eq</code></p>",
+        "id": 490722170,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735082303
+    },
+    {
+        "content": "<p>You probably need an explicit <code>where</code> annotation in each function definition</p>",
+        "id": 490722178,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735082316
+    },
+    {
+        "content": "<p>but that is just a guess</p>",
+        "id": 490722183,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735082332
+    },
+    {
+        "content": "<p>This does not help. When I add <code>where a implements Eq</code> to <code>shortestPath</code> and <code>shortestPathHelper</code>, I get the same error.</p>",
+        "id": 490722939,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735083146
+    },
+    {
+        "content": "<p>It seems, that Roc guesses the type of the anonymous function in the <code>List.dropIf</code> line \"wrong\".</p>\n<p>When I define the function as:</p>\n<div class=\"codehilite\"><pre><span></span><code>fn : NodeDistance a -&gt; Bool\nfn = \\{ node: n } -&gt;\n    List.contains newSeen n\n</code></pre></div>\n<p>and change the line to:</p>\n<div class=\"codehilite\"><pre><span></span><code>|&gt; List.dropIf fn\n</code></pre></div>\n<p>then it works (without setting <code>where a implements Eq</code> anywhere except on the <code>Node a</code> definition). </p>\n<p>(An <a href=\"#narrow/channel/304641-ideas/topic/Inline.20type.20annotations\">inline type definition</a> would have made this easier).</p>",
+        "id": 490723525,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735083703
+    },
+    {
+        "content": "<p>Could it be, that Roc has a problem, that the function only uses <code>{node}</code> but it has to work on a list of <code>{node, distance}</code>?</p>",
+        "id": 490723599,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735083778
+    },
+    {
+        "content": "<p>Here is a smaller example:</p>\n<div class=\"codehilite\"><pre><span></span><code>Node a : a where a implements Eq\nfn : List { node : Node a }, a -&gt; Bool\nfn = \\list, someNode -&gt;\n    List.contains list \\{ node } -&gt; node == someNode\n</code></pre></div>\n<p>You can test this by coping this lines to any Roc file and calling <code>roc check</code> on it.</p>",
+        "id": 490724174,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735084414
+    },
+    {
+        "content": "<p>I'll check later if no one else does, but does this type signature work?</p>\n<div class=\"codehilite\"><pre><span></span><code>fn : List { node: Node a }, Node a -&gt; Bool\n</code></pre></div>\n<p>And I guess to be thorough, this one:</p>\n<div class=\"codehilite\"><pre><span></span><code>fn : List { node: a }, a -&gt; Bool where a implements Eq\n</code></pre></div>",
+        "id": 490726778,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735087135
+    },
+    {
+        "content": "<p>Also, I'll definitely take a look at the perf too when I have time. Can you share a full source that I can run for testing perf?</p>",
+        "id": 490726884,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735087241
+    },
+    {
+        "content": "<p>Here is a full example: <a href=\"https://github.com/ostcar/aoc2024/blob/4a932c45827ab5dc4f9a9efe51b79c77f6fe24e1/day16.roc\">https://github.com/ostcar/aoc2024/blob/4a932c45827ab5dc4f9a9efe51b79c77f6fe24e1/day16.roc</a></p>\n<p>I reused it <a href=\"https://github.com/ostcar/aoc2024/blob/main/day18.roc\">here</a>. Here it only takes 19ms on a optimized build. Maybe the other code in the first example made it slow.</p>",
+        "id": 490727064,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735087443
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/231634-beginners/topic/Dijkstra/near/490726778\">said</a>:</p>\n<blockquote>\n<p><code>fn : List { node: a }, a -&gt; Bool where a implements Eq</code></p>\n</blockquote>\n<p>No. both of them do not work. The one without <code>where a impelements Eq</code> complains, that a has to implement Eq.</p>\n<p>The second one gives an interesting error message:</p>\n<div class=\"codehilite\"><pre><span></span><code>This 2nd argument to contains has an unexpected type:\n\n74│      List.contains list \\{ node } -&gt; node == someNode\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\nThe argument is an anonymous function of type:\n\n    { node : a }a -&gt; Bool where a implements Eq\n\nBut contains needs its 2nd argument to be:\n\n    { node : a } where a implements Eq\n</code></pre></div>",
+        "id": 490727332,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735087751
+    },
+    {
+        "content": "<p>Here is the code, that throws the error:</p>\n<div class=\"codehilite\"><pre><span></span><code>fn : List { node : a }, a -&gt; Bool where a implements Eq\nfn = \\list, someNode -&gt;\n    List.contains list \\{ node } -&gt; node == someNode\n</code></pre></div>",
+        "id": 490727435,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735087841
+    },
+    {
+        "content": "<p>I am not seeing the perf issues you mentioned at least not at the same scale. Need to double check on a different machine. Could you send me your exact puzzle input? I'm wondering if your exact input might have a harder solution or something.</p>",
+        "id": 490730793,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735090933
+    },
+    {
+        "content": "<p>Sure<br>\n<a href=\"/user_uploads/22008/bABDSRtjQwNCr0gjHaDyDtDL/day16.input\">day16.input</a></p>",
+        "id": 490731042,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735091192
+    },
+    {
+        "content": "<p>It seems, I forgot to build it with <code>--optimize</code> <span aria-label=\"face with peeking eye\" class=\"emoji emoji-1fae3\" role=\"img\" title=\"face with peeking eye\">:face_with_peeking_eye:</span> </p>\n<p>Without optimize, each part takes around 40 seconds. With optimize it is below 2 seconds. Sorry.</p>",
+        "id": 490731211,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735091378
+    },
+    {
+        "content": "<p>I have no computer science degree. All my knowledge is  self taught. If you would have implemented Dijkstra in Roc, would you have done it similar?</p>",
+        "id": 490731327,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735091483
+    },
+    {
+        "content": "<p>I think you should get a solid gain switching back to a <code>Set</code>, but overall, I think the implementation is good.</p>\n<p>Also, in roc we don't have any sort of priority queue, which would be more standard than sorting the list all the time. Theoretically inserting in sorted order should be more performant that what you have, but our sorting algorithm is really smart and will notice when chunks of data are mostly sorted.</p>",
+        "id": 490731526,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735091691
+    },
+    {
+        "content": "<p>Also, spends more time in allocations and data movement than I would expect, but that may just be due to growing the list and set.</p>",
+        "id": 490731665,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1735091843
+    },
+    {
+        "content": "<p>You are right, with an optimized build, the <code>Set</code> gets much faster. To add an capacity to <code>seen</code> and the <code>list</code>, does not help. Maybe I am doing something wrong and in one place, the list gets copied instead of in place mutated. </p>\n<p>It would be nice to have some sort of debug output to see, when a big value has a refcount higher then one. </p>\n<p>Here are the numbers:</p>\n<div class=\"codehilite\"><pre><span></span><code>List, no capacity: 635 ms\nSet, no capacity: 59 ms\nSet, with capacity: 49 ms\nList with capacity: 956 ms\n</code></pre></div>\n<p>Here is the version with Set and capacity:</p>\n<div class=\"spoiler-block\"><div class=\"spoiler-header\">\n<p>Dijkstra</p>\n</div><div class=\"spoiler-content\" aria-hidden=\"true\">\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>Node a : a where a implements Eq &amp; Hash\nNodeDistance a : { distance : U64, node : Node a }\nGetNeighbors a : Node a -&gt; List (NodeDistance a)\nIsGoal a : Node a -&gt; Bool\n\nshortestPath : Node a, IsGoal a, GetNeighbors a, U64 -&gt; Result U64 [NotFound]\nshortestPath = \\start, goal, getNeighbors, capacity -&gt;\n    List.withCapacity capacity\n    |&gt; List.append { distance: 0, node: start }\n    |&gt; shortestPathHelper (Set.withCapacity capacity) goal getNeighbors\n\n# shortestPathHelper : List (NodeDistance a), Set (Node a), IsGoal a, GetNeighbors a -&gt; Result U64 [NotFound]\nshortestPathHelper = \\list, seen, isGoal, getNeighbors -&gt;\n    when list is\n        [] -&gt; Err NotFound\n        [{ distance, node }, .. as rest] -&gt;\n            if isGoal node then\n                Ok distance\n                else\n\n            newSeen = seen |&gt; Set.insert node\n\n            node\n            |&gt; getNeighbors\n            |&gt; List.dropIf \\neighbor -&gt; Set.contains newSeen neighbor.node\n            |&gt; List.map \\nodeDistance -&gt; { nodeDistance &amp; distance: nodeDistance.distance + distance }\n            |&gt; List.walk rest \\acc, neighbor -&gt; updateNodeDistance acc neighbor 0\n            |&gt; List.sortWith \\{ distance: a }, { distance: b } -&gt; Num.compare a b\n            |&gt; shortestPathHelper newSeen isGoal getNeighbors\n\nupdateNodeDistance = \\list, newNodeDistance, index -&gt;\n    when List.get list index is\n        Err OutOfBounds -&gt;\n            List.append list newNodeDistance\n\n        Ok existingNodeDistance if existingNodeDistance.node == newNodeDistance.node -&gt;\n            if newNodeDistance.distance &lt; existingNodeDistance.distance then\n                List.set list index newNodeDistance\n            else\n                list\n\n        _ -&gt;\n            updateNodeDistance list newNodeDistance (index + 1)\n</code></pre></div>\n</div></div>",
+        "id": 490759571,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735117106
+    },
+    {
+        "content": "<p>Having list with capacity be so much slower is strange</p>",
+        "id": 490773126,
+        "sender_full_name": "Anthony Bullard",
+        "timestamp": 1735128044
+    },
+    {
+        "content": "<p>That's why i guess, that there is a refcount higher than 1. This would lead to coping. And a copy of a list with a bigger capacity takes longer</p>",
+        "id": 490783894,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1735137038
+    }
+]

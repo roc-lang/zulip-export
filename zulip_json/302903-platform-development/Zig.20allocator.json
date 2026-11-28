@@ -1,0 +1,92 @@
+[
+    {
+        "content": "<p>When I learned zig (to write roc platforms) I learned about the different zig-allocators. So I think it is a pity, that the roc-zig-platforms do not use them, and instead use <code>extern fn malloc</code>.</p>\n<p>For my AoC platform, I tried to use the the zig GeneralPurposeAllocatorr: <a href=\"https://github.com/ostcar/aoc2023/blob/f657d50aa2b393b5dc26b49baeb6f740ef405908/platform/host.zig#L30-L50\">https://github.com/ostcar/aoc2023/blob/f657d50aa2b393b5dc26b49baeb6f740ef405908/platform/host.zig#L30-L50</a></p>\n<p>This worked fine, until I had to free memory for Day 16 (my solution for day 16 seems very memory inefficient).</p>\n<p>How would I write <code>roc_dealloc</code> when roc does not call it with a <code>size</code> argument? Must the platform save the size of every allocation? Is there a trick, how to do this? My native solution would be, to use a global hashmap. But this seems inefficient and would need a lock, if the platform runs in parallel.</p>\n<p>Why does <code>roc_realloc</code> has the argument <code>old_size</code>? If it is the responsibility of the platform to save the size, then it could also be used for <code>roc_realloc</code>.</p>\n<p>What about the <code>alignment</code> argument? It is ignored in all examples and it does not seem to be needed. In what situation should the platform use it?</p>",
+        "id": 408428688,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1702806851
+    },
+    {
+        "content": "<blockquote>\n<p>How would I write roc_dealloc when roc does not call it with a size argument?</p>\n</blockquote>\n<p>Yeah the current API is really annoying to use with anything other than C <code>malloc</code> and <code>free</code> as the implementation.<br>\nThe only way I know to deal with it is to slightly expand each allocation so that you can store the size just in front of the allocated bytes. It's definitely a pity that the definition of <code>roc_dealloc</code> forces this. I see this as a design mistake that we haven't fixed. I'm not aware of any strong reason to do it this way.<br>\nIf we added a <code>size</code> argument, we could make some compiler changes to pass it in from compiled Roc. It would also require changes to every platform that currently exists.</p>",
+        "id": 408434460,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1702812051
+    },
+    {
+        "content": "<blockquote>\n<p>Why does roc_realloc has the argument old_size? If it is the responsibility of the platform to save the size, then it could also be used for roc_realloc.</p>\n</blockquote>\n<p>Good point, I have no idea. As far as I can tell this is an old decision and undoing it involves a lot of friction because every single platform would have to be redone. I know there are other changes planned to the platform API (changing Effects into a sort of state machine). If we are making other changes then we'd definitely want to batch them together so that there's only one upgrade to do.</p>",
+        "id": 408434862,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1702812461
+    },
+    {
+        "content": "<blockquote>\n<p>What about the alignment argument? It is ignored in all examples and it does not seem to be needed. In what situation should the platform use it?</p>\n</blockquote>\n<p>Yeah I think in theory every <code>roc_alloc</code> should ensure that the allocated memory has the requested alignment. The compiler is careful to ensure that Roc code supplies the right value. But nobody has written a platform yet that uses this argument. As far as I can tell, this is basically a bug in all our platforms that has been copied and pasted lots of times. But in practice maybe <code>malloc</code> already aligns to 16 bytes or something and we never ask for more alignment than that so everything is OK? That might be different in a custom allocator.</p>",
+        "id": 408435085,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1702812672
+    },
+    {
+        "content": "<p>we should be using aligned_alloc over malloc in examples but aren't <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 408441165,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702818758
+    },
+    {
+        "content": "<p>in C examples at least; in Rust ones we should be using Rust's global allocator, but that requires knowing the size when we dealloc</p>",
+        "id": 408441196,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702818792
+    },
+    {
+        "content": "<p>we want to pass that but currently we can't because seamless slices don't know it</p>",
+        "id": 408441208,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702818808
+    },
+    {
+        "content": "<p>there's a project to change that, but it requires changing how every <code>List</code> and <code>Str</code> are represented in memory - <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> knows more</p>",
+        "id": 408441296,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702818873
+    },
+    {
+        "content": "<blockquote>\n<p>But in practice maybe <code>malloc</code> already aligns to 16 bytes or something and we never ask for more alignment than that so everything is OK? That might be different in a custom allocator.</p>\n</blockquote>\n<p>100% this. That so why roc alignment never matters currently.</p>",
+        "id": 408450849,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702827370
+    },
+    {
+        "content": "<p>As for passing size to dealloc. One simple solution would be to store an extra usize and the heap for every list and string. This is quite wasteful, especially given many allocators already store this information internal (that is why malloc doesn't need the information for example).</p>\n<p>From the last chat Richard and I had about this, we probably want roughly this API:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">fn</span> <span class=\"nf\">roc_alloc</span><span class=\"p\">(</span><span class=\"n\">alignment</span>: <span class=\"kt\">u8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">size</span>: <span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">roc_tracked_sized</span>: <span class=\"kt\">bool</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"o\">*</span><span class=\"n\">void</span><span class=\"p\">;</span>\n\n<span class=\"k\">fn</span> <span class=\"nf\">roc_realloc</span><span class=\"p\">(</span><span class=\"n\">ptr</span>: <span class=\"o\">*</span><span class=\"n\">void</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">alignment</span>: <span class=\"kt\">u8</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">requested_size</span>: <span class=\"kt\">usize</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">old_size</span>: <span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"kt\">usize</span><span class=\"o\">&gt;</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"o\">*</span><span class=\"n\">void</span><span class=\"p\">;</span>\n\n<span class=\"k\">fn</span> <span class=\"nf\">roc_dealloc</span><span class=\"p\">(</span><span class=\"n\">ptr</span>: <span class=\"o\">*</span><span class=\"n\">void</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"n\">size</span>: <span class=\"nb\">Option</span><span class=\"o\">&lt;</span><span class=\"kt\">usize</span><span class=\"o\">&gt;</span><span class=\"p\">);</span>\n</code></pre></div>\n<p>For all types that have a size that roc can determine at compile time (records, tags, etc), roc will pass the size in. For types with a size that we can't determine at compile time (list, str), roc won't pass in a size. Most importantly with this, roc will let the platform know this info. As such, if the platform uses malloc, which already records the size, the platform can just ignore this info. If the platform uses some other for of allocator that needs to know the size, it is the platforms job to store the size somewhere (probably right before the roc allocation) when roc can't know the size at compile time.</p>",
+        "id": 408451595,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702828155
+    },
+    {
+        "content": "<p>This minimizes repeated storage of the allocation size overall.</p>",
+        "id": 408451610,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702828179
+    },
+    {
+        "content": "<p>Otherwise, every single list and string would require and extra usize no matter the allocator due to seamless slices not knowing the original capacity of the allocation.</p>",
+        "id": 408452032,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702828625
+    },
+    {
+        "content": "<p>also note that in a future where Roc supports simd, 16 may not be enough anymore! So malloc happens to always work today, but may stop working in the future</p>",
+        "id": 408480928,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1702847542
+    },
+    {
+        "content": "<p>Very true</p>",
+        "id": 408483093,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1702849835
+    },
+    {
+        "content": "<p>This is wonderfully convenient, I came here to ask exactly this question after hitting this same issue trying to get a custom allocator to work for an embedded rust platform</p>",
+        "id": 409563570,
+        "sender_full_name": "Eli Dowling",
+        "timestamp": 1703242949
+    }
+]

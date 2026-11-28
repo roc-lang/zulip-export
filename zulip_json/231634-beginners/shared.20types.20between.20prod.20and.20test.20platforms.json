@@ -1,0 +1,140 @@
+[
+    {
+        "content": "<p>Hello!</p>\n<p>I have my own platform, that's using the elm architecture</p>\n<div class=\"codehilite\"><pre><span></span><code>application: Application\napplication = {\n    init: init,\n    update: update,\n    view: view,\n}\n</code></pre></div>\n<p>Now, I want to test my application with a different platform that can do snapshot testing. And possibly the fuzzing platform too.</p>\n<p>So, where is the <code>Application</code> type best housed? I guess it would have to be in a separate published package?</p>",
+        "id": 642057115,
+        "sender_full_name": "Erik Karlsson",
+        "timestamp": 1795131235
+    },
+    {
+        "content": "<p>I typically isolate most of my logic into modules (or groups of modules under a package) and then I can have multiple application roots use those same modules. So one application root might be using one platform, and another (sitting next to it or in a test/ directory) might be importing those same modules but with another platform. </p>\n<p>This is how I structure things so I can use <code>roc-fuzz</code></p>",
+        "id": 642063360,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795133602
+    },
+    {
+        "content": "<p>I see, so for the <code>Effect</code> type from the platform, I could create a separate application-specific effect type, and then map that to the platform effect in main.roc?</p>",
+        "id": 642065200,
+        "sender_full_name": "Erik Karlsson",
+        "timestamp": 1795134090
+    },
+    {
+        "content": "<p>What is an application-specific Effect type?</p>",
+        "id": 642065996,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795134376
+    },
+    {
+        "content": "<p>I would assume the platform specifies ahead of time what all the available effects are, and the application can use only those.</p>",
+        "id": 642066107,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795134423
+    },
+    {
+        "content": "<p>Exactly, so the platform exposes an Effect type with all the effects. But I can't use that type in the code I want to fuzz.</p>\n<p>So in order to do that, I would create a new type, <code>ApplicationEffect</code>, that's not bound to the platform, and then in my platform-specific main.roc, I would map that</p>\n<div class=\"codehilite\"><pre><span></span><code>toPlatformEffect : ApplicationEffect -&gt; Effect\n</code></pre></div>\n<p>Or something like that</p>",
+        "id": 642067474,
+        "sender_full_name": "Erik Karlsson",
+        "timestamp": 1795134923
+    },
+    {
+        "content": "<p>You can do that, it should work ok. </p>\n<p>I know there are some designs Richard has discussed for simulating effects in pure Roc using <code>expect</code> but I think that is deferred until post-0.1</p>",
+        "id": 642067863,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795135080
+    },
+    {
+        "content": "<p>You can also have your application code or modules take the relevant effects it requires as an argument, use a <code>where</code> clause to constrain what that is. Then your tests can pass in a dummy implementation, and the real app passes in the platform's effects.</p>",
+        "id": 642068042,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795135139
+    },
+    {
+        "content": "<p>In a lot of my platforms, I've been experimenting with a builtin test harness that the host implements and drives the app transparently to simulate effects. I define a custom or simple grammar for test \"specs\" and the platform host can pick that up and drive the application. The app doesn't know it is being tested and the effects aren't real etc. I can have thousands of e2e behaviour tests driven very fast this way.</p>",
+        "id": 642068813,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795135379
+    },
+    {
+        "content": "<p>So it's not a Roc language level design, but it's been working really nicely.</p>",
+        "id": 642068887,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795135414
+    },
+    {
+        "content": "<p>Here is a spec example from <code>roc-signals</code> -- I guess it's similar conceptually to a playwright style behavior test but built into the platform host. </p>\n<p><a href=\"https://github.com/lukewilliamboswell/roc-signals/blob/main/examples/data-grid/specs/filtering.scm\">https://github.com/lukewilliamboswell/roc-signals/blob/main/examples/data-grid/specs/filtering.scm</a></p>",
+        "id": 642069107,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795135501
+    },
+    {
+        "content": "<p>So my general approach is </p>\n<ul>\n<li>pure Roc code -&gt; <code>roc-fuzz</code> for asserting properties and invariants</li>\n<li>e2e behaviour -&gt; platform host test harness through specs</li>\n</ul>\n<p>Both of these also provide information about allocations so you can write tests that assert things like this algorithm makes no allocations, or the allocations are flat over time, or the allocations scale linearly with the input etc</p>",
+        "id": 642069640,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795135688
+    },
+    {
+        "content": "<p>Oh, interesting, so you're building the testing framework into the production platform. I guess that makes sense in a way, because the type of platform might dictate what kind of e2e tests are suitable.</p>",
+        "id": 642070738,
+        "sender_full_name": "Erik Karlsson",
+        "timestamp": 1795136084
+    },
+    {
+        "content": "<p>So, how are you triggering the tests vs the production build and run?</p>",
+        "id": 642070902,
+        "sender_full_name": "Erik Karlsson",
+        "timestamp": 1795136151
+    },
+    {
+        "content": "<p>Yeah, the test harness across my different platforms looks very different based on the domain</p>",
+        "id": 642070908,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795136153
+    },
+    {
+        "content": "<p>Depends on the platform, in <code>roc-signals</code> if you build an app using <code>--target=wasm32</code> you get a WASM module; if you build using <code>roc build --target=x64musl</code> you get a native test harness that accepts test spec files as a cli argument.</p>",
+        "id": 642071134,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795136248
+    },
+    {
+        "content": "<p>In <code>roc-gui</code> its a little different, we reserve and intercept cli flags for the host.  </p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>roc<span class=\"w\"> </span>build<span class=\"w\"> </span>my-app.roc\n\n./my-app<span class=\"w\"> </span>--host-run-spec<span class=\"w\"> </span>specs/greeting.scm\n</code></pre></div>",
+        "id": 642071378,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795136339
+    },
+    {
+        "content": "<p>You can either have that be windowless such as in a CI environment without graphics drivers, or get a full-blown script driving an app.</p>",
+        "id": 642071524,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795136395
+    },
+    {
+        "content": "<p>I've even included \"screenshot\" functionality into the specs which closes the loop so an AI Agent can write throwaway specs to exercise and drive a GUI app and take screen captures of various UI elements all built in. It's so much more efficient and safer than giving access to random tools on my system.</p>",
+        "id": 642072302,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795136496
+    },
+    {
+        "content": "<p>Both of those solutions seem a bit hacky to me, you're including the test harness in your production binary.</p>\n<p>But doesn't seem to bad at this stage, I'll try going with the second option, since my test and production will share the same platform so I can't separate them at build time :)</p>",
+        "id": 642072809,
+        "sender_full_name": "Erik Karlsson",
+        "timestamp": 1795136626
+    },
+    {
+        "content": "<blockquote>\n<p>you're including the test harness in your production binary.</p>\n</blockquote>\n<p>I am -- but there is nothing stopping us from having a drop in replacement. We could switch the URL and have a \"production build host\" or a \"development build host\" etc. I've got it that way for convenience, the jury is out if that's a good idea. The additional cost in terms of code size of shipping the test infrastructure alongside the app seems to be almost nothing. As far as I can tell it doesn't increase or degrade the security boundary at all.</p>",
+        "id": 642073446,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1795136765
+    },
+    {
+        "content": "<p>Sounds good!</p>",
+        "id": 642073790,
+        "sender_full_name": "Erik Karlsson",
+        "timestamp": 1795136831
+    },
+    {
+        "content": "<p>I'd like to have my tests written in Roc too though. Maybe I can provide a list of test specs to the platform, and let the platform run them</p>",
+        "id": 642074964,
+        "sender_full_name": "Erik Karlsson",
+        "timestamp": 1795137061
+    }
+]

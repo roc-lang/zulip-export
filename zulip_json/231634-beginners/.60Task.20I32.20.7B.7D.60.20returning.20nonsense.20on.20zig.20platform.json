@@ -1,0 +1,176 @@
+[
+    {
+        "content": "<p>I'm working in a Zig platform and I'm having an issue where a hosted function that returns <code>Task I32 {}</code> is returning a nonsense value. I've got a barebones repro up at <a href=\"https://github.com/jared-cone/roc-zig\">https://github.com/jared-cone/roc-zig</a> (run <code>build.sh</code>)</p>\n<p>The hosted function: <code>test : {} -&gt; Task i32 {}</code><br>\nThe zig function:</p>\n<div class=\"codehilite\"><pre><span></span><code>const RocResultI32Void = RocResult(i32, void);\n\nexport fn roc_fx_test() callconv(.C) RocResultI32Void {\n    var result: i32 = 500;\n    return RocResultI32Void.ok(result);\n}\n</code></pre></div>\n<p>The app:</p>\n<div class=\"codehilite\"><pre><span></span><code>main : Task {} {}\nmain =\n_ = Stdout.line! &quot;Getting result...&quot;\nresult = Native.test! {}\n_ = Stdout.line! &quot;Result=$(Num.toStr result)&quot;\n_ = Stdout.line! &quot;Done&quot;\nTask.ok {}\n</code></pre></div>\n<p>and the output:</p>\n<div class=\"codehilite\"><pre><span></span><code>Launching app...\nGetting result...\nResult=139642271695348\nDone\n</code></pre></div>\n<p>My only guess is something not right with the zig RocResult? Here's the implementation:</p>\n<div class=\"codehilite\"><pre><span></span><code>const RocResultTag = enum(u8) {\n    RocErr = 0,\n    RocOk = 1,\n};\n\nfn RocResultPayload(comptime T: type, comptime E: type) type {\n    return extern union {\n        ok: T,\n        err: E,\n    };\n}\n\npub fn RocResult(comptime T: type, comptime E: type) type {\n    return extern struct {\n        payload: RocResultPayload(T, E),\n        tag: RocResultTag,\n\n        pub fn ok(value: T) @This() {\n            return .{ .payload = .{ .ok = value }, .tag = .RocOk };\n        }\n\n        pub fn err(value: E) @This() {\n            return .{ .payload = .{ .err = value }, .tag = .RocErr };\n        }\n    };\n}\n</code></pre></div>",
+        "id": 475108621,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728228997
+    },
+    {
+        "content": "<p><code>RocResultI32Void</code> is probably just <code>I32</code></p>",
+        "id": 475109476,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728229796
+    },
+    {
+        "content": "<p>But let me dump the llvm and double check</p>",
+        "id": 475109533,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728229829
+    },
+    {
+        "content": "<p>Or actually, that wouldn't make sense cause <code>Err {}</code> can be initialized and must be representable.</p>",
+        "id": 475109559,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728229853
+    },
+    {
+        "content": "<p>Oh, I see the bug.</p>",
+        "id": 475109757,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728230021
+    },
+    {
+        "content": "<p><code>I32</code> in roc, not <code>i32</code>. <code>i32</code> is a type variable. In this case, it is getting initialized to the default number type... <code>I64</code>.</p>",
+        "id": 475109816,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728230048
+    },
+    {
+        "content": "<p>ooooh sneaky sneaky, good eye. That's working now!</p>",
+        "id": 475110746,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728230972
+    },
+    {
+        "content": "<p>I get those i32's mixed up switching between roc and zig and rust</p>",
+        "id": 475110758,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728230999
+    },
+    {
+        "content": "<p>same</p>",
+        "id": 475111669,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728231959
+    },
+    {
+        "content": "<p>then I go to c++ and cry when I need to write <code>uint64_t</code></p>",
+        "id": 475111720,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728231980
+    },
+    {
+        "content": "<p>K so that may have been a red herring, it didn't fix the issue I was seeing in my non-test zig platform. I've added some more debugging to the test platform, and what I'm seeing is Roc thinks a task is failing (when it shouldn't be able to fail), unless I execute another task before it?</p>\n<p>When everything is working:</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    _ = Native.printNum! 1\n    result = Native.returnI32! 2\n    _ = Native.printNum! result\n    _ = Native.printNum! 3\n    Task.ok {}\n</code></pre></div>\n<p>the output:</p>\n<div class=\"codehilite\"><pre><span></span><code>(host) Launching app...\nNumber=1\nNumber=2\nNumber=3\n(host) Exiting app... code=0\n</code></pre></div>\n<p>However if you comment out that first line (<code>_ = Native.printNum! 1</code>):</p>\n<div class=\"codehilite\"><pre><span></span><code>(host) Launching app...\n(host) Exiting app... code=1\n</code></pre></div>\n<p>That <code>code=1</code> means main is returning a failed task.</p>\n<p>So it's like... a task that returns a value will fail, unless a task that returns nothing is executed first?</p>",
+        "id": 475118651,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728235713
+    },
+    {
+        "content": "<p>This repro now is hit with your mini platform?</p>",
+        "id": 475130897,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728242211
+    },
+    {
+        "content": "<p>Yes</p>",
+        "id": 475135994,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728244960
+    },
+    {
+        "content": "<p>Should be latest on that GitHub link</p>",
+        "id": 475136008,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728244973
+    },
+    {
+        "content": "<p>Wait... isn't this a typo then? <code>Task i32 {}</code></p>",
+        "id": 475144815,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1728249696
+    },
+    {
+        "content": "<p>It should be <code>Task I32 {}</code> .. and then the correct <code>i32</code> would be generated?</p>",
+        "id": 475144926,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1728249721
+    },
+    {
+        "content": "<p>The latest has capital <code>I32</code>. Turns out the lowercase <code>i32</code> is why the barebones test platform was printing garbage, but my other platform exiting unexpectedly is some other issue, which I was then able to repro in the barebones test platform even after changing to <code>I32</code></p>",
+        "id": 475147174,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728250559
+    },
+    {
+        "content": "<p>I think maybe zig and roc disagree on how large the payload for RocResult should be. I can trick roc into not returning an error by changing the zig function to return a RocResult of i64, and a payload of -1 (all 1's so roc reads the result tag as Ok):<br>\nzig:</p>\n<div class=\"codehilite\"><pre><span></span><code>const RocResultTest = RocResult(i64, void);\n\nexport fn roc_fx_returnI32(_: i32) callconv(.C) RocResultTest {\n    return RocResultTest.ok(-1);\n}\n</code></pre></div>\n<p>roc:</p>\n<div class=\"codehilite\"><pre><span></span><code>main =\n    # _ = Native.printNum! 1\n    result = Native.returnI32! 2\n    _ = Native.printNum! result\n    _ = Native.printNum! 3\n    Task.ok {}\n</code></pre></div>\n<p>output:</p>\n<div class=\"codehilite\"><pre><span></span><code>(host) Launching app...\nNumber=-1\nNumber=3\n(host) Exiting app... code=0\n</code></pre></div>",
+        "id": 475148260,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728251457
+    },
+    {
+        "content": "<p><code>RocResult</code> in zig is using <code>extern union</code> and <code>extern struct</code> which is supposed to ensure C memory layout</p>",
+        "id": 475148423,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728251596
+    },
+    {
+        "content": "<p>Apparently extern structs in zig don't zero the memory. Checking if that's the issue...</p>",
+        "id": 475148886,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728251973
+    },
+    {
+        "content": "<p>nope not that</p>",
+        "id": 475149729,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728252710
+    },
+    {
+        "content": "<p>I'm pretty sure this is <a class=\"stream-topic\" data-stream-id=\"395097\" href=\"/#narrow/stream/395097-compiler-development/topic/tags.20and.20c.20abi\">#compiler development &gt; tags and c abi</a></p>",
+        "id": 475153019,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728253922
+    },
+    {
+        "content": "<p>Essentially, we have a bug in  our c abi handling</p>",
+        "id": 475153102,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728253945
+    },
+    {
+        "content": "<p>Let me properly file that issue</p>",
+        "id": 475153393,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728254065
+    },
+    {
+        "content": "<p>ah yes that'l do it</p>",
+        "id": 475153401,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728254077
+    },
+    {
+        "content": "<p>Changing <code>RocResultI32Void</code> to <code>RocResult(i64, void)</code> just on the zig side should fix the issue</p>",
+        "id": 475153897,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728254436
+    },
+    {
+        "content": "<p>Cause roc is failing to pack into a single register it ends up passing the value in the wrong layout.</p>",
+        "id": 475153917,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728254455
+    },
+    {
+        "content": "<p>General tracking issue: <a href=\"https://github.com/roc-lang/roc/issues/7142\">https://github.com/roc-lang/roc/issues/7142</a></p>",
+        "id": 475153950,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1728254489
+    },
+    {
+        "content": "<p>yep that works!</p>",
+        "id": 475154196,
+        "sender_full_name": "Jared Cone",
+        "timestamp": 1728254666
+    }
+]

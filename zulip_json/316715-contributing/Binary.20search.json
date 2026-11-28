@@ -1,0 +1,50 @@
+[
+    {
+        "content": "<p>I just created <a href=\"https://github.com/roc-lang/roc/pull/13089\">this draft PR</a> to introduce <code>partition_point</code> function on <code>List</code>, which is basically the binary search algorithm. I need some help with the following:</p>\n<ol>\n<li><strong>Design</strong>: Does this function belong in <code>List</code>? The other languages  I know come with <code>partition_point</code> and <code>binary_search</code>. I really dislike the latter. In C++ it returns boolean, in Rust a Result of the index (any of the valid ones) or  could-have-been-index. I dislike these two  versions of <code>binary_search</code> for the same reason I like <code>std::lower/upper_bound</code> in C++. These are actually useful. Any thoughts on also  adding  some version of <code>List.binary_search</code>?</li>\n<li><strong>Tail-call optimization</strong>: As I understand, Roc supports this, but the recursive function must qualify. How can I check if my implementation does? And even if it does _now_, can it be future-proofed with some tooling, in case the TCO requirements or the implementation itself change?</li>\n<li><strong>Iterative vs recursive</strong>: Related to the last point, does it make sense to implement an iterative variant and run benchmarks? If so, is there a standard way of benchmarking?</li>\n</ol>",
+        "id": 640518811,
+        "sender_full_name": "Vanand Gasparyan",
+        "timestamp": 1794781585
+    },
+    {
+        "content": "<ol start=\"3\">\n<li>No standard way to benchmark, I am working on perf regression detection that runs on 3 operating systems. When adding a builtin function, we typically first do a PR that just gets a correct version in and later follow-up PRs for optimization.</li>\n</ol>",
+        "id": 640822231,
+        "sender_full_name": "Anton",
+        "timestamp": 1794851737
+    },
+    {
+        "content": "<blockquote>\n<p>Does this function belong in <code>List</code>?</p>\n</blockquote>\n<p>I don't love the \"assuming <code>list</code> is partitioned under <code>predicate</code>\", it seem more idiomatic to have a type that would enforce this.</p>",
+        "id": 640839037,
+        "sender_full_name": "Anton",
+        "timestamp": 1794855523
+    },
+    {
+        "content": "<blockquote>\n<p>can it be future-proofed with some tooling, in case the TCO requirements or the implementation itself change?</p>\n</blockquote>\n<p>If we include this in my upcoming perf regression check, that would do the job.</p>",
+        "id": 640839494,
+        "sender_full_name": "Anton",
+        "timestamp": 1794855625
+    },
+    {
+        "content": "<p>We've discussed something like a TCO annotation in the past, but it's not a high priority for now.</p>",
+        "id": 640840910,
+        "sender_full_name": "Anton",
+        "timestamp": 1794855940
+    },
+    {
+        "content": "<blockquote>\n<p>How can I check if my implementation does:</p>\n</blockquote>\n<p>From Opus 5.5:</p>\n<blockquote>\n<p>The practical check is a stress test: call the function with an input big enough to make it recurse millions of times.</p>\n<h2>1. Stress test with <code>expect</code></h2>\n<div class=\"codehilite\" data-code-language=\"roc\"><pre><span></span><code>sum_tail : U64, U64 -&gt; U64\nsum_tail = |n, acc| if n == 0 acc else sum_tail(n - 1, acc + n)\n\nexpect sum_tail(10_000_000, 0) == 50_000_005_000_000\n</code></pre></div>\n<p>Run it with <code>roc test MyFile.roc --no-cache</code>. I tried this with your local <code>roc-main</code> build:</p>\n<ul>\n<li><strong><code>sum_tail</code> (tail call):</strong> the test passed in about 0.35 s.</li>\n<li><strong><code>n + sum_plain(n - 1)</code> (not a tail call):</strong> at the same depth it fails with:<br>\n<code>\n  This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.\n  </code></li>\n</ul>\n<p>If your function survives a depth in the millions, it qualifies. This test doesn't tell you <em>which</em> optimization kicked in, but that rarely matters: each one means the stack doesn't grow.</p>\n<h2>2. What makes a call qualify</h2>\n<p>From the \"Tail Calls\" section of <code>docs/langref/functions.md</code> and the compiler code (<code>src/lir/tail_call_builder.zig</code>), the recursive call's result has to be returned <strong>exactly as it is</strong>.</p>\n<p><strong>These still qualify:</strong></p>\n<ul>\n<li>The call sits at the end of an <code>if</code> or <code>match</code> branch.</li>\n<li>You bind the result to a name and return that name.</li>\n<li>An early <code>return f(x)</code>.</li>\n</ul>\n<p><strong>These don't qualify:</strong></p>\n<ul>\n<li>Doing anything with the result after the call: <code>n + f(x)</code>, <code>f(x)?</code>, <code>Ok(f(x))</code>, calling a function on it, and so on.</li>\n<li>The usual fix is to pass an accumulator along as an extra argument, like <code>sum_tail</code> above.</li>\n</ul>\n<p><strong>Exception, \"modulo cons\":</strong> if the function returns a recursive tag union and the call's result goes straight into one of its tags, it also becomes a loop. For example, <code>Cons(x, count_up(n + 1, end))</code> where the return type is <code>LinkedList(a)</code>.</p>\n<p><strong>Calls to other functions:</strong> a tail call to a <em>different</em> function, or to a function passed in as an argument, reuses the current stack frame. So mutually recursive functions like <code>is_even</code>/<code>is_odd</code> that only call each other in tail position can't overflow either.</p>\n<h2>3. Compiler debug flag</h2>\n<p><code>roc</code> can be built with a debug option that logs this:</p>\n<div class=\"codehilite\" data-code-language=\"Bash\"><pre><span></span><code>zig<span class=\"w\"> </span>build<span class=\"w\"> </span>roc<span class=\"w\"> </span>-Dprint-trmc<span class=\"o\">=</span><span class=\"nb\">true</span><span class=\"w\">            </span><span class=\"c1\"># one line per transformed function on stderr</span>\nzig<span class=\"w\"> </span>build<span class=\"w\"> </span>roc<span class=\"w\"> </span>-Dprint-ir-after-trmc<span class=\"o\">=</span><span class=\"nb\">true</span><span class=\"w\">   </span><span class=\"c1\"># full IR dump of each transformed function</span>\n</code></pre></div>\n<p>The output looks like <code>tce: proc p12 (0 construct sites, 1 tail calls)</code>. It identifies functions by internal number, not by name, so it's most useful on a small file with a single recursive function. I haven't tried these flags; the stress test is simpler.</p>\n</blockquote>",
+        "id": 640842129,
+        "sender_full_name": "Anton",
+        "timestamp": 1794856209
+    },
+    {
+        "content": "<p>That was quite helpful <span class=\"user-mention\" data-user-id=\"361169\">@Anton</span> . I ran some experiments and found a version of the implementation that enables TCO. Here it is:</p>\n<div class=\"codehilite\"><pre><span></span><code>partition_point : List(a), (a -&gt; Bool) -&gt; U64\npartition_point = |list, predicate| {\n  partition_point_helper : List(a), (a -&gt; Bool), U64 -&gt; U64\n  partition_point_helper = |lst, pred, offset| {\n    if lst.is_empty() {\n      return offset\n    }\n    mid_idx = lst.len() / 2\n    mid = list_get_unsafe(lst, mid_idx)\n    if predicate(mid) {\n      partition_point_helper(lst.drop_first(mid_idx + 1), pred, offset + mid_idx + 1)\n    } else {\n      partition_point_helper(lst.take_first(mid_idx), pred, offset)\n    }\n  }\n\n  partition_point_helper(list, predicate, 0)\n}\n</code></pre></div>\n<p>The PR is no longer a draft, ready for review.</p>",
+        "id": 642502199,
+        "sender_full_name": "Vanand Gasparyan",
+        "timestamp": 1795277578
+    },
+    {
+        "content": "<p>Thanks for your work on this <span class=\"user-mention\" data-user-id=\"1207673\">@Vanand Gasparyan</span>, I am going to come back to this when I can.</p>",
+        "id": 643328262,
+        "sender_full_name": "Anton",
+        "timestamp": 1795539848
+    }
+]

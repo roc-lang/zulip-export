@@ -1,0 +1,134 @@
+[
+    {
+        "content": "<p>The blocking behavior of <code>basic-cli</code> makes it unsuitable for many projects. Many problems require consuming input from multiple sources at the same time, and immediately reacting when data arrives on any of them.</p>\n<ul>\n<li>A service manager (like <code>dinit</code>):<ul>\n<li>The control socket (a Unix domain socket), with multiple clients connecting at the same time.</li>\n<li>The stdout/stderr of each service, for logging.</li>\n<li>Immediately reacting to e.g. when a service crashes (child process exits).</li>\n<li>Startup notification fd, or polling scripts.</li>\n</ul>\n</li>\n<li>An LLM harness:<ul>\n<li>HTTP SSE or WebSocket streaming to the inference API.</li>\n<li>Reading user input from stdin.</li>\n<li>Watching database updates on a TCP socket.</li>\n</ul>\n</li>\n<li>An editor:<ul>\n<li>Reading user input from stdin.</li>\n<li>Reading and writing to the stdio of language plugins.</li>\n</ul>\n</li>\n</ul>",
+        "id": 643264312,
+        "sender_full_name": "notramo",
+        "timestamp": 1795528434
+    },
+    {
+        "content": "<p>see <a class=\"stream-topic\" data-stream-id=\"316715\" href=\"/#narrow/channel/316715-contributing/topic/Concurrency.20design/with/642492081\">#contributing &gt; Concurrency design</a>  for some discussion. I actually just built my own C-based platform that addresses some things that are kinda related to your bullet points, but I have never needed concurrency yet. See <a href=\"https://github.com/showell/shale/tree/master/c/host\">https://github.com/showell/shale/tree/master/c/host</a> for a taste. It's a pretty big codebase that I use for Claude to do basically all its tasks. It has its own scripting language for ad hoc scripts, but for things I run often that are Roc-related, most of the logic now lives in Roc.</p>",
+        "id": 643265890,
+        "sender_full_name": "Steve Howell",
+        "timestamp": 1795528739
+    },
+    {
+        "content": "<p>There is also <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/channel/304641-ideas/topic/Concurrent.2Fthreaded.20platforms/with/639114978\">#ideas &gt; Concurrent/threaded platforms</a>, but those require more planning, and are likely to be done after <code>0.1.0</code>, or even <code>1.0</code>.</p>",
+        "id": 643266866,
+        "sender_full_name": "notramo",
+        "timestamp": 1795528897
+    },
+    {
+        "content": "<p>I renamed the thread title to be more specific, because I meant this thread as brainstorming for some quick, temporary solution, that may be not ideal, but works with the current Roc, and unblocks some use cases, even if the code is not the most elegant.</p>",
+        "id": 643267219,
+        "sender_full_name": "notramo",
+        "timestamp": 1795528973
+    },
+    {
+        "content": "<p>One solution could be to add a <code>worker!</code>, that is exposed to the platform.<br>\nIt takes a <code>List(U8)</code>, because complex objects are too difficult to pass between threads, but a byte slice can be easily cloned fully. The entry point then would deserialize it from CBOR or JSON.</p>\n<p>The <code>spawn!</code> platform call would start a worker, and return a worker ID, probably an integer.<br>\nThe <code>main!</code> would have a worker ID too, probably <code>1</code>.</p>\n<p>Then the platform would manage some messaging. It would be very simple, probably a <code>List(U8)</code>, and the destination ID.<br>\n<code>send! : WorkerID, List(U8) =&gt; ()</code> — send a message.<br>\n<code>receive! : () =&gt; Try((WorkerID, List(U8)), [Empty])</code> — receive one message from the inbox of the current worker. <code>WorkerID</code> specifies the sender.<br>\n<code>receive_blocking! : () =&gt; (WorkerID, List(U8))</code><br>\nThe <code>receive!</code> and <code>send!</code> functions would be nonblocking, i.e. <code>send!</code> immediately returns (even if the destination worker is not waiting for messages), and the platform buffers it. <code>receive!</code> would immediately return if there's nothing queued.</p>",
+        "id": 643272031,
+        "sender_full_name": "notramo",
+        "timestamp": 1795529836
+    },
+    {
+        "content": "<p>Another solution could be adding a <code>select</code> mechanism. Since most of the problems involve reading from multiple file descriptors at once, maybe this would be simpler.<br>\nBut in the context of Roc, this may turn out to be more difficult.<br>\nHow to expose an uniform API for HTTP, UDS, and plain files (stdio, filesystem)?<br>\nIdeally, it would not need to run Roc lambdas, because that would be similar to <a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/channel/304641-ideas/topic/Concurrent.2Fthreaded.20platforms/with/639114978\">#ideas &gt; Concurrent/threaded platforms</a>, which is known to be very complex. I'm not sure how it could be solved without lambdas.</p>",
+        "id": 643273359,
+        "sender_full_name": "notramo",
+        "timestamp": 1795530076
+    },
+    {
+        "content": "<p>I suspect all of this is gonna be out of scope for basic-cli. Nothing prevents you from building out your own platform. I don't use basic-cli for anything non-trivial. For example, my chat has its own zig platform. My agent tasks that use Roc use the aforementioned C platform.</p>",
+        "id": 643273886,
+        "sender_full_name": "Steve Howell",
+        "timestamp": 1795530165
+    },
+    {
+        "content": "<p>This will cause fragmentation in the Roc ecosystem in the long term. If I built a custom platform because of this, that would mean that the only reason for building that platform was to add missing functionality. Not innovation in platform technology, e.g. memory management, error handling, <code>io_uring</code>, etc., nor to add support for a currently unsupported OS, hardware, or environment. Just to add a missing function, that provides basic functionality.</p>",
+        "id": 643274805,
+        "sender_full_name": "notramo",
+        "timestamp": 1795530335
+    },
+    {
+        "content": "<p>This is the wrong reason to build a custom platform.</p>",
+        "id": 643274876,
+        "sender_full_name": "notramo",
+        "timestamp": 1795530345
+    },
+    {
+        "content": "<p>When projects or libraries get more complex, it's inevitable to use platform types from the library. And since the types are not compatible accross most platforms, it will cause fragmentation or bridges that add unnecessary complexity and friction.</p>",
+        "id": 643275466,
+        "sender_full_name": "notramo",
+        "timestamp": 1795530452
+    },
+    {
+        "content": "<p>This is the kind of friction that makes people choose another language. There is no other language that says \"Hey, you can use our ready-made platform, if you write apps that run sequentially. If you need concurrency, you need to reimplement all of the platform functionality.\"</p>",
+        "id": 643277010,
+        "sender_full_name": "notramo",
+        "timestamp": 1795530718
+    },
+    {
+        "content": "<p>These are all fair points, but I think there's benefit to keeping the basic-cli actually basic.</p>",
+        "id": 643277207,
+        "sender_full_name": "Steve Howell",
+        "timestamp": 1795530750
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1207194\">notramo</span> <a href=\"#narrow/channel/231634-beginners/topic/Temporary.20solution.20for.20concurrency.20in.20.60basic-cli.60.3F/near/643277010\">said</a>:</p>\n<blockquote>\n<p>This is the kind of friction that makes people choose another language.</p>\n</blockquote>\n<p>My bias is that I already choose other languages to do a lot of my work. I don't need Roc to solve every problem for me. I find more and more niches for Roc, but I like that Roc plays nice with C, Zig, Odin, and JS, which i all use with Roc.</p>",
+        "id": 643277904,
+        "sender_full_name": "Steve Howell",
+        "timestamp": 1795530864
+    },
+    {
+        "content": "<blockquote>\n<p>These are all fair points, but I think there's benefit to keeping the basic-cli actually basic.</p>\n</blockquote>\n<p>Yes. And this is actually basic functionality, that belongs in basic-cli. It's not <code>scripting-cli</code> or <code>barebones-cli</code>. When something is easier to do in <code>bash</code>, than with the current <code>basic-cli</code> platform, it probably indicates that something is lacking.</p>",
+        "id": 643278100,
+        "sender_full_name": "notramo",
+        "timestamp": 1795530897
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"1009034\">Steve Howell</span> <a href=\"#narrow/channel/231634-beginners/topic/Temporary.20solution.20for.20concurrency.20in.20.60basic-cli.60.3F/near/643277904\">said</a>:</p>\n<blockquote>\n<p>My bias is that I already choose other languages to do a lot of my work. I don't need Roc to solve every problem for me. I find more and more niches for Roc, but I like that Roc plays nice with C, Zig, Odin, and JS, which i all use with Roc.</p>\n</blockquote>\n<p>I also use Zig. For some problems, Zig is better, for some, it's Roc. Or maybe other languages. The issue is that I can't use Roc for problems where Roc would be the ideal language from every aspect, except for concurrency. I don't want to choose another language that's inferior in every aspect, just because it has this one feature.</p>",
+        "id": 643279423,
+        "sender_full_name": "notramo",
+        "timestamp": 1795531120
+    },
+    {
+        "content": "<p>Your basic proposal seems reasonable to me under your premises. I think spawn/send/receive/select are well-understood primitives.</p>",
+        "id": 643279689,
+        "sender_full_name": "Steve Howell",
+        "timestamp": 1795531169
+    },
+    {
+        "content": "<p>Important, that this does not target highly concurrent applications. It's just for unblocking a few more simple use cases. For programs where the entire architecture is based on concurrency, an OTP-like platform would be indeed better suitable.</p>",
+        "id": 643281117,
+        "sender_full_name": "notramo",
+        "timestamp": 1795531409
+    },
+    {
+        "content": "<p>I just wanted to say that this is an important issue and I am going to come back to it later.</p>",
+        "id": 643327620,
+        "sender_full_name": "Anton",
+        "timestamp": 1795539732
+    },
+    {
+        "content": "<p>Maybe a timeout on reads and requests would be also a good solution?</p>",
+        "id": 644364810,
+        "sender_full_name": "notramo",
+        "timestamp": 1795874240
+    },
+    {
+        "content": "<p>Possibly not, because e.g. a HTTP request can not be resumed easily if it's not idempotent. And if something takes longer, e.g. an endpoint is slow, it restarts the server computation, so it's basically impossible to have long requests without blocking the UI.</p>",
+        "id": 644364929,
+        "sender_full_name": "notramo",
+        "timestamp": 1795874312
+    },
+    {
+        "content": "<p>For example, an LLM chat app: the request takes long time, and resending the request restarts the generation. On the other hand, the UI should be updated instantly when the user presses a key.</p>",
+        "id": 644364994,
+        "sender_full_name": "notramo",
+        "timestamp": 1795874355
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"515757\">@Luke Boswell</span>, what do you think?</p>",
+        "id": 644365006,
+        "sender_full_name": "notramo",
+        "timestamp": 1795874364
+    }
+]

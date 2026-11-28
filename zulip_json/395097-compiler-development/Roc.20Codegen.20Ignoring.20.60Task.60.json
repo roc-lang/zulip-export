@@ -1,0 +1,146 @@
+[
+    {
+        "content": "<p>So I was digging into a segfault in <span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span>'s new <a href=\"http://\">basic-webserver platform</a>.</p>\n<p>Turns out that roc is simply generating the wrong type for the <code>main</code> function and totally ignoring that their is a <code>Task</code> in the api.</p>\n<p>Here is the api in roc:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nv\">Header</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">name</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Str</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">value</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"nx\">U8</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"nv\">Method</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[</span><span class=\"nx\">GET</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">POST</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">HEAD</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">DELETE</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">PUT</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nx\">OPTIONS</span><span class=\"p\">]</span>\n<span class=\"nv\">Request</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">method</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Method</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">url</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Str</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">headers</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"nx\">Header</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">body</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"nx\">U8</span><span class=\"w\"> </span><span class=\"p\">}</span>\n<span class=\"nv\">Response</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">status</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">U16</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">headers</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"nx\">Header</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">body</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"nx\">U8</span><span class=\"w\"> </span><span class=\"p\">}</span>\n\n<span class=\"nv\">mainForHost</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">Request</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"w\"> </span><span class=\"nx\">Response</span><span class=\"w\"> </span><span class=\"p\">[]</span>\n</code></pre></div>\n<p>Here is the main function signiture that we generate for llvm:</p>\n<div class=\"codehilite\" data-code-language=\"LLVM\"><pre><span></span><code><span class=\"k\">void</span><span class=\"w\"> </span><span class=\"vg\">@roc__mainForHost_1_exposed</span><span class=\"p\">(</span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"k\">nocapture</span><span class=\"w\"> </span><span class=\"k\">writeonly</span><span class=\"w\"> </span><span class=\"k\">sret</span><span class=\"p\">({</span><span class=\"w\"> </span><span class=\"nv\">%list.RocList</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">%list.RocList</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">i16</span><span class=\"w\"> </span><span class=\"p\">})</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%0</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"kt\">ptr</span><span class=\"w\"> </span><span class=\"k\">nocapture</span><span class=\"w\"> </span><span class=\"k\">readonly</span><span class=\"w\"> </span><span class=\"nv nv-Anonymous\">%1</span><span class=\"p\">)</span>\n</code></pre></div>\n<p>The return type is specifically <code>{ %list.RocList, %list.RocList, i16 }</code>. That is the return type of <code>RocResponse</code>, but the function is not just returning a <code>RocResponse</code>, it is returning a <code>Task RocResponse []</code>. Which would become a closure. And a closure just returns closure capture data as a <code>List U8</code>.</p>\n<p>So specifically the issue is that when we directly return a task with <code>Task.ok</code> and never await anything, it doesn't actually generate a closure. Instead the raw <code>Task</code> is return. This is a different API from when we call <code>Task.await</code> even once.</p>\n<p>I think we need to make sure to always wrap returned <code>Task</code>s in a closure to keep the API consistent.</p>\n<p>I was able to confirm that this isssue is the missing closure by changing the code from:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">ok</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">status</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"mi\">200</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">headers</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[],</span><span class=\"w\"> </span><span class=\"nv\">body</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"s\">\"The Answer\"</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Str</span><span class=\"p\">.</span><span class=\"nx\">toUtf8</span><span class=\"w\"> </span><span class=\"p\">}</span>\n</code></pre></div>\n<p>to:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nx\">x</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">ok</span><span class=\"w\"> </span><span class=\"p\">{</span><span class=\"w\"> </span><span class=\"nv\">status</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"mi\">200</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">headers</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"p\">[],</span><span class=\"w\"> </span><span class=\"nv\">body</span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"s\">\"The Answer\"</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Str</span><span class=\"p\">.</span><span class=\"nx\">toUtf8</span><span class=\"w\"> </span><span class=\"p\">}</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">await</span>\n<span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">ok</span><span class=\"w\"> </span><span class=\"nx\">x</span>\n</code></pre></div>\n<p>That fixes the segfault</p>",
+        "id": 400453280,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699243103
+    },
+    {
+        "content": "<p>what a bizarre bug (in layout maybe?)</p>",
+        "id": 400454531,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699243552
+    },
+    {
+        "content": "<p>but convenient that there's an easy workaround in the platform!</p>",
+        "id": 400454567,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699243563
+    },
+    {
+        "content": "<p>I stand corrected, that actually isn't a fix.</p>",
+        "id": 400454645,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699243578
+    },
+    {
+        "content": "<p>Roc still returns as a <code>RocResponse</code>. So it never returns any sort of closure or capture.</p>",
+        "id": 400454780,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699243618
+    },
+    {
+        "content": "<p>I think I had mixed something up in my testing.</p>",
+        "id": 400454819,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699243633
+    },
+    {
+        "content": "<p>oh even with <code>await</code>?</p>",
+        "id": 400454863,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1699243647
+    },
+    {
+        "content": "<p>Ok. optimizations seem to just be confusing me. <code>await</code> can work.</p>",
+        "id": 400455713,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699243938
+    },
+    {
+        "content": "<p>Apparently</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"w\">    </span><span class=\"nx\">res</span><span class=\"w\"> </span><span class=\"o\">&lt;-</span><span class=\"w\"> </span><span class=\"nx\">main</span><span class=\"w\"> </span><span class=\"nx\">req</span><span class=\"w\"> </span><span class=\"o\">|&gt;</span><span class=\"w\"> </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">await</span>\n<span class=\"w\">    </span><span class=\"nx\">Task</span><span class=\"p\">.</span><span class=\"nx\">ok</span><span class=\"w\"> </span><span class=\"nx\">res</span>\n</code></pre></div>\n<p>works in optimized builds but fails in normal builds....that is just super strange to me. Optimizations fixing instead of breaking something</p>",
+        "id": 400456577,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699244239
+    },
+    {
+        "content": "<p>oh wait!!!</p>\n<p>The webserver generates correctly and works in general in <code>optimized</code> builds. It also consistently fails in normal builds</p>",
+        "id": 400456736,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699244300
+    },
+    {
+        "content": "<p>Ok. Looking at the differences between the optimized and non-optimized code. This is my current understanding.</p>\n<p>Either way, main directly returns the <code>RocResponse</code> which has the same layout as a <code>Task RocResponse []</code>.<br>\nWe store that in a structure that thinks it is a <code>closure_data: roc_std::RocList&lt;u8&gt;</code>. This is incorrect, but doesn't end up matter.</p>\n<p>Either way, we pass the pointer to the closure data pointer back to roc. Roc knows the pointer is a <code>RocResponse</code>, not a <code>RocList&lt;u8&gt;</code>, interprets it correctly and returns the data.</p>\n<p>Since in rust, we are only store enough space for a <code>RocList&lt;u8&gt;</code>, the entire <code>RocResponse</code> does not fit. In the debug build, this overflowing data ends up getting overwritten. This now totally unrelated data leads to the crash. In optimized, we just happen to not overwite the data. As such, even though we are accessing memory that shouldn't be accessed, everything still works fine.</p>",
+        "id": 400458943,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699245113
+    },
+    {
+        "content": "<p>So fundamentally, I think this is still a roc codegen bug.  A <code>Task ...</code> should always return a closure data. closure data should always be stored as a <code>RocList&lt;u8&gt;</code>. So we are missing the wrapping and store of the <code>RocResponse</code> into a <code>RocList&lt;u8&gt;</code> of closure data.</p>",
+        "id": 400459031,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699245191
+    },
+    {
+        "content": "<p>So we are missing a layer of indirection to make closure data always consistent layout as a <code>RocList&lt;u8&gt;</code></p>",
+        "id": 400459105,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699245249
+    },
+    {
+        "content": "<p>Do you have the IR for the program? (you can generate it with <code>ROC_PRINT_IR_AFTER_RESET_REUSE=1</code> on debug)</p>",
+        "id": 400459426,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1699245514
+    },
+    {
+        "content": "<p>I think it's because </p>\n<div class=\"codehilite\"><pre><span></span><code>Task.ok { status: 200, headers: [], body: &quot;The Answer&quot; |&gt; Str.toUtf8 }\n</code></pre></div>\n<p>does not capture</p>",
+        "id": 400459450,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1699245533
+    },
+    {
+        "content": "<p>but</p>\n<div class=\"codehilite\"><pre><span></span><code>x &lt;- Task.ok { status: 200, headers: [], body: &quot;The Answer&quot; |&gt; Str.toUtf8 } |&gt; Task.await\nTask.ok x\n</code></pre></div>\n<p>always does, because await always captures</p>",
+        "id": 400459488,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1699245550
+    },
+    {
+        "content": "<p>So the first case becomes a lambda that is just a function pointer, but the latter is the function pointer + closure data</p>",
+        "id": 400459570,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1699245590
+    },
+    {
+        "content": "<p>The <code>await</code> was a red herring. Either way it is still just returning the RocResponse directly.</p>",
+        "id": 400459643,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699245607
+    },
+    {
+        "content": "<p>Here is with the await in the platform:</p>\n<div class=\"codehilite\"><pre><span></span><code>procedure : `pf..mainForHost` {{List U8, List {Str, List U8}, U16}, {}}\nprocedure = `pf..mainForHost` (`pf..req`: {List U8, List {Str, List U8}, Str, U8}):\n    let `pf..5` : {List U8, List {Str, List U8}, U16} = CallByName `#UserApp.main` `pf..req`;\n    let `pf..6` : {} = Struct {};\n    let `pf..4` : {{List U8, List {Str, List U8}, U16}, {}} = CallByName `pf.Task.await` `pf..5` `pf..6`;\n    ret `pf..4`;\n</code></pre></div>\n<p>It is eagerly running and directly returning the <code>Task Response []</code> as a <code>{{List U8, List {Str, List U8}, U16}, {}}</code><br>\nIt should be returning closure_data and then actually running the execution in the roc_caller function, at least that is how I understand the model.</p>\n<p>That said, we could just make it eagerly run, but then we need to change glue to expect the result type rather than a closure capture and needing to run a caller function.</p>",
+        "id": 400460502,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699245995
+    },
+    {
+        "content": "<p>hmm wait...</p>\n<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> Did we change to main returning a <code>List&lt;U8&gt;</code> if it is a closure? I think that may be the real issue. Main just returns the closure data. So we need to change the glue code to properly store that captured data in a <code>List&lt;U8&gt;</code> cause roc doesn't do that automatically for us.</p>",
+        "id": 400461655,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699246402
+    },
+    {
+        "content": "<p>Yeah....I think this actually is just a glue bug. Roc currently expects glue to generate a spot to store the closure capture bytes and pass a pointer to the location into the main task. The rust glue is not doing that. It is instead expecting roc to return a <code>List&lt;U8&gt;</code>.</p>",
+        "id": 400461948,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699246514
+    },
+    {
+        "content": "<p>Yeah, probably a glue issue (at least with how current roc generates closure handling code).</p>\n<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span>, the mainForHost calling function should be something like:</p>\n<div class=\"codehilite\" data-code-language=\"Rust\"><pre><span></span><code><span class=\"k\">pub</span><span class=\"w\"> </span><span class=\"k\">fn</span> <span class=\"nf\">mainForHost</span><span class=\"p\">(</span><span class=\"n\">arg0</span>: <span class=\"nc\">RocRequest</span><span class=\"p\">)</span><span class=\"w\"> </span>-&gt; <span class=\"nc\">RocFunction_88</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"k\">extern</span><span class=\"w\"> </span><span class=\"s\">\"C\"</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"k\">fn</span> <span class=\"nf\">roc__mainForHost_1_exposed_generic</span><span class=\"p\">(</span>\n<span class=\"w\">            </span><span class=\"n\">_</span>: <span class=\"o\">*</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"kt\">u8</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"n\">_</span>: <span class=\"kp\">&amp;</span><span class=\"nc\">mut</span><span class=\"w\"> </span><span class=\"n\">core</span>::<span class=\"n\">mem</span>::<span class=\"n\">ManuallyDrop</span><span class=\"o\">&lt;</span><span class=\"n\">RocRequest</span><span class=\"o\">&gt;</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"p\">);</span>\n<span class=\"w\">        </span><span class=\"k\">fn</span> <span class=\"nf\">roc__mainForHost_1_exposed_size</span><span class=\"p\">()</span><span class=\"w\"> </span>-&gt; <span class=\"kt\">i64</span><span class=\"p\">;</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n\n<span class=\"w\">    </span><span class=\"k\">unsafe</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"n\">size</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">roc__mainForHost_1_exposed_size</span><span class=\"p\">();</span>\n<span class=\"w\">        </span><span class=\"kd\">let</span><span class=\"w\"> </span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">ret</span><span class=\"w\"> </span><span class=\"o\">=</span><span class=\"w\"> </span><span class=\"n\">RocFunction_88</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"n\">closure_data</span>: <span class=\"nc\">RocList</span>::<span class=\"n\">with_capacity</span><span class=\"p\">(</span><span class=\"n\">size</span><span class=\"w\"> </span><span class=\"k\">as</span><span class=\"w\"> </span><span class=\"kt\">usize</span><span class=\"p\">),</span>\n<span class=\"w\">        </span><span class=\"p\">};</span>\n<span class=\"w\">        </span><span class=\"n\">roc__mainForHost_1_exposed_generic</span><span class=\"p\">(</span>\n<span class=\"w\">            </span><span class=\"n\">ret</span><span class=\"p\">.</span><span class=\"n\">closure_data</span><span class=\"p\">.</span><span class=\"n\">as_mut_ptr</span><span class=\"p\">(),</span>\n<span class=\"w\">            </span><span class=\"o\">&amp;</span><span class=\"k\">mut</span><span class=\"w\"> </span><span class=\"n\">core</span>::<span class=\"n\">mem</span>::<span class=\"n\">ManuallyDrop</span>::<span class=\"n\">new</span><span class=\"p\">(</span><span class=\"n\">arg0</span><span class=\"p\">),</span>\n<span class=\"w\">        </span><span class=\"p\">);</span>\n\n<span class=\"w\">        </span><span class=\"n\">ret</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p><a href=\"https://github.com/roc-lang/basic-webserver/blob/1a2ee101f61678f4b4c304b98ceac392c7f9a461/platform/glue/roc_app/src/lib.rs#L99-L117\">current impl for reference</a></p>\n<p>Though really, there is no need for <code>RocFunction_88</code> to contain a <code>RocList</code> at all. It could use a rust vector or even better a small vector type. In a perfect world, it might even use a stack allocated array of bytes.</p>",
+        "id": 400463136,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699247166
+    },
+    {
+        "content": "<p>Maybe this is related to changes that were planned for how we implemented closures but that have not happened yet?</p>",
+        "id": 400463152,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699247192
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"281383\">@Richard Feldman</span> looping back to this. Does all of the final conclusion make senses? Is there a specific reason that <code>RocFunction_88</code> contains a <code>RocList&lt;u8&gt;</code> instead of just using a <code>Vec&lt;u8&gt;</code> (or not existing at all and just being inlined?)</p>\n<p>I think <code>RocFunction_88</code> probably shouldn't exist in general (at least with current roc) cause calling <code>fn88.force_thunk()</code> twice is not guaranteed to work. A roc closure is only safe to call once (without incrementing the refcount of everything in the closure capture, which the host knows none of the details of).</p>",
+        "id": 400783973,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1699377309
+    }
+]

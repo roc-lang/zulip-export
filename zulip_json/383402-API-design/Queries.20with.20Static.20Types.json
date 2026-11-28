@@ -1,0 +1,242 @@
+[
+    {
+        "content": "<p>So, I'm guessing that <span class=\"user-mention\" data-user-id=\"489294\">@Agus Zubiaga</span> knows and the answer is somehow record builders, but general question: How do we make a nicer api for something like sqlite queries? If you look at basic webserver today, it is:</p>\n<div class=\"codehilite\"><pre><span></span><code>execute :\n    {\n        path : Str,\n        query : Str,\n        bindings : List Binding,\n    }\n    -&gt; Task (List (List InternalSQL.SQLiteValue)) Error\n</code></pre></div>\n<p>Obviously for performance reasons, we could add prepared statements and keep those alive, but I am more concerned about the output type. The output type is a list of lists of tagged values. So for every row, we are paying the cost of an extra allocation. On top of that, the returned values have to be pattern matched. They basically have runtime type info.</p>\n<p>For this query, <code>SELECT id, task FROM todos WHERE status = :status</code>, the preferred type is almost certainly a <code>List { id: I64, task: Str}</code>. That both skips <code>n</code> allocations and has concrete types instead of a generic wrapper type.</p>",
+        "id": 449360063,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720199736
+    },
+    {
+        "content": "<p>Right. The way this works in <code>roc-pg</code> is that before getting row data, we get a <code>Row Description</code> message which tells us what type each column holds and the name corresponding to each index. </p>\n<p>The result of a command is an opaque type that looks like this:</p>\n<div class=\"codehilite\" data-code-language=\"CoffeeScript\"><pre><span></span><code><span class=\"nx\">CmdResult</span><span class=\"w\"> </span><span class=\"o\">:=</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">    </span><span class=\"nv\">fields</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"nx\">RowField</span><span class=\"p\">,</span><span class=\"w\">           </span><span class=\"c1\"># name, type (amongst other things)</span>\n<span class=\"w\">    </span><span class=\"nv\">rows</span><span class=\"w\"> </span><span class=\"o\">:</span><span class=\"w\"> </span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"p\">(</span><span class=\"nx\">List</span><span class=\"w\"> </span><span class=\"nx\">U8</span><span class=\"p\">)),</span>\n<span class=\"p\">}</span>\n</code></pre></div>\n<p>The way you access the result is through a decoder API that can be used with record builders. All together a query looks like this:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"w\">    </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Cmd</span><span class=\"nf\">.</span><span class=\"nv\">new</span><span class=\"w\"> </span><span class=\"s\">\"select name, price from products\"</span>\n<span class=\"w\">    </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Cmd</span><span class=\"nf\">.</span><span class=\"nv\">expectN</span><span class=\"w\"> </span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Result</span><span class=\"nf\">.</span><span class=\"nv\">succeed</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"nv\">name</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nf\">&lt;-</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Result</span><span class=\"nf\">.</span><span class=\"nv\">str</span><span class=\"w\"> </span><span class=\"s\">\"name\"</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Result</span><span class=\"nf\">.</span><span class=\"nv\">apply</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"nv\">price</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nf\">&lt;-</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Result</span><span class=\"nf\">.</span><span class=\"nv\">dec</span><span class=\"w\"> </span><span class=\"s\">\"price\"</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Result</span><span class=\"nf\">.</span><span class=\"nv\">apply</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Client</span><span class=\"nf\">.</span><span class=\"nv\">command</span><span class=\"w\"> </span><span class=\"nv\">client</span>\n</code></pre></div>",
+        "id": 449367280,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720202262
+    },
+    {
+        "content": "<p>It currently doesn't do this (I'm going to rewrite a lot of <code>roc-pg</code> once I'm done with module params), but the idea is that we  can use the type information from the row description to check that types of each columns match.</p>",
+        "id": 449368274,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720202474
+    },
+    {
+        "content": "<p>Right now it will attempt to decode them anyway</p>",
+        "id": 449368321,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720202491
+    },
+    {
+        "content": "<p>Oof, <code>List (List (List U8))</code>... cries in allocations.</p>",
+        "id": 449368628,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720202572
+    },
+    {
+        "content": "<p>Theoretically, it could decode on the fly and directly build the output type?</p>",
+        "id": 449368783,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720202617
+    },
+    {
+        "content": "<p>Yeah, for sure. That's just what it's now, but it doesn't have to be</p>",
+        "id": 449368895,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720202643
+    },
+    {
+        "content": "<p>I also want to build a cursor-based API for streaming applications</p>",
+        "id": 449369074,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720202702
+    },
+    {
+        "content": "<p>I wonder what the cost of FFI is. Cause theoretically, I could run the sqlite state machine in roc. That would enable it to build up whatever type and have a similar API that can avoid allocations.</p>",
+        "id": 449369119,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720202715
+    },
+    {
+        "content": "<p>Probably a lot smaller than the cost of many allocations.</p>",
+        "id": 449369184,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720202734
+    },
+    {
+        "content": "<p>Yeah, that makes sense</p>",
+        "id": 449369366,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720202791
+    },
+    {
+        "content": "<p>I think I might take a crack at improving the sqlite API for basic webserver. Won't make a query builder (still just string queries), but want to try and make a cursor API that can use record builders to extract a list of rows.</p>",
+        "id": 449372275,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720203628
+    },
+    {
+        "content": "<p>So thinking about this more. Instead of record builder, would you actually just want to use the more flexible version of decode (<a class=\"stream-topic\" data-stream-id=\"304641\" href=\"/#narrow/stream/304641-ideas/topic/Revamped.20Encode.20and.20Decode\">#ideas &gt; Revamped Encode and Decode</a> ) for using a cursor style api to build out roc types?</p>\n<p>I guess I'm not exactly sure how a record builder would apply to something generating a list of records like an sql query.</p>",
+        "id": 449442321,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720245322
+    },
+    {
+        "content": "<p>Ah, right. I guess <code>Decode</code> would be a better fit for a raw-SQL API. You’d probably have to fail in some cases such as nested records, but that’s probably fine.</p>\n<p>I tried implementing it for <code>roc-pg</code> originally, but the current implementation isn’t flexible enough. I needed custom state, but I believe that’s fixed by this flexible proposal.</p>",
+        "id": 449478197,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720264423
+    },
+    {
+        "content": "<p>For a type safe query builder, though, record builders are better because they allow you to compose the selection and decoding as one</p>",
+        "id": 449478397,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720264572
+    },
+    {
+        "content": "<p>Luckily for me sqlite doesn't really have types anyway, just suggestions. As in, it records a type for every element, but the type of an element does not need to match the type of a column. The column type is just the \"recommended\" type. Besides the special case of null, it will happily attempt to convert any type to any other type.</p>",
+        "id": 449514396,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720281036
+    },
+    {
+        "content": "<p>Yeah <span aria-label=\"mind blown\" class=\"emoji emoji-1f92f\" role=\"img\" title=\"mind blown\">:mind_blown:</span> was my reaction too when learning this</p>",
+        "id": 449514911,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720281212
+    },
+    {
+        "content": "<p><a href=\"https://youtu.be/sgVpOaJLoG0?si=l8Cg5t_Z8oXDQUHJ\">https://youtu.be/sgVpOaJLoG0?si=l8Cg5t_Z8oXDQUHJ</a></p>\n<div class=\"youtube-video message_inline_image\"><a data-id=\"sgVpOaJLoG0\" href=\"https://youtu.be/sgVpOaJLoG0?si=l8Cg5t_Z8oXDQUHJ\"><img src=\"https://uploads.zulipusercontent.net/9ae17bc39ac4b70e6ec3cd7cb25786d2d671eb8b/68747470733a2f2f692e7974696d672e636f6d2f76692f736756704f614a4c6f47302f64656661756c742e6a7067\"></a></div>",
+        "id": 449515162,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720281296
+    },
+    {
+        "content": "<p>ah ok, at least you can make tables \"strict\"</p>",
+        "id": 449516222,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720281601
+    },
+    {
+        "content": "<p>still annoying that everything has to be tagged (I imagine) in order to support these flexible types</p>",
+        "id": 449516478,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720281692
+    },
+    {
+        "content": "<p>For sure, but nothing is nested and loading a raw value from sqlite should be cheap with a cursor API. So not that much of a cost.</p>",
+        "id": 449516685,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720281776
+    },
+    {
+        "content": "<p>The rust sqlite library doesn't even expose getting the real column type ... <span aria-label=\"joy\" class=\"emoji emoji-1f602\" role=\"img\" title=\"joy\">:joy:</span></p>",
+        "id": 449516899,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720281878
+    },
+    {
+        "content": "<p>Just the current row column type</p>",
+        "id": 449516935,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720281898
+    },
+    {
+        "content": "<p>Ah, looks like <code>rusqlite</code> is the more popular library with more features like this.</p>",
+        "id": 449518310,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720282224
+    },
+    {
+        "content": "<p>That said, I probably could pretty easily live with a raw sqlite3 wrapper for roc. Don't really need fancy rust macros and features. Just raw query binding and cursor access.</p>",
+        "id": 449518508,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720282271
+    },
+    {
+        "content": "<p>I attempted to make a basic form of something that matches the <code>roc-pg</code> record builder for sqlite. It directly reads a column at a time, converting result and building a record. I have it type checking, but I don't think roc likes the equivalent of <code>roc-pg</code> but using a bunch of <code>Task</code> instead of <code>Result</code>.</p>\n<p>The end code looks pretty decent though:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"nv\">queryTodosByStatus</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"nf\">\\</span><span class=\"nv\">dbPath</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">status</span><span class=\"w\"> </span><span class=\"nf\">-&gt;</span>\n<span class=\"w\">    </span><span class=\"nv\">stmt</span><span class=\"w\"> </span><span class=\"nf\">=</span><span class=\"w\"> </span><span class=\"kt\">SQLite3</span><span class=\"nf\">.</span><span class=\"nv\">prepareAndBind</span><span class=\"err\">!</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">        </span><span class=\"nv\">path</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nv\">dbPath</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"nv\">query</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"s\">\"SELECT id, task FROM todos WHERE status = :status;\"</span><span class=\"p\">,</span>\n<span class=\"w\">        </span><span class=\"nv\">bindings</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"p\">[{</span><span class=\"w\"> </span><span class=\"nv\">name</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"s\">\":status\"</span><span class=\"p\">,</span><span class=\"w\"> </span><span class=\"nv\">value</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"kt\">String</span><span class=\"w\"> </span><span class=\"nv\">status</span><span class=\"w\"> </span><span class=\"p\">}],</span>\n<span class=\"w\">    </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"kt\">SQLite3</span><span class=\"nf\">.</span><span class=\"nv\">decode</span><span class=\"err\">!</span>\n<span class=\"w\">        </span><span class=\"nv\">stmt</span>\n<span class=\"w\">        </span><span class=\"p\">(</span>\n<span class=\"w\">            </span><span class=\"kt\">SQLite3</span><span class=\"nf\">.</span><span class=\"nv\">succeed</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">                </span><span class=\"nv\">id</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nf\">&lt;-</span><span class=\"w\"> </span><span class=\"kt\">SQLite3</span><span class=\"nf\">.</span><span class=\"nv\">i64</span><span class=\"w\"> </span><span class=\"s\">\"id\"</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">SQLite3</span><span class=\"nf\">.</span><span class=\"nv\">apply</span><span class=\"p\">,</span>\n<span class=\"w\">                </span><span class=\"nv\">task</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nf\">&lt;-</span><span class=\"w\"> </span><span class=\"kt\">SQLite3</span><span class=\"nf\">.</span><span class=\"nv\">str</span><span class=\"w\"> </span><span class=\"s\">\"task\"</span><span class=\"w\"> </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">SQLite3</span><span class=\"nf\">.</span><span class=\"nv\">apply</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"p\">}</span>\n<span class=\"w\">        </span><span class=\"p\">)</span>\n</code></pre></div>",
+        "id": 449543005,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720291146
+    },
+    {
+        "content": "<p>On this branch if anyway wants to look into why it won't compile: <a href=\"https://github.com/roc-lang/basic-webserver/compare/main...sqlite-improvements\">https://github.com/roc-lang/basic-webserver/compare/main...sqlite-improvements</a></p>",
+        "id": 449543026,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720291178
+    },
+    {
+        "content": "<p>Ends up being a <code>no lambda set found</code> error.</p>",
+        "id": 449543090,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720291207
+    },
+    {
+        "content": "<p>Also, I think I have everything wired up on the rust side. So assuming we can figure out the roc compiler error or a workaround, this should be a much nicer and more performant sqlite api. One that is able to just build a final list of the wanted result type without any runtime tagging being required.</p>\n<p>Also has the power to reuse prepared statements, but unless we get prepared statement cached at init time, that won't be particularly useful.</p>\n<p>Caveat: also need to verify if statements get freed at the correct time.</p>",
+        "id": 449561082,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720299535
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"489294\">@Agus Zubiaga</span> quick record builder question:</p>\n<p>Is there a reason to separate <code>Pg.Result.apply</code> from <code>Pg.Result.str</code>?</p>\n<p>As in, you would embed <code>Pg.Result.apply</code> into <code>Pg.Result.str</code> and then the record builder code would be:</p>\n<div class=\"codehilite\" data-code-language=\"Elm\"><pre><span></span><code><span class=\"w\">    </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Cmd</span><span class=\"nf\">.</span><span class=\"nv\">new</span><span class=\"w\"> </span><span class=\"s\">\"select name, price from products\"</span>\n<span class=\"w\">    </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Cmd</span><span class=\"nf\">.</span><span class=\"nv\">expectN</span><span class=\"w\"> </span><span class=\"p\">(</span>\n<span class=\"w\">        </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Result</span><span class=\"nf\">.</span><span class=\"nv\">succeed</span><span class=\"w\"> </span><span class=\"p\">{</span>\n<span class=\"w\">            </span><span class=\"nv\">name</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nf\">&lt;-</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Result</span><span class=\"nf\">.</span><span class=\"nv\">str</span><span class=\"w\"> </span><span class=\"s\">\"name\"</span><span class=\"p\">,</span>\n<span class=\"w\">            </span><span class=\"nv\">price</span><span class=\"nf\">:</span><span class=\"w\"> </span><span class=\"nf\">&lt;-</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Result</span><span class=\"nf\">.</span><span class=\"nv\">dec</span><span class=\"w\"> </span><span class=\"s\">\"price\"</span>\n<span class=\"w\">        </span><span class=\"p\">}</span>\n<span class=\"w\">    </span><span class=\"p\">)</span>\n<span class=\"w\">    </span><span class=\"nf\">|&gt;</span><span class=\"w\"> </span><span class=\"kt\">Pg</span><span class=\"nf\">.</span><span class=\"kt\">Client</span><span class=\"nf\">.</span><span class=\"nv\">command</span><span class=\"w\"> </span><span class=\"nv\">client</span>\n</code></pre></div>",
+        "id": 449562690,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720301023
+    },
+    {
+        "content": "<p>Yeah, that’s what I did for the query builder. That is more convenient, but the downside is that the resulting type is a function which is not as nice if you want to <code>map</code> it right there.</p>",
+        "id": 449562804,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720301149
+    },
+    {
+        "content": "<p>That’s not an issue in the proposed map2-based record builders, though</p>",
+        "id": 449562872,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720301198
+    },
+    {
+        "content": "<p>which one of the main reasons I’m looking forward to it tbh</p>",
+        "id": 449562899,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720301225
+    },
+    {
+        "content": "<p>If you map in the builder, can you return new error types? I guess so, the errors unify. So like you theoretically could take that string and run decode on it right in the builder then pass it to apply.</p>",
+        "id": 449563016,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720301358
+    },
+    {
+        "content": "<p>I described that issue on the last point here: <a href=\"#narrow/stream/304641-ideas/topic/map2-based.20record.20builders/near/446284737\">https://roc.zulipchat.com/#narrow/stream/304641-ideas/topic/map2-based.20record.20builders/near/446284737</a></p>",
+        "id": 449563121,
+        "sender_full_name": "Agus Zubiaga",
+        "timestamp": 1720301423
+    },
+    {
+        "content": "<p><span class=\"user-mention\" data-user-id=\"454654\">@Ayaz Hafiz</span> Do we have any good way to start debugging something like:</p>\n<div class=\"codehilite\"><pre><span></span><code>no lambda set found for (`36.IdentId(76)`, [\n    InLayout(\n        42,\n    ),\n    InLayout(\n        425,\n    ),\n]): LambdaSet {\n    set: [\n        ( 36.76, [InLayout(42), InLayout(274)]),\n    ],\n    args: [\n        InLayout(UNIT),\n    ],\n    ret: InLayout(\n        269,\n    ),\n    representation: InLayout(\n        275,\n    ),\n    full_layout: InLayout(\n        276,\n    ),\n}\n</code></pre></div>\n<p>?</p>\n<p><code>ROC_CHECK_MONO_IR=1</code> I don't think is reached (at least timing execution didn't change with this set.<br>\n<code>ROC_PRINT_IR_AFTER_SPECIALIZATION=1</code> is not reached before the crash.</p>",
+        "id": 449588506,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1720317146
+    },
+    {
+        "content": "<p>not really.. but the problem here is that InLayout(425) is not InLayout(274). You can print out the full representation of those types with <code>interner.dbg_deep</code></p>",
+        "id": 449589459,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720318037
+    },
+    {
+        "content": "<p>is this likely related to the cross-module bug?</p>",
+        "id": 449589549,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720318162
+    },
+    {
+        "content": "<p>(the bug where \"this lambda set is not this other one, but ought to be\" is a symptom)</p>",
+        "id": 449589566,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1720318181
+    },
+    {
+        "content": "<p>i cant tell without more investigation</p>",
+        "id": 449590644,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1720319302
+    }
+]

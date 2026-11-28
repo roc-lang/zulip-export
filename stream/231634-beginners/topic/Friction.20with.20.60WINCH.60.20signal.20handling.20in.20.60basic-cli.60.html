@@ -1,0 +1,150 @@
+<html>
+<head><meta charset="utf-8"><title>Friction with `WINCH` signal handling in `basic-cli` · beginners · Zulip Chat Archive</title></head>
+<h2>Stream: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/index.html">beginners</a></h2>
+<h3>Topic: <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Friction.20with.20.60WINCH.60.20signal.20handling.20in.20.60basic-cli.60.html">Friction with `WINCH` signal handling in `basic-cli`</a></h3>
+
+<hr>
+
+<base href="https://roc.zulipchat.com">
+
+<head><link href="https://roc-lang.github.io/zulip-export/style.css" rel="stylesheet"></head>
+
+<a name="644369987"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Friction%20with%20%60WINCH%60%20signal%20handling%20in%20%60basic-cli%60/near/644369987" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> notramo <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Friction.20with.20.60WINCH.60.20signal.20handling.20in.20.60basic-cli.60.html#644369987">(Nov 28 2026 at 14:46)</a>:</h4>
+<p>Currently, when the terminal is resized and the program is subscribed to the <code>WINCH</code> event, a resize cancels what the program is doing.</p>
+<p>Start a long running HTTP request, or a subprocess, and it gets canceled because the resize. All I want is to know the new size of the terminal, not to stop what the program is doing. Or not even know the size of the terminal, only that a resize happened, so the terminal will have to be checked some time later.</p>
+<p>In Zig or Crystal (and probably in Rust and Go and many other languages), it's approximately 3 minutes to write the necessary code by hand.<br>
+In Roc, I gave up after an hour of discussing different possible workaround hacks with an LLM.</p>
+<p>This kind of friction is what causes most developers to pick another language.<br>
+In Roc, hard tasks are easy, and trivial tasks are impossible.</p>
+
+
+
+<a name="644373691"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Friction%20with%20%60WINCH%60%20signal%20handling%20in%20%60basic-cli%60/near/644373691" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Friction.20with.20.60WINCH.60.20signal.20handling.20in.20.60basic-cli.60.html#644373691">(Nov 28 2026 at 15:21)</a>:</h4>
+<p>I'll take a look</p>
+
+
+
+<a name="644373700"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Friction%20with%20%60WINCH%60%20signal%20handling%20in%20%60basic-cli%60/near/644373700" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> notramo <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Friction.20with.20.60WINCH.60.20signal.20handling.20in.20.60basic-cli.60.html#644373700">(Nov 28 2026 at 15:21)</a>:</h4>
+<p>I was thinking about a possible solution, that enables the necessary flexibility, similar to other languages while still preserving the Roc paradigms.</p>
+<p>The platform would require a <code>signal_handler!</code> function.</p>
+<p>When a signal comes in, don't do anything with the main thread yet. Run the <code>signal_handler!</code> on another thread.</p>
+<p><code>signal_handler!</code> returns a struct with two fields:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>SignalHandlerReturn := {
+    ## `CustomResult` is a user-specified type.
+    ## The content of this field is stored in the platform.
+    result: CustomResult,
+
+    ## `Interrupt` causes an `Interrupted` error on the main thread (current behavior).
+    ## `Continue` does not disturb the main thread.
+    action: [Interrupt, Continue]
+}
+</code></pre></div>
+<p>The <code>CustomResult</code> is different in every app. In most apps it carries something like this:</p>
+<div class="codehilite" data-code-language="roc"><pre><span></span><code>CustomResult := {
+    event: [Resize(TerminalSize), Interrupt, Usr1]
+}
+
+TerminalSize := {
+    cols: U16,
+    lines: U16,
+}
+</code></pre></div>
+<p>This can be used to run custom logic to decide what happens:</p>
+<ul>
+<li>There are multiple ways to query the terminal size: ANSI codes or an <code>ioctl</code> call.</li>
+<li>Some programs might want to complete the current rendering cycle before handling an interrupt event.</li>
+<li>Some programs need to cancel on certain signals, while simply queue the other signals, e.g. until the next render cycle.</li>
+</ul>
+<p>Then <code>Signal.get_result!</code> can be used to access the <code>result</code> field in the struct returned by <code>signal_handler!</code>. Maybe repurpose <code>Signal.poll!</code>?</p>
+
+
+
+<a name="644373973"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Friction%20with%20%60WINCH%60%20signal%20handling%20in%20%60basic-cli%60/near/644373973" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Steve Howell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Friction.20with.20.60WINCH.60.20signal.20handling.20in.20.60basic-cli.60.html#644373973">(Nov 28 2026 at 15:24)</a>:</h4>
+<p>The <code>TerminalSize</code> concept might actually work in the browser too.</p>
+
+
+
+<a name="644376666"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Friction%20with%20%60WINCH%60%20signal%20handling%20in%20%60basic-cli%60/near/644376666" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Friction.20with.20.60WINCH.60.20signal.20handling.20in.20.60basic-cli.60.html#644376666">(Nov 28 2026 at 15:54)</a>:</h4>
+<blockquote>
+<p>When a signal comes in, don't do anything with the main thread yet. Run the <code>signal_handler!</code> on another thread.</p>
+</blockquote>
+<p>Here you would not have access to the app state right?</p>
+<p>We could do a <code>watch! : List(Request) =&gt; Try({}, [SignalErr(IOErr)])</code> which would allow you to register a specific event so it does not cancel anything. It would make <code>Stdin</code> reads and sleeps return <code>Interrupted</code> and on interrupt you can use <code>poll!</code> to check for the event, so:</p>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nx">Signal</span><span class="p">.</span><span class="nx">watch</span><span class="o">!</span><span class="p">([</span><span class="nx">WindowResize</span><span class="p">(</span><span class="nx">unix</span><span class="p">)])</span><span class="o">?</span>
+<span class="nx">Signal</span><span class="p">.</span><span class="nx">catch</span><span class="o">!</span><span class="p">([</span><span class="nx">Interrupt</span><span class="p">])</span><span class="o">?</span>
+
+<span class="nv">response</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Http</span><span class="p">.</span><span class="nx">send</span><span class="o">!</span><span class="p">(</span><span class="nx">request</span><span class="p">)</span><span class="o">?</span>
+
+<span class="nx">match</span><span class="w"> </span><span class="nx">Stdin</span><span class="p">.</span><span class="nx">bytes</span><span class="o">!</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">Ok</span><span class="nf">(bytes) =&gt;</span><span class="w"> </span><span class="nx">handle_input</span><span class="o">!</span><span class="p">(</span><span class="nx">bytes</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">Err</span><span class="nf">(Interrupted) =&gt;</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">Signal</span><span class="p">.</span><span class="nx">poll</span><span class="o">!</span><span class="p">().</span><span class="nx">contains</span><span class="p">(</span><span class="nx">WindowResize</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nx">redraw</span><span class="o">!</span><span class="p">()</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nx">cleanup_and_exit</span><span class="o">!</span><span class="p">()</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="nx">Err</span><span class="nf">(other) =&gt;</span><span class="w"> </span><span class="nx">Err</span><span class="p">(</span><span class="nx">other</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>What do you think?</p>
+
+
+
+<a name="644377593"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Friction%20with%20%60WINCH%60%20signal%20handling%20in%20%60basic-cli%60/near/644377593" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Steve Howell <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Friction.20with.20.60WINCH.60.20signal.20handling.20in.20.60basic-cli.60.html#644377593">(Nov 28 2026 at 16:05)</a>:</h4>
+<p>It would be nice if there was some synergy here for browser apps, because it's often useful to have a browser alternative for native apps, and we solve similar problems. Treat this as would-be-nice request, not a blocker, for me. The API is from Claude:</p>
+<div class="codehilite" data-code-language="CoffeeScript"><pre><span></span><code><span class="nx">roc</span>
+<span class="nx">app</span><span class="w"> </span><span class="p">[</span><span class="nx">init</span><span class="p">,</span><span class="w"> </span><span class="nx">step</span><span class="p">,</span><span class="w"> </span><span class="nx">view</span><span class="p">]</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">pf</span><span class="o">:</span><span class="w"> </span><span class="nx">platform</span><span class="w"> </span><span class="s">"canvas"</span><span class="w"> </span><span class="p">}</span>
+
+<span class="c1">## What the screen is right now. A terminal host fills the same record</span>
+<span class="c1">## in character cells; a canvas host in CSS pixels plus the pixel ratio.</span>
+<span class="nv">Viewport</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">width</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">U32</span><span class="p">,</span><span class="w"> </span><span class="nv">height</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">U32</span><span class="p">,</span><span class="w"> </span><span class="nv">scale</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">F32</span><span class="w"> </span><span class="p">}</span>
+
+<span class="c1">## Everything that happened since the last step, in order. Nothing interrupts.</span>
+<span class="nv">Event</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="nx">Resize</span><span class="p">(</span><span class="nx">Viewport</span><span class="p">),</span>
+<span class="w">    </span><span class="nx">Key</span><span class="p">({</span><span class="w"> </span><span class="nv">key</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Str</span><span class="p">,</span><span class="w"> </span><span class="nv">down</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Bool</span><span class="p">,</span><span class="w"> </span><span class="nv">mods</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Mods</span><span class="w"> </span><span class="p">}),</span>
+<span class="w">    </span><span class="nx">Pointer</span><span class="p">({</span><span class="w"> </span><span class="nv">x</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">F32</span><span class="p">,</span><span class="w"> </span><span class="nv">y</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">F32</span><span class="p">,</span><span class="w"> </span><span class="nv">buttons</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">U8</span><span class="p">,</span><span class="w"> </span><span class="nv">phase</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">Down</span><span class="p">,</span><span class="w"> </span><span class="nx">Move</span><span class="p">,</span><span class="w"> </span><span class="nx">Up</span><span class="p">]</span><span class="w"> </span><span class="p">}),</span>
+<span class="w">    </span><span class="nx">Wheel</span><span class="p">({</span><span class="w"> </span><span class="nv">dx</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">F32</span><span class="p">,</span><span class="w"> </span><span class="nv">dy</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">F32</span><span class="w"> </span><span class="p">}),</span>
+<span class="w">    </span><span class="nx">Focus</span><span class="p">(</span><span class="nx">Bool</span><span class="p">),</span>
+<span class="w">    </span><span class="nx">Visibility</span><span class="p">([</span><span class="nx">Shown</span><span class="p">,</span><span class="w"> </span><span class="nx">Hidden</span><span class="p">]),</span>
+<span class="w">    </span><span class="nx">Replied</span><span class="p">({</span><span class="w"> </span><span class="nv">id</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">U32</span><span class="p">,</span><span class="w"> </span><span class="nv">answer</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Reply</span><span class="w"> </span><span class="p">}),</span><span class="w">   </span><span class="c1"># the answer to an earlier Request</span>
+<span class="p">]</span>
+
+<span class="nv">Frame</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">now_ms</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">F64</span><span class="p">,</span><span class="w"> </span><span class="nv">dt_ms</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">F64</span><span class="p">,</span><span class="w"> </span><span class="nv">viewport</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Viewport</span><span class="p">,</span><span class="w"> </span><span class="nv">events</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">List</span><span class="p">(</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
+
+<span class="c1">## Work the app wants done outside: it answers later as a Replied event.</span>
+<span class="nv">Request</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="nx">Fetch</span><span class="p">({</span><span class="w"> </span><span class="nv">id</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">U32</span><span class="p">,</span><span class="w"> </span><span class="nv">url</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Str</span><span class="w"> </span><span class="p">}),</span>
+<span class="w">    </span><span class="nx">Store</span><span class="p">({</span><span class="w"> </span><span class="nv">key</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Str</span><span class="p">,</span><span class="w"> </span><span class="nv">bytes</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">List</span><span class="p">(</span><span class="nx">U8</span><span class="p">)</span><span class="w"> </span><span class="p">}),</span>
+<span class="w">    </span><span class="nx">Load</span><span class="p">({</span><span class="w"> </span><span class="nv">id</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">U32</span><span class="p">,</span><span class="w"> </span><span class="nv">key</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Str</span><span class="w"> </span><span class="p">}),</span>
+<span class="w">    </span><span class="nx">Sound</span><span class="p">({</span><span class="w"> </span><span class="nv">name</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Str</span><span class="w"> </span><span class="p">}),</span>
+<span class="w">    </span><span class="nx">Title</span><span class="p">(</span><span class="nx">Str</span><span class="p">),</span>
+<span class="p">]</span>
+
+<span class="nv">init</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Viewport</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">Model</span>
+<span class="nv">step</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="nx">Frame</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nv">model</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="nv">requests</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">List</span><span class="p">(</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">}</span>
+<span class="nv">view</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">Model</span><span class="p">,</span><span class="w"> </span><span class="nx">Viewport</span><span class="w"> </span><span class="nf">-&gt;</span><span class="w"> </span><span class="nx">List</span><span class="p">(</span><span class="nx">Shape</span><span class="p">)</span>
+</code></pre></div>
+
+
+
+<a name="644391845"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Friction%20with%20%60WINCH%60%20signal%20handling%20in%20%60basic-cli%60/near/644391845" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Friction.20with.20.60WINCH.60.20signal.20handling.20in.20.60basic-cli.60.html#644391845">(Nov 28 2026 at 18:36)</a>:</h4>
+<p>I feel like that API would shift basic-cli substantially towards a TUI platform and I'd rather have two different focused platforms in that case.</p>
+
+
+
+<a name="644392014"></a>
+<h4><a href="https://roc.zulipchat.com#narrow/stream/231634-beginners/topic/Friction%20with%20%60WINCH%60%20signal%20handling%20in%20%60basic-cli%60/near/644392014" class="zl"><img src="https://roc-lang.github.io/zulip-export/assets/img/zulip.svg" alt="view this post on Zulip" style="width:20px;height:20px;"></a> Anton <a href="https://roc-lang.github.io/zulip-export/stream/231634-beginners/topic/Friction.20with.20.60WINCH.60.20signal.20handling.20in.20.60basic-cli.60.html#644392014">(Nov 28 2026 at 18:38)</a>:</h4>
+<p>I think I lobbied for the removal of <code>enable_raw_mode!</code> from basic-cli many years ago for similar reasons.</p>
+
+
+
+<hr><p>Last updated: Nov 28 2026 at 19:10 UTC</p>
+</html>

@@ -1,0 +1,80 @@
+[
+    {
+        "content": "<p>I'm thinking about what the behavior for deriving encoding/decoding for <code>Num *</code> should be. Unlike certain low-level operations like <code>Num.toStr : Num * -&gt; Str</code>, implementors of the encoders/decoders don't have access to the compiler's code-generation procedure. That means they can't decide how to encode/decode a number after monomorphization.</p>\n<p>Actually, for encoding, it might be okay, since you could maybe piggy back off numeric operations to figure out a number's width, or us <code>Num.toStr</code>. But for decoding it would not work - if your serialization format represents integers as fixed-width bytes, how can you decode an arbitrary-width integer?</p>\n<p>With that in mind the question is what should happen for something like</p>\n<div class=\"codehilite\"><pre><span></span><code>decodeNum = \\decodeFmt, bytes -&gt;\n    when Decode.fromBytes bytes decodeFmt is\n        Ok num -&gt;\n            strNum = Num.toStr num\n            &quot;Your number was \\(strNum)&quot;\n        Err _ -&gt; &quot;I couldn&#39;t decode a number&quot;\n</code></pre></div>\n<p>I see two options:</p>\n<ul>\n<li>\n<p>Make it an error to try to encode/decode a <code>Num *</code>, or derivatives like <code>10016</code>, which we know has to be at least an <code>I16</code>, but is still a <code>Num *</code>. This has the obvious disadvantage that you need to add more type annotations to your program, but the upside is that the compiler won't try to encode/decode a number type that you didn't expect.</p>\n</li>\n<li>\n<p>Default encoding/decoding a <code>Num *</code> to the default number type, which currently is <code>I64</code>, or <code>F64</code> if we know it's a float. Those types might change later, but that's not too important. This is more ergonomic, and would work okay for things like JSON - things there would only go wrong when the decoded JSON number doesn't fit in an <code>I64</code>. That's possible even if you explicitly type the decoded number as <code>I64</code>, so maybe that's something that good documentation can remedy.</p>\n</li>\n</ul>\n<p>However the implications of this are more serious for serialization formats where numbers are sent as fixed bytes rather than strings. For example if we're decoding a buffer that has a number serialized as 4 big-endian bytes into a <code>Num *</code>, the compiler deciding that we are really decoding into a <code>I64</code> is no good. These are the kind of bugs that would be really difficult to debug, especially if you're not meticulously looking at the types in your program.</p>\n<p>With that, I'm inclined to think we should make this a warning or error in the compiler. To get some advantages in development, we could issue a warning/error, but also infer the default number type in dev builds - that way if something goes wrong, the developer has a hint of where to look. They'll need to add an explicit type annotation before productionizing the code anyway, to get rid of the error. Thoughts?</p>",
+        "id": 293930086,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1660753247
+    },
+    {
+        "content": "<p>Yeah I think it should be a warning or error. If you're running CI on your Roc app it should fail.</p>",
+        "id": 293936007,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1660755153
+    },
+    {
+        "content": "<p>So the compiler should return an error status</p>",
+        "id": 293936130,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1660755200
+    },
+    {
+        "content": "<p>Even for JSON, where 'it might work on a good day', the app developer should be forced to resolve that ambiguity. I think it's one of the key features of languages like Roc/Elm/Haskell that they force you to deal with stuff like this.</p>",
+        "id": 293938412,
+        "sender_full_name": "Brian Carroll",
+        "timestamp": 1660755888
+    },
+    {
+        "content": "<p>I think warning but not error makes the most sense for decoding - e.g. it says \"warning: since this number is only ever used with other <code>Num *</code> values, it will be decoded into an <code>I64</code> by default - but this default behavior may not be what you want! You could be more specific about the number type you expect by adding a type annotation, or by passing it to a function which requires a more specific number type than <code>Num *</code>.\"</p>\n<p>(And maybe a similar error for <code>Int *</code>, <code>Frac *</code>, etc.) - so it doesn't block you if you're just prototyping an implementation that decodes from JSON, but it does warn you about it so you know how to make it more explicit</p>",
+        "id": 293948063,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1660759194
+    },
+    {
+        "content": "<p>I think the same case could be made for encoding, too - e.g. if I'm encoding to a binary format and I just give it <code>Num *</code>, and it defaults to encoding with <code>I64</code>, is <code>I64</code> what the recipient of the encoded data expects? Maybe, maybe not - the only way to be sure is to be explicit</p>",
+        "id": 293948324,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1660759271
+    },
+    {
+        "content": "<p>yeah I think it needs to be the same for encoding and decoding</p>",
+        "id": 293948730,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1660759404
+    },
+    {
+        "content": "<p>I don't think it's feasible, either, to add a <code>anyNumber : Num * -&gt; Encoder (Num *) fmt | fmt has EncoderFormatting</code> member to the <code>EncoderFormatting</code> ability, for the reasons described above - the implementer of this ability member would not have a good way of determining how wide the passed number is, without perhaps some clever hacks</p>",
+        "id": 293949035,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1660759508
+    },
+    {
+        "content": "<p>agreed!</p>",
+        "id": 293950071,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1660759976
+    },
+    {
+        "content": "<p>actually, I guess in principle, there could be a new <code>Num.toBigEndianBytes : Num * -&gt; List U8</code> and <code>Num.toLittleEndianBytes: Num * -&gt; List U8</code> that could resolve the <code>anyNumber</code> problem</p>",
+        "id": 293950355,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1660760100
+    },
+    {
+        "content": "<p>those allocations though <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 293950473,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1660760144
+    },
+    {
+        "content": "<p>might be fine after constant lists though, since the list can then be represented with a zero capacity and the elements are just the number. so no allocations</p>",
+        "id": 293950630,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1660760208
+    },
+    {
+        "content": "<p>although I still don't think it would be worth adding for just Encode even if that's possible. Better to be consistent between encode and decode where we can be</p>",
+        "id": 293950905,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1660760328
+    }
+]

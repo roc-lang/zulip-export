@@ -1,0 +1,68 @@
+[
+    {
+        "content": "<p>For the new zig compiler it sounds like we are hoping to:</p>\n<ol>\n<li>embedded lld directly into roc</li>\n<li>share code with or hoist code from the actual zig compiler to interact with llvm</li>\n</ol>\n<p>From what I can tell, if we use the C++ api, we are able to fully interact with llvm and lld. Here is how zig calls <code>lld</code> for example: <a href=\"https://github.com/ziglang/zig/blob/a8af36ab10562e58ba237fa3dcc582228197402b/src/zig_llvm.cpp#L528-L541\">https://github.com/ziglang/zig/blob/a8af36ab10562e58ba237fa3dcc582228197402b/src/zig_llvm.cpp#L528-L541</a></p>\n<p>This is where zig does actually llvm codegen: <a href=\"https://github.com/ziglang/zig/blob/4de2b1ea65e6b54cedfe56268a8bf8e9446addb0/src/codegen/llvm.zig\">https://github.com/ziglang/zig/blob/4de2b1ea65e6b54cedfe56268a8bf8e9446addb0/src/codegen/llvm.zig</a><br>\nIf I understand correctly, they end up directly generating a bc file to not have to deal with the fact the llvm abi constantly changes and it is really annoying (at my work we update llvm weekly to avoid the pain of large breaking changes). This is technically slower, but probably worth it. inkwell updates have always been a painpoint of the rust compiler. Directly generating bc files probably will alleveate that pain (it also makes it easier to distribute a version of roc that is only the interpreter, like for wasm)</p>\n<p>From a quick scan, their llvm bitcode writer looks to be mostly a standalone library: <a href=\"https://github.com/ziglang/zig/tree/4de2b1ea65e6b54cedfe56268a8bf8e9446addb0/src/codegen/llvm\">https://github.com/ziglang/zig/tree/4de2b1ea65e6b54cedfe56268a8bf8e9446addb0/src/codegen/llvm</a></p>\n<p>As such, I would assume there is probably a way we could fully share that code with zig instead of duplicating it.</p>\n<hr>\n<p>One think I am not sure of is how we want to actually deal with building/packaging llvm. If we want to enable cross compilation of the entire compiler, we probably could statically build llvm with cmake (still might not be fun to cross compile, but should be possible). On top of that, this would mean that roc could be nearly fully standalone just needing to run <code>zig build</code>. The downside of this is that compiling roc requires compiling llvm (luckily that only has to be done once every six months to a year when we update).</p>\n<p>If I understand how the actual zig compiler builds (which I might not, just skimmed source some), they support both finding the library locally and compiling from source using cmake. So we also technically have that option. I think that either way we would be compiling llvm in as a static library (that is the standard for llvm).</p>\n<hr>\n<p>This likely will take a bit to get right (especially in terms of build scripts and the right factoring to share with the actual zig compiler). This is just my preliminary analysis to get the ball rolling</p>\n<hr>\n<p><span class=\"user-mention\" data-user-id=\"406911\">@Andrew Kelley</span> any tips, expected pitfalls, or general things we should be aware of around wrangling llvm and potentially sharing code with the actual zig compiler?</p>",
+        "id": 498470420,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738992081
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20managing.20llvm/near/498470420\">said</a>:</p>\n<blockquote>\n<p>If I understand correctly, they end up directly generating a bc file to not have to deal with the fact the llvm abi constantly changes and it is really annoying (at my work we update llvm weekly to avoid the pain of large breaking changes).</p>\n</blockquote>\n<p>to clarify, my primary motivation is <a href=\"https://github.com/ziglang/zig/issues/16270\">https://github.com/ziglang/zig/issues/16270</a> - in other words it is a step towards complete elimination of all llvm libraries from the zig executable. Second reason is that it's possible to do incremental compilation with .bc files while it's not with the IRBuilder API. Your quoted point also stands, however.</p>",
+        "id": 498475478,
+        "sender_full_name": "Andrew Kelley",
+        "timestamp": 1738996911
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20managing.20llvm/near/498470420\">said</a>:</p>\n<blockquote>\n<p>As such, I would assume there is probably a way we could fully share that code with zig instead of duplicating it.</p>\n</blockquote>\n<p>happy to extract this into a proper package that exposes a module so you can depend on it via the build system if you wish, and we can independently maintain it together in a separate repo from ziglang/zig</p>",
+        "id": 498475648,
+        "sender_full_name": "Andrew Kelley",
+        "timestamp": 1738997061
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"343810\">Brendan Hansknecht</span> <a href=\"#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20managing.20llvm/near/498470420\">said</a>:</p>\n<blockquote>\n<p>One think I am not sure of is how we want to actually deal with building/packaging llvm.</p>\n</blockquote>\n<p>I believe you are conceptualizing the use case that we solve with <a href=\"https://github.com/ziglang/zig-bootstrap\">https://github.com/ziglang/zig-bootstrap</a></p>\n<p>This is how we produce upstream builds that are hosted on <a href=\"http://ziglang.org/download\">ziglang.org/download</a></p>\n<p>However you'll still want to support a traditional way of building against host libraries, with host C toolchain, for system package maintainers to use (i.e. debian, homebrew, etc)</p>",
+        "id": 498475805,
+        "sender_full_name": "Andrew Kelley",
+        "timestamp": 1738997242
+    },
+    {
+        "content": "<p>for creating cross-compiled upstream-provided builds of roc, including linking against llvm, you might consider maintaining a fork of zig-bootstrap. </p>\n<p>it's really conceptually simple - literally the only thing that isn't a copy paste of zig, llvm, lld, or clang, is a 200 line shell script that has <strong>no branching logic</strong>. I recommend to give it a read, it's quite straightforward.</p>\n<p>you should be able to get that going today with even just the tokenizer that you have. I don't think you need to solve any problems to do that</p>",
+        "id": 498476236,
+        "sender_full_name": "Andrew Kelley",
+        "timestamp": 1738997700
+    },
+    {
+        "content": "<p>literally just</p>\n<div class=\"codehilite\" data-code-language=\"Diff\"><pre><span></span><code><span class=\"gd\">-cd \"$ROOTDIR/zig\"</span>\n<span class=\"gi\">+cd \"$ROOTDIR/roc\"</span>\n</code></pre></div>",
+        "id": 498476377,
+        "sender_full_name": "Andrew Kelley",
+        "timestamp": 1738997836
+    },
+    {
+        "content": "<p>Man those cmake commands have too many config options, but yes, wow, that is super simple.</p>",
+        "id": 498476809,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738998250
+    },
+    {
+        "content": "<p>The more I learn about zig the more I realize that it (or related projects) really do solve all tooling problems.</p>",
+        "id": 498477029,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738998451
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"406911\">Andrew Kelley</span> <a href=\"#narrow/stream/395097-compiler-development/topic/zig.20compiler.20-.20managing.20llvm/near/498475648\">said</a>:</p>\n<blockquote>\n<p>happy to extract this into a proper package that exposes a module so you can depend on it via the build system if you wish, and we can independently maintain it together in a separate repo from ziglang/zig</p>\n</blockquote>\n<p>That would be awesome!</p>",
+        "id": 498477152,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1738998560
+    },
+    {
+        "content": "<p>Not that this has actual llvm in it (cause roc doesn't import llvm yet), but just testing bootstrapping and cross compiling.</p>\n<p>For anyone on aarch64 mac or x86_64 linux, please run these. If they work, just give a <span aria-label=\"check\" class=\"emoji emoji-2705\" role=\"img\" title=\"check\">:check:</span> response, if not, share the issue.</p>\n<p><a href=\"/user_uploads/22008/XuBWH_vRIrRQEqynFOGdxmmB/roc-aarch64-macos-none-baseline\">roc-aarch64-macos-none-baseline</a><br>\n<a href=\"/user_uploads/22008/H6-j9PmDEneZprCMTmu1B7D4/roc-x86_64-linux-musl-baseline\">roc-x86_64-linux-musl-baseline</a></p>",
+        "id": 498539636,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739051954
+    },
+    {
+        "content": "<p>Next will probably embedded lld into roc and test things.</p>",
+        "id": 498540300,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1739052474
+    }
+]

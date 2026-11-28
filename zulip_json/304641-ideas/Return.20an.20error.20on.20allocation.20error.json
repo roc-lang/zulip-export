@@ -1,0 +1,122 @@
+[
+    {
+        "content": "<p>I watched the [talk]https://www.youtube.com/watch?v=zMRfCZo8eAc from <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> at software you can love and it was fascinating. My question is, what would be necessary to change in roc, to make a pattern like this more accessible for other platforms.</p>\n<p>There is already the idea to pass around an allocator. Here is the <a href=\"https://github.com/roc-lang/roc/issues/6382\">issue</a>.</p>\n<p>With this change, it would be possible for <code>roc_alloc</code> to save an error to the context, so that when roc crashes, you could find out, that roc has to be called again with more memory.</p>\n<p>But there still is the problem, that roc would just crash, when roc_alloc returns a zero pointer.</p>\n<p>What do you think about the idea, that roc would not crash, but returns that error to the caller?</p>\n<p>This would mean, that functions like <code>roc__mainForHost_0_caller</code> or <code>roc__mainForHost_1_exposed_generic</code> would need to return something. I guess, that an int value would be sufficient. A problem would be <code>roc__mainForHost_1_exposed</code> that already returns a value. But maybe, this function could be removed in favour of always using <code>roc__mainForHost_1_exposed_generic</code>.</p>\n<p><span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> do you think with the allocator idea and an error-value from <code>roc_alloc</code> it would be possible to build a platform, that never allocates without <code>longjmp</code>?</p>",
+        "id": 468999615,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1725950848
+    },
+    {
+        "content": "<p>that would not just work. Without longjump, you'd have to do what is called unwinding the stack: bubble the error upwards until you catch it at some point</p>",
+        "id": 469072480,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1725970297
+    },
+    {
+        "content": "<p>this is similar to the fallible allocation in rust: what do you do when you run out of memory? likely the thing you attempted was fine, and the excessive memory usage happened much earlier and is not the fault of the allocation that broke the camel's back</p>",
+        "id": 469072667,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1725970357
+    },
+    {
+        "content": "<p>When I understand your talk correctly, then you are basically calling:</p>\n<div class=\"codehilite\"><pre><span></span><code>when setjump(ctx) is\n  0 -&gt;\n    threadlocal_memory_bucket = small_memory_bucket\n    roc__mainForHost_1_exposted_generic( ...)\n  1 -&gt;\n   log()\n    threadlocal_memory_bucket = bigger_memory_bucket\n    roc__mainForHost_1_exposted_generic(...)\n\nroc_alloc(...) {\n  ptr = alloc_from_bucket(threadlocal_memory_bucket )\n  if ptr == 0 then\n    longjump(ctx, 1)\n else\n    return ptr\n}\n</code></pre></div>\n<p>When <code>roc__mainForHost_1_exposted_generic</code> would return 1, when any call to roc_alloc returns 0, then this should do the same:</p>\n<div class=\"codehilite\"><pre><span></span><code>threadlocal_memory_bucket = small_memory_bucket\nerr = roc__mainForHost_1_exposted_generic(...)\nif err == 1 then\n  log()\n  threadlocal_memory_bucket = bigger_memory_bucket\n  roc__mainForHost_1_exposted_generic(...)\n</code></pre></div>\n<p>I think it is not necessary to unwind the stack, when all functions just return an error code as a value.</p>\n<p>I you start <code>roc__mainForHost_1_exposted_generic</code> with an empty bucket, then the excessive memory usage has to be somewhere in roc. You use <code>longjmp</code> to call roc again, but shouldn't it be possible to do the same thing by returning an error code as a value?</p>\n<p>Is there something I misunderstand?</p>",
+        "id": 469094386,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1725975543
+    },
+    {
+        "content": "<p>well, you still pass through all the stack frames if they all return right? But yes if you still do the memory management with the buckets then that can work on a technical level. A complication is that all functions then do need to return an error code, also any stdlib function that can (transitively) allocate</p>",
+        "id": 469109179,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1725978512
+    },
+    {
+        "content": "<p>So this is the idea. And since <span class=\"user-mention\" data-user-id=\"343810\">@Brendan Hansknecht</span> has to touch all functions anyway to include the allocator, maybe he could also add a return value <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 469112777,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1725979126
+    },
+    {
+        "content": "<p>Do you want it to be cleaning up the stack and all roc allocations as it returns? Basically like a full exception unwind in c++?</p>",
+        "id": 469117701,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1725979789
+    },
+    {
+        "content": "<p>If the platform knows all the resources roc could have allocated, panic + longjmp + cleanup will likely be much much faster. Also simply crashing for platforms that want it will be much faster as well.</p>\n<p>If the platform doesn't know the resources roc could allocate. This could make sense as a more proper clean up. Though you probably would want to do it with exceptions and libunwind to minimize costs to the happy case.</p>",
+        "id": 469118499,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1725979944
+    },
+    {
+        "content": "<p>I am not familiar with the necessary code. Maybe what I am thinking about is not possible.</p>\n<p>What I am thinking about is no exception at all, but to return an error as a value. Like a <code>Result a [OutOfMemory]</code> in roc, or an <code>(foo, error)</code> in go.</p>",
+        "id": 469118564,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1725979957
+    },
+    {
+        "content": "<p>Sure, but my two questions are:</p>\n<ol>\n<li>What is the actual underlying goal?</li>\n<li>Does roc need to cleanup everything it has access to? (Basically deal with all refcount decrements and dealloc calls)</li>\n</ol>",
+        "id": 469119152,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1725980038
+    },
+    {
+        "content": "<p>The goal is to get a zero-allocation platform, but without <code>longjmp</code>. For example, I don't think <code>longjmp</code> is possible in a go platform. If the memory bucket is full, then I have to inform the callside somehow, that roc has to be restarted with a bigger bucket. So instead of a crash, an \"OutOfMemory\" error would be nicer.</p>\n<p>It is probably saver, if roc would cleanup everything it has access to. But I am not sure if this is really necessary.</p>",
+        "id": 469120783,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1725980272
+    },
+    {
+        "content": "<p>I see....hmmm <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 469122015,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1725980496
+    },
+    {
+        "content": "<p>I totally get the goal, but my gut feeling is that it isn't something we would want to support. Crashes are meant to be exceptional and are really better handled with exception related mechanisms like longjmp and libunwind. Those would have a much smaller perf impact on the common case of no exception being raised.</p>",
+        "id": 469122883,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1725980622
+    },
+    {
+        "content": "<p>Like if we were to implement this is roc today, I think we would implement it via setjmp and longjmp.</p>",
+        "id": 469123126,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1725980656
+    },
+    {
+        "content": "<p>Then just return a final error</p>",
+        "id": 469123250,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1725980675
+    },
+    {
+        "content": "<p>I also think that unwinding for most platforms wouldn't be needed. The platform likely can use an arena for roc and track the resources that roc opens. As such, the platform can quickly reset the arena and free all the resources if roc happens to crash. No need for any slow unwind.</p>",
+        "id": 469123789,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1725980759
+    },
+    {
+        "content": "<p>Ok. I get it. I though the performance is not an issue, since an OutOfMemory does not happens often. But when I understand you correctly, then the performance is worth in the happy case. I get, that this would be bad.</p>\n<p>What I don't get is, why <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> needed <code>longjmp</code>.  Why couldn't he use the solution you propose? I though he sad in his talk, that a unwind above ffi is a problem. But you are saying, that it does not even need an unwind?</p>",
+        "id": 469129489,
+        "sender_full_name": "Oskar Hahn",
+        "timestamp": 1725982061
+    },
+    {
+        "content": "<p>I would need to look at NEA again to remember all of the details. That said, my proposed solution would use longjmp still.</p>\n<p>For unwind, yeah, it doesn't necessarily work over ffi. So it would need to be done within roc. Essentially for unwind, to work, it would be something like:</p>\n<ol>\n<li>alloc would fail</li>\n<li>the platform would let roc know via a result</li>\n<li>roc would run lib unwind internally</li>\n<li>Roc would catch the exception and end the unwind</li>\n<li>Roc would return a result of the failure to the host.</li>\n</ol>",
+        "id": 469134257,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1725983239
+    },
+    {
+        "content": "<p>setjmp/longjmp was simpler and faster. But also it's dangerous and cursed</p>",
+        "id": 469141690,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1725984496
+    },
+    {
+        "content": "<p>100%</p>\n<p>Though I don't know enough about libunwind to know how cursed it is under the hood</p>",
+        "id": 469167881,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1725990361
+    }
+]

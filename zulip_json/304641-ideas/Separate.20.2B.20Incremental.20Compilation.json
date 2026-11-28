@@ -1,0 +1,590 @@
+[
+    {
+        "content": "<p>I'd like to start a conversation around what we can do to hedge for a good separate and incremental compilation experience. Currently, Roc operates as a whole-program compiler, and this breaks separate module boundaries due to guaranteed call specialization and guaranteed defunctionalization.</p>\n<p>I was talking to someone who works on OCaml and they noted that indeed you want whole-program analysis, but during development separate (and incremental) compilation is key. So one proposal is - during development builds, defunctionalize only within a module (and, perhaps extend this to specialize only within a module). Any types that escape, or are used by a module, would be boxed if they were functionalized. This can also be extended to specialization, where generic values that escape a module are compiled to be runtime-polymorphic.</p>",
+        "id": 341145468,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1678548646
+    },
+    {
+        "content": "<p>that seems fine to me conceptually, although I definitely wonder about implementation complexity <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span></p>",
+        "id": 341146122,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678548883
+    },
+    {
+        "content": "<p>that said, I also wonder about implementation complexity of alternatives</p>",
+        "id": 341146154,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678548894
+    },
+    {
+        "content": "<p>I think specialization is the general problem for incremental compiles</p>",
+        "id": 341146305,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678548963
+    },
+    {
+        "content": "<p>like if we didn't specialize at all, for example, then we could compile a given module all the way down to a binary representation of everything</p>",
+        "id": 341146411,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678548990
+    },
+    {
+        "content": "<p>This is why rust splits out frontend and codegen, right? frontend gets enough info that other <del>modules</del>crates can start specializing.</p>",
+        "id": 341146455,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1678549012
+    },
+    {
+        "content": "<p>might be one reason!</p>",
+        "id": 341146587,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549073
+    },
+    {
+        "content": "<p>Defunctionalization is a form of specialization for us, but it's different enough that it think it warrants logically separating</p>\n<p>the big to avoid is not having to re-enter an upstream module that you've already compiled as a dependency. That currently is not guaranteed, because a downstream depender can arbitrarily issue a new specialization (including injecting a new function, forcing a fresh defunctionalization) of an upstream module</p>",
+        "id": 341146904,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1678549182
+    },
+    {
+        "content": "<p>so imagining no specialization, after compiling a given module for the first time, we could store on disk:</p>\n<ul>\n<li>a compact binary representation of all of its publicly exposed names and types (we'd do this for <code>roc check</code> too, not just for full builds)</li>\n<li>a directly linkable binary machine code output of it on whatever target we were building for</li>\n</ul>",
+        "id": 341147095,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549239
+    },
+    {
+        "content": "<p>right exactly</p>",
+        "id": 341147120,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549248
+    },
+    {
+        "content": "<p>one challenge I'm not sure how to solve with the \"box things sometimes\" approach: closures can be sent to platforms, and the host expects them to be defunctionalized regardless of where they originated</p>",
+        "id": 341147297,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549322
+    },
+    {
+        "content": "<p>so if we had some boundary across which we don't defunctionalize, a closure could get passed from one module to another and then eventually to the host, where its having been boxed would break the host</p>",
+        "id": 341147398,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549350
+    },
+    {
+        "content": "<p>Why would it break the host? The host can't do anything with closure other than call it right? Every boxed closure would have the same representation as seen by the host, as long as you distinguish between development and release builds. Even if there were additional constraints, glue could paper over them</p>",
+        "id": 341147588,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1678549439
+    },
+    {
+        "content": "<p>the host assumes the captured data is unboxed</p>",
+        "id": 341147682,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549457
+    },
+    {
+        "content": "<p>actually - <span class=\"user-mention\" data-user-id=\"281543\">@Folkert de Vries</span> you might remember which way we ended up going on this - I think maybe we just give the host a pointer</p>",
+        "id": 341147823,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549507
+    },
+    {
+        "content": "<p>like the host has to call a function which returns a pointer to the captured data</p>",
+        "id": 341147865,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549528
+    },
+    {
+        "content": "<p>Glue can paper over that right. whether the data is captured or not matters only for calling the closure, the code for which we can generate</p>",
+        "id": 341147910,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1678549545
+    },
+    {
+        "content": "<p>well what we do now is get the size of the closure, and then provide a buffer for the function to be written into</p>",
+        "id": 341147915,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1678549548
+    },
+    {
+        "content": "<p>oh perfect</p>",
+        "id": 341148040,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549569
+    },
+    {
+        "content": "<p>so whether the buffer is boxed or unboxed doesn't matter, right?</p>",
+        "id": 341148102,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549578
+    },
+    {
+        "content": "<p>How useful would it be to cache each module by specialization? If the module is just a dependency, that caching would likely rarely change. When it does change, you just have to compile the module for one new specialization. When editing a specific module, of course you would have to pay to update all specializations, but I assume that would greatly lower the cost.</p>",
+        "id": 341148105,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1678549578
+    },
+    {
+        "content": "<p>the host can't tell</p>",
+        "id": 341148109,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549579
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/304641-ideas/topic/Separate.20.2B.20Incremental.20Compilation/near/341147910\">said</a>:</p>\n<blockquote>\n<p>Glue can paper over that right. whether the data is captured or not matters only for calling the closure, the code for which we can generate</p>\n</blockquote>\n<p>technically glue can't - both glue and the host don't (and I think realistically can't) know about dev vs release distinction</p>",
+        "id": 341148181,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549603
+    },
+    {
+        "content": "<p>but the host does call code from the application</p>",
+        "id": 341148203,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549612
+    },
+    {
+        "content": "<p>and <em>that</em> can be different on dev vs release</p>",
+        "id": 341148224,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549617
+    },
+    {
+        "content": "<p>and this is one of the cases where that seems to be true!</p>",
+        "id": 341148242,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549624
+    },
+    {
+        "content": "<p>yeah the captures are just a bunch of bytes (stored in  a <code>RocList</code> at the moment)</p>",
+        "id": 341148257,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1678549628
+    },
+    {
+        "content": "<p>(btw I gotta go for a bit, back later!)</p>",
+        "id": 341148264,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1678549631
+    },
+    {
+        "content": "<p>yes, the code we generate in the application is what I mean</p>",
+        "id": 341148298,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1678549658
+    },
+    {
+        "content": "<p>We could always force glue to \"just\" call a function generated in the application for the closure application, whether or not that's something that is done today</p>",
+        "id": 341148446,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1678549716
+    },
+    {
+        "content": "<p>that is what we do today</p>",
+        "id": 341148692,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1678549810
+    },
+    {
+        "content": "<p>but the platform has to hold on to the captured bytes for a little bit</p>",
+        "id": 341148721,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1678549821
+    },
+    {
+        "content": "<p>how it gets those bytes, and what is in there exactly, does not matter</p>",
+        "id": 341148756,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1678549834
+    },
+    {
+        "content": "<p>you will however need to make sure the platform works when running in both debug and release mode</p>",
+        "id": 341148817,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1678549855
+    },
+    {
+        "content": "<p>and likely that means calling different functions</p>",
+        "id": 341148839,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1678549863
+    },
+    {
+        "content": "<p>I think that's where I might be losing you. I don't see why we need to call different functions, as long as both the \"get captures\" and \"call the closure\" wrapper are generated by Roc</p>",
+        "id": 341149111,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1678549975
+    },
+    {
+        "content": "<p>I think the signature of  \"get captures\" is different between the two cases. In debug, the data is already boxed, so that function can return a pointer. In release mode, the platform makes the allocation and the roc code writes bytes into this allocation</p>",
+        "id": 341150611,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1678550633
+    },
+    {
+        "content": "<p>right - but that is okay even in the debug mode right? like, it might be seen as a deoptimization, but the Roc code could, instead of returning a pointer to the boxed data, write the pointer into the buffer given to it by the platform (or even copy the captures into that buffer). And then the Roc code generated to call the closure could read from the buffer appropriately again. I realize it's a bit wasteful but my claim is we can preserve the same interface, and if it's a debug build, it doesn't need to be optimized</p>",
+        "id": 341153065,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1678551640
+    },
+    {
+        "content": "<p>hmm, yes that should work</p>",
+        "id": 341153164,
+        "sender_full_name": "Folkert de Vries",
+        "timestamp": 1678551684
+    },
+    {
+        "content": "<p><a class=\"stream-topic\" data-stream-id=\"231634\" href=\"/#narrow/stream/231634-beginners/topic/Compile.20time.20performance\">#beginners &gt; Compile time performance</a> is another motivation for this. I have some ideas on how to deal with the problems presented there in the near term, but we will always have a fundamental problem of needing to pay a linear cost to check the recursiveness of large, structural types (including lambda sets), and caching is not one-shot because we must invalidate after unification.</p>",
+        "id": 343196926,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679336924
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"454654\">Ayaz Hafiz</span> <a href=\"#narrow/stream/304641-ideas/topic/Separate.20.2B.20Incremental.20Compilation/near/343196926\">said</a>:</p>\n<blockquote>\n<p>we will always have a fundamental problem of needing to pay a linear cost to check the recursiveness of large, structural types (including lambda sets), and caching is not one-shot because we must invalidate after unification.</p>\n</blockquote>\n<p>I wonder if there's a way to use type annotations to help with that <span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span></p>",
+        "id": 343201030,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679338087
+    },
+    {
+        "content": "<p>it can help to an extent, but unless we switch to a nominal type system I don't think it's a foolproof suggestion</p>",
+        "id": 343201230,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679338160
+    },
+    {
+        "content": "<p>oh sure, I just wonder to what extent</p>",
+        "id": 343201304,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679338183
+    },
+    {
+        "content": "<p>like let's say someone has annotated all the types that use recursion (including lambda sets)</p>",
+        "id": 343201431,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679338210
+    },
+    {
+        "content": "<p>how close would that get us to nominal types?</p>",
+        "id": 343201456,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679338218
+    },
+    {
+        "content": "<p>in terms of perf</p>",
+        "id": 343201479,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679338226
+    },
+    {
+        "content": "<p>We would be at it, but that supposes that we do not actually need to do inference of types. if we need to do inference, the problem resurges immediately. maybe you could do something clever with bidirectional or tridirectional type checking, but such a system is not immediately clear to me</p>",
+        "id": 343201742,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679338305
+    },
+    {
+        "content": "<p>I don't think we can a-priori use that for lambda set inference, without forcing lambda sets to be expressible in the user syntax, which I don't believe we'd like to do.</p>",
+        "id": 343201770,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679338313
+    },
+    {
+        "content": "<p>yeah definitely not</p>",
+        "id": 343202687,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679338561
+    },
+    {
+        "content": "<p>to be honest, I expect that in practice people will approximately always be annotating large recursive types</p>",
+        "id": 343202808,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679338585
+    },
+    {
+        "content": "<p>the main situation where in general I'd expect types to be un-annotated are:</p>\n<ul>\n<li>when someone is learning, teaching material can omit types for small programs before introducing Roc's type system</li>\n<li>if someone is doing Advent of code or a small script, they may not want to annotate things (but also seem very unlikely to handwrite a large recursive type)</li>\n<li>using underscores in type annotations for <code>Task</code> (for error types and/or effect types specifically) - so, ordinary tag union unification</li>\n</ul>",
+        "id": 343203179,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679338714
+    },
+    {
+        "content": "<p>put another way, if getting the best performance for large recursive types involved optimizing for the case where they're annotated, I would expect people to very rarely notice <span aria-label=\"big smile\" class=\"emoji emoji-1f604\" role=\"img\" title=\"big smile\">:big_smile:</span></p>",
+        "id": 343203436,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679338799
+    },
+    {
+        "content": "<p>that may be true, but we cannot give up inference, as long as we want to support it, even if there are some annotations. We must perform inference and check those against annotations (in fact, this is why annotations cause us to do more work - we must infer, then check against the annotation). If we only check and try to avoid inference, our type system breaks down (I can link some issues from the past).</p>\n<p>Even if we were able to use annotations for structural types to lower the type-checking cost, that wouldn't address the problem for lambda sets, which is the specific problem I linked to that Agus observed.</p>",
+        "id": 343203625,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679338834
+    },
+    {
+        "content": "<p>hmm, yeah that's fair</p>",
+        "id": 343203880,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679338902
+    },
+    {
+        "content": "<p>lambda sets are exactly the large, recursive types you might observe, but they can never be annotated in the user syntax</p>",
+        "id": 343203950,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679338923
+    },
+    {
+        "content": "<p>in fact, they are likely to be far larger than any explicitly-defined recursive type written out by a user</p>",
+        "id": 343204082,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679338960
+    },
+    {
+        "content": "<p>since in general, they would consist of a superset of the recursive structural type they appear under</p>",
+        "id": 343204189,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679338996
+    },
+    {
+        "content": "<p>is the issue there that the lambda set itself is really big?</p>",
+        "id": 343204286,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339023
+    },
+    {
+        "content": "<p>e.g. a parser that returns a continuation to another parser has a lambda set that captures the type of the entire parser type structure that the user has written out</p>",
+        "id": 343204331,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339035
+    },
+    {
+        "content": "<p>or that it's big enough that inference around it gets slowed down</p>",
+        "id": 343204333,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339036
+    },
+    {
+        "content": "<p>inference gets slow</p>",
+        "id": 343204368,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339043
+    },
+    {
+        "content": "<p>we have to check for recursion</p>",
+        "id": 343204421,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339052
+    },
+    {
+        "content": "<p>which demands an occurs check since the type system is structural</p>",
+        "id": 343204486,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339064
+    },
+    {
+        "content": "<p>so when we're checking for recursion in the lambda set, that's recursion on the data structures the lambda it captures? or recursion in the functions themselves? or both?</p>",
+        "id": 343204805,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339158
+    },
+    {
+        "content": "<p>or something else?</p>",
+        "id": 343204818,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339160
+    },
+    {
+        "content": "<p>it's recursion of the lambda set itself</p>",
+        "id": 343205725,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339403
+    },
+    {
+        "content": "<p>just like how tag unions can be recursive, so can lambda sets</p>",
+        "id": 343205780,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339413
+    },
+    {
+        "content": "<p>hm, how would that manifest in practice?</p>",
+        "id": 343205864,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339441
+    },
+    {
+        "content": "<p>like what would cause a lambda set to be recursive</p>",
+        "id": 343205888,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339451
+    },
+    {
+        "content": "<p>That is to say, you can have a function that \"captures itself\", and that must be handled</p>",
+        "id": 343205909,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339457
+    },
+    {
+        "content": "<p>oh it happens quite often</p>",
+        "id": 343205922,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339461
+    },
+    {
+        "content": "<p>task continuations are one example</p>",
+        "id": 343205950,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339472
+    },
+    {
+        "content": "<p>gotcha</p>",
+        "id": 343205997,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339487
+    },
+    {
+        "content": "<p>so a function that recurses would be one way for that to happen, but also it could just (for some reason) return itself</p>",
+        "id": 343206071,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339514
+    },
+    {
+        "content": "<p>or even theoretically use itself in a calculation, by passing itself to another function and then not returning that answer</p>",
+        "id": 343206155,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339530
+    },
+    {
+        "content": "<p>here is an example/explainer comment I have in the solve code</p>\n<div class=\"codehilite\"><pre><span></span><code>Lambda sets may be recursive. For example, consider the annotated program\n\n```text\nXEffect : A -&gt; B\n\nafter : ({} -&gt; XEffect) -&gt; XEffect\nafter =\n    \\cont -&gt;\n        f = \\A -[`f (typeof cont)]-&gt; when cont {} is A -&gt; B\n        f\n\nnestForever : {} -&gt; XEffect\nnestForever = \\{} -[`nestForever]-&gt; after nestForever\n^^^^^^^^^^^ {} -[`nestForever]-&gt; A -[`f ({} -[`nestForever]-&gt; A -[`f ...]-&gt; B)]-&gt; B\n```\n\nwhere [`nestForever] and [`f ...] refer to the lambda sets of their respective arrows. `f`\ncaptures `cont`. The usage of `after` in `nestForever` means that `nestForever` has type\n``nestForever : {} -[`nestForever]-&gt; A -[`f (typeof cont)]-&gt; B``. But also, `after` is called\nwith ``nestForever`, which means in this case `typeof cont = typeof nestForever``. So we see\nthat ``nestForever : {} -[`nestForever]-&gt; A -[`f (typeof nestForever)]-&gt; B``, and the lambda\nset ``[`f (typeof nestForever)]`` is recursive.\n\nHowever, we don&#39;t know if a lambda set is recursive or not until type inference.\n</code></pre></div>",
+        "id": 343206177,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339538
+    },
+    {
+        "content": "<p>this is a simplified example of what <code>Effect.after</code> does today</p>",
+        "id": 343206602,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339682
+    },
+    {
+        "content": "<p>I assume I'm missing something, but could something like this work?</p>\n<ul>\n<li>we can tell whether a function references itself or not in canonicalization - since functions referencing themselves must be done using names (and can't happen anonymously) and we already make a graph to track transitive references for sorting purposes (so if there's a cycle in that graph, we know it references itself transitively)</li>\n<li>we could write that info down for later (\"function <code>foo</code> references itself; function <code>bar</code> does not\") during canonicalization, and then when making that lambda set in the first place say \"yes this is recursive\" or \"no this is not recursive\"</li>\n<li>then \"yes this is recursive\" unifies with anything to be \"yes this is recursive\"</li>\n</ul>",
+        "id": 343206922,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339763
+    },
+    {
+        "content": "<p>or do we need to know more specific info than just yes/no it's recursive</p>",
+        "id": 343207096,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339807
+    },
+    {
+        "content": "<p>you need to know more</p>",
+        "id": 343207131,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339815
+    },
+    {
+        "content": "<p>booo</p>",
+        "id": 343207181,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339829
+    },
+    {
+        "content": "<p>because, that doesn't tell you where the point of recursion happens - which is the real key</p>",
+        "id": 343207186,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339831
+    },
+    {
+        "content": "<p><span aria-label=\"thinking\" class=\"emoji emoji-1f914\" role=\"img\" title=\"thinking\">:thinking:</span> could canonicalization help with that?</p>",
+        "id": 343207220,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339846
+    },
+    {
+        "content": "<p>if we only care to know whether something is recursive or not, it wouldn't really matter. but we must know where the recursion occurs</p>",
+        "id": 343207234,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339852
+    },
+    {
+        "content": "<p>if we wrote down more info</p>",
+        "id": 343207236,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339853
+    },
+    {
+        "content": "<p>the other thing is dealing with generic functions, which I don't see how that helps with</p>",
+        "id": 343207276,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339866
+    },
+    {
+        "content": "<p>Maybe, Im not sure I see how canonicalization could though</p>",
+        "id": 343207320,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339879
+    },
+    {
+        "content": "<p>like, it doesn't even fully work for resolving recursive type aliases during canonicalization</p>",
+        "id": 343207411,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339899
+    },
+    {
+        "content": "<p>we still have to fix-up some of them during inference</p>",
+        "id": 343207447,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339907
+    },
+    {
+        "content": "<p>I think lambda sets would only be worse than the story for recursive type aliases, since we don't even have annotations for them (and won't until inference)</p>",
+        "id": 343207576,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339953
+    },
+    {
+        "content": "<p>I might be missing something though</p>",
+        "id": 343207602,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339964
+    },
+    {
+        "content": "<p>yeah I was thinking something like in addition to writing down which functions reference which others, we also write down some context on where those references happened</p>",
+        "id": 343207625,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679339970
+    },
+    {
+        "content": "<p>yeah.. well now we are quite close to just doing unification anyway :)</p>",
+        "id": 343207684,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679339991
+    },
+    {
+        "content": "<p>true haha</p>",
+        "id": 343207778,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679340008
+    },
+    {
+        "content": "<p>to be clear I think we can deal with the problem Agus saw to an extent by tracking what variables we already did an occurs check for during a unification, and not revisiting those. It's a bit naive because we have to invalidate the list on every unification, but I suspect that given how tall that flamegraph was, it will help</p>",
+        "id": 343207950,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679340070
+    },
+    {
+        "content": "<p>but I dont think that's a full solution because of the fundamental need we have with structural types</p>",
+        "id": 343208071,
+        "sender_full_name": "Ayaz Hafiz",
+        "timestamp": 1679340111
+    },
+    {
+        "content": "<p>yep, makes sense</p>",
+        "id": 343208172,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679340131
+    },
+    {
+        "content": "<p>but that approach sounds solid as a first step!</p>",
+        "id": 343208325,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1679340170
+    }
+]

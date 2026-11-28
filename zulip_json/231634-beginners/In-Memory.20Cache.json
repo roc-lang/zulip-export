@@ -1,0 +1,110 @@
+[
+    {
+        "content": "<p>Suppose I want to implement an in-memory cache for an append-only DB table. I might pre-populate it at startup, but after that it will query the database for a value after checking a hashmap, updating the hashmap if the value is found.</p>\n<p>Is there a way to do this in pure Roc without a bunch of cloning? My understanding is that I'd need to keep the refcount at 1, and I'm not sure how easy/hard that would be. Would it be more straightforward or otherwise better to implement this in the platform host?</p>\n<p>Context:</p>\n<p>I need a mapping of account numbers, inventory locations, etc. to TigerBeetle Account IDs (128-bit int). My plan was to create an entry in postgres every time we add an account with appropriate metadata. However, we'd need to cache those mappings in memory to avoid bottlenecking TigerBeetle.</p>",
+        "id": 601260659,
+        "sender_full_name": "Bryce Miller",
+        "timestamp": 1780956586
+    },
+    {
+        "content": "<p>Additional context: This would be in a web server platform, so potentially multiple request handlers would need access to the cache simultaneously.</p>",
+        "id": 601260873,
+        "sender_full_name": "Bryce Miller",
+        "timestamp": 1780956670
+    },
+    {
+        "content": "<p>In basic-webserver we integrated Sqlite for in-memory storage, so that is something the platform provides. (It hasn't been ported to the new zig compiler yet though so there isn't a release or demo I can give you).</p>",
+        "id": 601267102,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1780959544
+    },
+    {
+        "content": "<p>Yeah, SQLite could work too. I guess my main question is whether it's possible to do this in pure Roc (efficiently) or whether it needs to be done by the platform</p>",
+        "id": 601272583,
+        "sender_full_name": "Bryce Miller",
+        "timestamp": 1780962248
+    },
+    {
+        "content": "<p>In pure Roc things like lists are reference counted  in memory automatically (or you can manually Box also to heap allocate), so this is efficient for in-memory caching. </p>\n<p>If you are wanting to have multiple threads or concurrency I think you will need to have the platform support the specific use case as it is very context dependent.</p>",
+        "id": 601272915,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1780962435
+    },
+    {
+        "content": "<p>That makes sense. I totally forgot about <code>Box</code>. That would be my way to get a pointer to pass around <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span> </p>\n<p>I was thinking I'd have a Dict of potentially tens of thousands of k,v pairs, so wanted to be sure to avoid copying</p>",
+        "id": 601273227,
+        "sender_full_name": "Bryce Miller",
+        "timestamp": 1780962566
+    },
+    {
+        "content": "<p>I feel like you will be able to pass a <code>Dict</code> around efficiently ... but I'm a bit fuzzy on the details</p>",
+        "id": 601273458,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1780962665
+    },
+    {
+        "content": "<p>How you do that exactly to avoid copies is probably more advanced I guess. We talked previously about having tooling that can help you identify where a copy might happen in your code, but it was a long time ago and I can't remember much about it.</p>",
+        "id": 601273669,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1780962784
+    },
+    {
+        "content": "<p>Passing a Box Dict or a Dict is no different here except that Box is less convenient. Both with pass by pointer rather than coping (Dict just passes a pointer and two u64s instead of one pointer). Both will mutate in place if the refcount is one. Both will duplicate the entire underlying data if the data is mutated with more than 1 reference.</p>",
+        "id": 601311341,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1780978278
+    },
+    {
+        "content": "<p>I'm not sure the state of Box optimization in the zig compiler. But hopefully it would actually mutate in place.</p>",
+        "id": 601311450,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1780978325
+    },
+    {
+        "content": "<p><code>Box</code> is already implemented and working well as far as I know</p>",
+        "id": 601311502,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1780978341
+    },
+    {
+        "content": "<p>In the case above I think the muplte request handler requirement likely will lead to needing to rely on sqlite though. Otherwise you won't be able to update in place. I don't think basic webserver exposes any way to update globally shared state. With some sort of centralized command architecture you could do it.</p>",
+        "id": 601311768,
+        "sender_full_name": "Brendan Hansknecht",
+        "timestamp": 1780978466
+    },
+    {
+        "content": "<p>Are there any plans for roc to have built in actors or at least something like atoms?</p>\n<p>Just a thing to hold a state, you give a function to get a new state, and you can retrieve the state - thread safe would be amazing :)</p>",
+        "id": 601340482,
+        "sender_full_name": "Krzysztof Skowronek",
+        "timestamp": 1780989055
+    },
+    {
+        "content": "<p>I love actors, I think the plan was to keep those kinds of things on the platform side until we find a compelling reason why we should not do that.</p>",
+        "id": 601408886,
+        "sender_full_name": "Anton",
+        "timestamp": 1781006731
+    },
+    {
+        "content": "<p>It makes sense that it would need to be part of the platform via SQLite or something else since its basically shared mutable state.</p>\n<p>Not sure how i forgot that a Dict was a pointer anyway but clearly it happened <span aria-label=\"sweat smile\" class=\"emoji emoji-1f605\" role=\"img\" title=\"sweat smile\">:sweat_smile:</span><span aria-label=\"upside down\" class=\"emoji emoji-1f643\" role=\"img\" title=\"upside down\">:upside_down:</span></p>\n<p>I think maybe I’ll need to study up a bit more on ref counting to get a better intuition for when the count increments/decrements</p>",
+        "id": 601423539,
+        "sender_full_name": "Bryce Miller",
+        "timestamp": 1781010185
+    },
+    {
+        "content": "<blockquote>\n<p>I think maybe I’ll need to study up a bit more on ref counting to get a better intuition for when the count increments/decrements</p>\n</blockquote>\n<p>FYI, I'm planning to start implementing <a class=\"stream-topic\" data-stream-id=\"306878\" href=\"/#narrow/channel/306878-off-topic/topic/New.20Perceus.20algorithm.20alternative.20just.20dropped/with/585754607\">#off topic &gt; New Perceus algorithm alternative just dropped</a>  soon, which should dramatically decrease the number of refcounts that are happening (no idea how long it will take to add though!)</p>",
+        "id": 601426991,
+        "sender_full_name": "Richard Feldman",
+        "timestamp": 1781011004
+    },
+    {
+        "content": "<p><span class=\"user-mention silent\" data-user-id=\"281383\">Richard Feldman</span> <a href=\"#narrow/channel/231634-beginners/topic/In-Memory.20Cache/near/601426991\">said</a>:</p>\n<blockquote>\n<blockquote>\n<p>I think maybe I’ll need to study up a bit more on ref counting to get a better intuition for when the count increments/decrements</p>\n</blockquote>\n<p>FYI, I'm planning to start implementing <a class=\"stream-topic\" data-stream-id=\"306878\" href=\"/#narrow/channel/306878-off-topic/topic/New.20Perceus.20algorithm.20alternative.20just.20dropped/with/585754607\">#off topic &gt; New Perceus algorithm alternative just dropped</a>  soon, which should dramatically decrease the number of refcounts that are happening (no idea how long it will take to add though!)</p>\n</blockquote>\n<p>Is it already in <span aria-label=\"eyes\" class=\"emoji emoji-1f440\" role=\"img\" title=\"eyes\">:eyes:</span>  ?<br>\n<a href=\"https://github.com/roc-lang/roc/pull/9595\">https://github.com/roc-lang/roc/pull/9595</a><br>\n<a href=\"https://github.com/roc-lang/roc/pull/9604\">https://github.com/roc-lang/roc/pull/9604</a></p>",
+        "id": 602290664,
+        "sender_full_name": "Romain Lepert",
+        "timestamp": 1781210724
+    },
+    {
+        "content": "<p>Yes... <span aria-label=\"grinning face with smiling eyes\" class=\"emoji emoji-1f601\" role=\"img\" title=\"grinning face with smiling eyes\">:grinning_face_with_smiling_eyes:</span></p>",
+        "id": 602305890,
+        "sender_full_name": "Luke Boswell",
+        "timestamp": 1781214705
+    }
+]
